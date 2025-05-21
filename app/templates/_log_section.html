@@ -1,0 +1,37 @@
+<hr class="my-4">
+<div class="mb-3 card p-3">
+    <h4>Container Logs</h4>
+    <p class="form-text">Last ~500 lines from the container log. Errors/Warnings might be highlighted.</p>
+    <div class="d-flex justify-content-start align-items-center mb-2">
+        <div class="btn-group btn-group-sm me-2" role="group" aria-label="Log Level">
+            <input type="radio" class="btn-check" name="logLevel" id="logLevelMinimal" autocomplete="off" value="minimal">
+            <label class="btn btn-outline-secondary" for="logLevelMinimal">Minimal</label>
+
+            <input type="radio" class="btn-check" name="logLevel" id="logLevelInfo" autocomplete="off" value="info" checked>
+            <label class="btn btn-outline-secondary" for="logLevelInfo">Info</label>
+
+            <input type="radio" class="btn-check" name="logLevel" id="logLevelDebug" autocomplete="off" value="debug">
+            <label class="btn btn-outline-secondary" for="logLevelDebug">Debug</label>
+        </div>
+        <button id="refreshLogsBtn" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+    </div>
+    
+    <!-- Scheduler Debug Mode Checkbox -->
+    <div class="form-check form-switch mb-3">
+        <input class="form-check-input" type="checkbox" id="schedulerDebugMode" name="scheduler_debug_mode" value="1" {% if config.scheduler_debug_mode %}checked{% endif %}>
+        <label class="form-check-label" for="schedulerDebugMode">Debug Mode: System</label>
+        <div class="form-text">Enable detailed logging for the entire system. This helps troubleshoot issues but increases log size.</div>
+    </div>
+
+    <div class="bg-dark rounded p-3">
+        <h6 class="border-bottom pb-2 mb-2 text-white">
+            Container Logs (last 500 lines)
+        </h6>
+        <div id="logsContainer" class="overflow-auto text-light bg-dark" style="max-height: 400px; font-family: monospace; white-space: pre-wrap; font-size: 0.85rem;">
+            <pre class="mb-0" id="logContent">{# Logs will be loaded here by JavaScript #}</pre>
+        </div>
+    </div>
+</div>
+{# --- End log display --- #} 

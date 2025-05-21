@@ -1,0 +1,12 @@
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% if messages %}
+    {% for category, message in messages %}
+      {# Category 'info' (from language switch) is displayed as 'success' #}
+      {% set alert_class = 'success' if category in ['success', 'info'] else ('warning' if category == 'warning' else 'danger') %}
+      <div class="alert alert-{{ alert_class }} alert-dismissible fade show" role="alert">
+        {{ message }} {# Flash messages should be translated in web_ui.py #}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    {% endfor %}
+  {% endif %}
+{% endwith %} 

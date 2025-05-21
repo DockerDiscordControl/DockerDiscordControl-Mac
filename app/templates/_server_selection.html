@@ -1,0 +1,95 @@
+<hr class="my-4">
+<div class="mb-3 card p-3">
+    <h4>Container Selection & Bot Permissions</h4>
+    <p class="form-text">Select containers (check 'Active') and define the display name and allowed bot actions.</p>
+    <div class="table-responsive">
+        <table class="table table-dark table-bordered table-hover align-middle">
+            <thead>
+                <tr>
+                    <th scope="col" class="text-center" style="width: 10%;">Order</th>
+                    <th scope="col" class="text-center" style="width: 10%;">Active<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Should the bot manage this container?"></i></th>
+                    <th scope="col" style="width: 25%;">Container Name / Status / Image</th>
+                    <th scope="col" style="width: 20%;">Display Name in Bot<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="This name will be shown in the Discord Bot."></i></th>
+                    <th scope="col" class="text-center" style="width: 10%;">Status<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to fetch CPU/RAM/Uptime?"></i></th>
+                    <th scope="col" class="text-center" style="width: 10%;">Start<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to start container?"></i></th>
+                    <th scope="col" class="text-center" style="width: 10%;">Stop<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to stop container?"></i></th>
+                    <th scope="col" class="text-center" style="width: 10%;">Restart<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to restart container?"></i></th>
+                </tr>
+            </thead>
+            <tbody id="docker-container-list">
+                {% if all_containers %}
+                    {% for container in all_containers %}
+                        {% set server_config = configured_servers.get(container.name, {}) %}
+                        {% set is_selected = container.name in configured_servers %}
+                        <tr data-container-id="{{ container.id }}" data-container-name="{{ container.name }}">
+                            <td class="text-center align-middle">
+                                <span class="order-number me-1"></span>
+                                <button type="button" class="btn btn-sm btn-outline-secondary move-up-btn requires-restart" title="Move Up (+)" {% if loop.first %}disabled{% endif %}>
+                                    +
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary move-down-btn requires-restart" title="Move Down (-)" {% if loop.last %}disabled{% endif %}>
+                                    -
+                                </button>
+                            </td>
+                            <td class="text-center">
+                                <div class="form-check">
+                                    <input class="form-check-input server-checkbox requires-restart" type="checkbox" name="selected_servers" value="{{ container.name }}" id="select_{{ container.id }}" {% if is_selected %}checked{% endif %}>
+                                    <label class="form-check-label visually-hidden" for="select_{{ container.id }}">Select</label>
+                                </div>
+                            </td>
+                            <td>
+                                <code class="text-info">{{ container.name }}</code><br>
+                                <small class="text-light">Status: {{ container.status }}<br>Image: {{ container.image }}</small>
+                            </td>
+                            <td>
+                                <input type="text" class="form-control form-control-sm display-name-input" 
+                                       name="display_name_{{ container.name }}" 
+                                       value="{{ configured_servers.get(container.name, {}).get('display_name', container.name) }}" 
+                                       placeholder="Display Name for Bot" {% if not is_selected %}disabled{% endif %}>
+                            </td>
+                            <td class="text-center">
+                                <div class="form-check">
+                                    <input class="form-check-input action-checkbox" type="checkbox" name="allow_status_{{ container.name }}" value="1" id="status_{{ container.id }}" {% if 'status' in configured_servers.get(container.name, {}).get('allowed_actions', []) %}checked{% endif %} {% if not is_selected %}disabled{% endif %}>
+                                    <label class="form-check-label visually-hidden" for="status_{{ container.id }}">Status</label>
+                                </div>
+                            </td>
+                            <td class="text-center">
+                                <div class="form-check">
+                                    <input class="form-check-input action-checkbox" type="checkbox" name="allow_start_{{ container.name }}" value="1" id="start_{{ container.id }}" {% if 'start' in configured_servers.get(container.name, {}).get('allowed_actions', []) %}checked{% endif %} {% if not is_selected %}disabled{% endif %}>
+                                    <label class="form-check-label visually-hidden" for="start_{{ container.id }}">Start</label>
+                                </div>
+                            </td>
+                            <td class="text-center">
+                                <div class="form-check">
+                                    <input class="form-check-input action-checkbox" type="checkbox" name="allow_stop_{{ container.name }}" value="1" id="stop_{{ container.id }}" {% if 'stop' in configured_servers.get(container.name, {}).get('allowed_actions', []) %}checked{% endif %} {% if not is_selected %}disabled{% endif %}>
+                                    <label class="form-check-label visually-hidden" for="stop_{{ container.id }}">Stop</label>
+                                </div>
+                            </td>
+                            <td class="text-center">
+                                <div class="form-check">
+                                    <input class="form-check-input action-checkbox" type="checkbox" name="allow_restart_{{ container.name }}" value="1" id="restart_{{ container.id }}" {% if 'restart' in configured_servers.get(container.name, {}).get('allowed_actions', []) %}checked{% endif %} {% if not is_selected %}disabled{% endif %}>
+                                    <label class="form-check-label visually-hidden" for="restart_{{ container.id }}">Restart</label>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% elif cache_error %}
+                    <tr><td colspan="8"><div class="alert alert-warning m-0">{{ cache_error }}</div></td></tr>
+                {% else %}
+                     <tr><td colspan="8"><div class="alert alert-info m-0">No Docker containers found.</div></td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    {# Cache Update Timestamp #}
+    <div class="text-start mt-2">
+        <small class="text-muted">
+            Container list last updated:
+            <span id="cache-timestamp" data-timestamp="{{ last_cache_update|default('N/A') }}">
+                {{ formatted_timestamp|default('Never') }}
+            </span>
+        </small>
+        <div class="form-text mt-1" id="cache-status-text" style="display: none;">Container list cache is initializing...</div>
+    </div>
+</div> 

@@ -1,0 +1,648 @@
+# -*- coding: utf-8 -*-
+# ============================================================================ #
+# DockerDiscordControl (DDC)                                                  #
+# https://ddc.bot                                                              #
+# Copyright (c) 2023-2025 MAX                                                  #
+# Licensed under the MIT License                                               #
+# ============================================================================ #
+
+from flask import (
+    Blueprint, render_template, request, redirect, url_for, flash, 
+    jsonify, session, current_app, send_file, Response
+)
+from datetime import datetime, timezone, timedelta # Added datetime for config_page
+from functools import wraps
+import os
+import io
+import time
+import json
+import traceback
+import pytz
+
+# Import auth from app.auth
+from app.auth import auth 
+from utils.config_loader import load_config, save_config, DEFAULT_CONFIG # Import DEFAULT_CONFIG
+from app.utils.web_helpers import (
+    log_user_action, 
+    get_docker_containers_live,
+    docker_cache
+)
+# NEW: Import shared_data
+from app.utils.shared_data import get_active_containers, load_active_containers_from_config
+from app.constants import COMMON_TIMEZONES # Import from new constants file
+# Import scheduler functions for the main page
+from utils.scheduler import (
+    load_tasks, 
+    DAYS_OF_WEEK
+)
+from utils.action_logger import log_user_action
+
+# Define COMMON_TIMEZONES here if it's only used by routes in this blueprint
+# Or import it if it's defined centrally and used by multiple blueprints
+# For now, let's assume it might be needed, if not, it can be removed.
+# from app.web_ui import COMMON_TIMEZONES # This would create a circular import if web_ui imports this blueprint.
+# Instead, COMMON_TIMEZONES should be passed to template from web_ui.py or defined in a config/constants file.
+# For simplicity in this step, I will copy it here. Ideally, it should be refactored to a central place.
+# Remove COMMON_TIMEZONES_BP definition
+# COMMON_TIMEZONES_BP = [
+#     "Europe/Berlin", ..., "Australia/Sydney"
+# ]
+
+main_bp = Blueprint('main_bp', __name__)
+
+# Heartbeat Monitor Script Generator Functions
+def generate_python_monitor_script(form_data):
+    """Generate a Python-based heartbeat monitor script"""
+    # Extract configuration
+    monitor_bot_token = form_data.get('monitor_bot_token', '')
+    ddc_bot_user_id = form_data.get('ddc_bot_user_id', '')
+    heartbeat_channel_id = form_data.get('heartbeat_channel_id', '')
+    alert_channel_ids = form_data.get('alert_channel_ids', '')
+    monitor_timeout_seconds = form_data.get('monitor_timeout_seconds', '271')  # Default: ~4.5 minutes
+    
+    # Format the alert channel IDs as a Python list
+    formatted_alert_channels = [ch.strip() for ch in alert_channel_ids.split(',') if ch.strip()]
+    alert_channels_str = ", ".join([f"'{ch}'" for ch in formatted_alert_channels])
+    
+    # Generate the script content
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    script = f"""#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+'''
+DockerDiscordControl (DDC) Heartbeat Monitor Script
+===================================================
+
+This script monitors Discord for heartbeat messages sent by the DDC bot
+and sends alerts if the heartbeat is missing for too long.
+
+Generated on: {current_time}
+
+Setup Instructions:
+1. Install requirements: pip install discord.py
+2. Run this script on a separate system from your DDC bot
+3. Keep this script running continuously (using systemd, screen, tmux, etc.)
+'''
+
+import asyncio
+import datetime
+import logging
+import sys
+import time
+from typing import List, Optional
+
+try:
+    import discord
+    from discord.ext import tasks
+except ImportError:
+    print("Error: This script requires discord.py. Please install it with: pip install discord.py")
+    sys.exit(1)
+
+# === Configuration ===
+BOT_TOKEN = '{monitor_bot_token}'
+DDC_BOT_USER_ID = {ddc_bot_user_id}
+HEARTBEAT_CHANNEL_ID = {heartbeat_channel_id}
+ALERT_CHANNEL_IDS = [{alert_channels_str}]
+HEARTBEAT_TIMEOUT_SECONDS = {monitor_timeout_seconds}
+
+# === Logging Setup ===
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('ddc_heartbeat_monitor.log')
+    ]
+)
+logger = logging.getLogger('ddc_monitor')
+
+class HeartbeatMonitor(discord.Client):
+    def __init__(self, *args, **kwargs):
+        intents = discord.Intents.default()
+        intents.message_content = True  # Needed to read message content
+        super().__init__(intents=intents, *args, **kwargs)
+        
+        # State tracking
+        self.last_heartbeat_time = None
+        self.alert_sent = False
+        self.start_time = datetime.datetime.now()
+        
+        # Start monitoring loop
+        self.heartbeat_check.start()
+    
+    async def on_ready(self):
+        '''Called when the client is ready'''
+        logger.info(f"Monitor logged in as {{self.user}} (ID: {{self.user.id}})")
+        logger.info(f"Monitoring heartbeats from DDC bot ID: {{DDC_BOT_USER_ID}}")
+        logger.info(f"Watching channel: {{HEARTBEAT_CHANNEL_ID}}")
+        logger.info(f"Will send alerts to channel(s): {{ALERT_CHANNEL_IDS}}")
+        logger.info(f"Heartbeat timeout: {{HEARTBEAT_TIMEOUT_SECONDS}} seconds")
+        
+        # Send startup notification
+        await self._send_to_alert_channels(
+            title="🔄 Heartbeat Monitoring Started",
+            description=f"DDC Heartbeat monitoring is now active.\\nMonitoring DDC bot: <@{{DDC_BOT_USER_ID}}>\\nAlert timeout: {{HEARTBEAT_TIMEOUT_SECONDS}} seconds",
+            color=discord.Color.blue()
+        )
+    
+    async def on_message(self, message):
+        '''Called when a message is received'''
+        # Check if message is from DDC bot and in the heartbeat channel
+        if (message.author.id == DDC_BOT_USER_ID and 
+            message.channel.id == HEARTBEAT_CHANNEL_ID and
+            "❤️" in message.content):
+            
+            # Update last heartbeat time
+            self.last_heartbeat_time = datetime.datetime.now()
+            logger.debug(f"Heartbeat detected at {{self.last_heartbeat_time.isoformat()}}")
+            
+            # If we previously sent an alert, send recovery notification
+            if self.alert_sent:
+                self.alert_sent = False
+                logger.info("Heartbeat recovered after previous alert")
+                await self._send_to_alert_channels(
+                    title="✅ DDC Heartbeat Recovered",
+                    description=f"Heartbeat from DDC bot <@{{DDC_BOT_USER_ID}}> has been restored.\\n\\nMonitoring continues.",
+                    color=discord.Color.green()
+                )
+    
+    async def _send_to_alert_channels(self, title, description, color):
+        '''Send a message to all configured alert channels'''
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=color,
+            timestamp=datetime.datetime.now()
+        )
+        embed.set_footer(text="DDC Heartbeat Monitor | https://ddc.bot")
+        
+        for channel_id in ALERT_CHANNEL_IDS:
+            try:
+                channel = self.get_channel(int(channel_id))
+                if not channel:
+                    channel = await self.fetch_channel(int(channel_id))
+                await channel.send(embed=embed)
+                logger.info(f"Notification sent to channel {{channel_id}}")
+            except Exception as e:
+                logger.error(f"Error sending to channel {{channel_id}}: {{e}}")
+    
+    @tasks.loop(seconds=30)
+    async def heartbeat_check(self):
+        '''Check if heartbeat has been received within the timeout period'''
+        now = datetime.datetime.now()
+        
+        if not self.last_heartbeat_time:
+            # No heartbeat received yet since startup
+            startup_seconds = (now - self.start_time).total_seconds()
+            if startup_seconds > HEARTBEAT_TIMEOUT_SECONDS and not self.alert_sent:
+                logger.warning(f"No initial heartbeat received {{startup_seconds:.1f}} seconds after startup")
+                await self._send_alert()
+        else:
+            # Check time since last heartbeat
+            elapsed = (now - self.last_heartbeat_time).total_seconds()
+            if elapsed > HEARTBEAT_TIMEOUT_SECONDS and not self.alert_sent:
+                await self._send_alert()
+    
+    async def _send_alert(self):
+        '''Send missing heartbeat alert to all configured channels'''
+        if self.alert_sent:
+            return  # Don't spam alerts
+        
+        # Calculate elapsed time
+        now = datetime.datetime.now()
+        if self.last_heartbeat_time:
+            elapsed_seconds = (now - self.last_heartbeat_time).total_seconds()
+            last_heartbeat_time_str = self.last_heartbeat_time.isoformat()
+        else:
+            elapsed_seconds = (now - self.start_time).total_seconds()
+            last_heartbeat_time_str = "Never"
+        
+        logger.warning(f"Heartbeat missing for {{elapsed_seconds:.1f}} seconds, sending alert")
+        
+        await self._send_to_alert_channels(
+            title="⚠️ DDC Heartbeat Missing",
+            description=(f"❌ No heartbeat detected from DDC bot <@{{DDC_BOT_USER_ID}}> "
+                        f"for {{elapsed_seconds:.1f}} seconds.\\n\\n"
+                        f"Last heartbeat: {{last_heartbeat_time_str}}\\n\\n"
+                        f"**Possible causes:**\\n"
+                        f"• DDC container is down\\n"
+                        f"• Discord bot has lost connection\\n"
+                        f"• Discord API issues\\n"
+                        f"• Missing permissions in heartbeat channel"),
+            color=discord.Color.red()
+        )
+        
+        self.alert_sent = True
+    
+    @heartbeat_check.before_loop
+    async def before_heartbeat_check(self):
+        '''Wait until the bot is ready before starting the loop'''
+        await self.wait_until_ready()
+
+async def main():
+    '''Main entry point for the script'''
+    logger.info("Starting DDC Heartbeat Monitor")
+    
+    # Validate configuration
+    if not BOT_TOKEN or BOT_TOKEN == 'YOUR_BOT_TOKEN':
+        logger.error("Invalid bot token. Please set a valid token.")
+        return
+    
+    if not ALERT_CHANNEL_IDS:
+        logger.error("No alert channels specified. Please configure at least one alert channel.")
+        return
+    
+    # Create and start the client
+    client = HeartbeatMonitor()
+    
+    try:
+        await client.start(BOT_TOKEN)
+    except discord.LoginFailure:
+        logger.error("Failed to login. Please check your bot token.")
+    except Exception as e:
+        logger.error(f"Error starting bot: {{e}}", exc_info=True)
+    finally:
+        logger.info("Bot is shutting down")
+        if not client.is_closed():
+            await client.close()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt, shutting down")
+    except Exception as e:
+        logger.error(f"Unhandled exception: {{e}}", exc_info=True)
+        sys.exit(1)
+"""
+    return script
+
+# Keep these as simple placeholders
+def generate_bash_monitor_script(form_data):
+    """Generate a simplified Bash-based heartbeat monitor script placeholder"""
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    return f"""#!/bin/bash
+# DockerDiscordControl (DDC) Heartbeat Monitor Script (Bash version)
+# Generated on: {current_time}
+#
+# This is a simplified placeholder script.
+# For full functionality, please use the Python monitor script instead.
+
+echo "DockerDiscordControl Heartbeat Monitor (Bash)"
+echo "This is a placeholder. For full monitoring functionality, please use the Python script."
+echo ""
+echo "The Python script provides the following benefits:"
+echo "- Reliable Discord API connection"
+echo "- Proper heartbeat detection"
+echo "- Automatic alerts when heartbeats are missed"
+echo "- Recovery notifications"
+
+# Configuration:
+DISCORD_WEBHOOK_URL="{form_data.get('alert_webhook_url', '')}"
+DDC_BOT_USER_ID="{form_data.get('ddc_bot_user_id', '')}"
+HEARTBEAT_CHANNEL_ID="{form_data.get('heartbeat_channel_id', '')}"
+"""
+
+def generate_batch_monitor_script(form_data):
+    """Generate a simplified Windows Batch heartbeat monitor script placeholder"""
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    return f"""@echo off
+rem DockerDiscordControl (DDC) Heartbeat Monitor Script (Windows Batch version)
+rem Generated on: {current_time}
+rem
+rem This is a simplified placeholder script.
+rem For full functionality, please use the Python monitor script instead.
+
+echo DockerDiscordControl Heartbeat Monitor (Windows Batch)
+echo This is a placeholder. For full monitoring functionality, please use the Python script.
+echo.
+echo The Python script provides the following benefits:
+echo - Reliable Discord API connection
+echo - Proper heartbeat detection
+echo - Automatic alerts when heartbeats are missed
+echo - Recovery notifications
+
+rem Configuration:
+set "DISCORD_WEBHOOK_URL={form_data.get('alert_webhook_url', '')}"
+set "DDC_BOT_USER_ID={form_data.get('ddc_bot_user_id', '')}"
+set "HEARTBEAT_CHANNEL_ID={form_data.get('heartbeat_channel_id', '')}"
+
+pause
+"""
+
+@main_bp.route('/', methods=['GET'])
+# Use direct auth decorator
+@auth.login_required 
+def config_page():
+    logger = current_app.logger
+    config = load_config()
+    now = datetime.now().strftime("%Y%m%d%H%M%S") # datetime is now imported
+    live_containers_list, cache_error = get_docker_containers_live(logger)
+    
+    configured_servers = {}
+    for server in config.get('servers', []):
+        server_name = server.get('docker_name')
+        if server_name:
+            configured_servers[server_name] = server
+            
+    # NEW: Load active containers from the shared data class
+    # Update active containers from configuration
+    load_active_containers_from_config()
+    active_container_names = get_active_containers()
+    
+    # Debug output
+    logger.debug(f"Selected servers in config: {config.get('selected_servers', [])}")
+    logger.debug(f"Active container names for task form: {active_container_names}")
+
+    # Format cache timestamp for display
+    last_cache_update = docker_cache.get('timestamp')
+    formatted_timestamp = "Never"
+    if last_cache_update:
+        formatted_timestamp = datetime.fromtimestamp(last_cache_update).strftime('%Y-%m-%d %H:%M:%S')
+    
+    # Load schedules for display on the main page
+    timezone_str = config.get('timezone', 'Europe/Berlin')
+    tasks_list = load_tasks()
+    
+    # Sort by next execution time
+    tasks_list.sort(key=lambda t: t.next_run_ts if t.next_run_ts else float('inf'))
+    
+    # Prepare data for the template
+    formatted_tasks = []
+    for task in tasks_list:
+        # Format timestamps
+        next_run = None
+        if task.next_run_ts:
+            next_run_dt = datetime.utcfromtimestamp(task.next_run_ts)
+            if timezone_str:
+                tz = pytz.timezone(timezone_str)
+                next_run_dt = next_run_dt.replace(tzinfo=pytz.UTC).astimezone(tz)
+            next_run = next_run_dt.strftime("%Y-%m-%d %H:%M %Z")
+        
+        last_run = None
+        if task.last_run_ts:
+            last_run_dt = datetime.utcfromtimestamp(task.last_run_ts)
+            if timezone_str:
+                tz = pytz.timezone(timezone_str)
+                last_run_dt = last_run_dt.replace(tzinfo=pytz.UTC).astimezone(tz)
+            last_run = last_run_dt.strftime("%Y-%m-%d %H:%M %Z")
+            
+        # Cycle information
+        cycle_info = task.cycle
+        if task.cycle == "weekly" and task.weekday_val is not None:
+            day_name = DAYS_OF_WEEK[task.weekday_val] if 0 <= task.weekday_val < len(DAYS_OF_WEEK) else f"Day {task.weekday_val}"
+            cycle_info = f"Weekly ({day_name})"
+        elif task.cycle == "monthly" and task.day_val is not None:
+            cycle_info = f"Monthly (Day {task.day_val})"
+        elif task.cycle == "yearly" and task.month_val is not None and task.day_val is not None:
+            month_display = task.month_val
+            if isinstance(month_display, int) and 1 <= month_display <= 12:
+                month_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+                month_display = month_names[month_display - 1]
+            cycle_info = f"Yearly ({month_display} {task.day_val})"
+        elif task.cycle == "daily":
+            cycle_info = "Daily"
+        elif task.cycle == "once":
+            cycle_info = "Once"
+        
+        # Find container display name
+        display_name = task.container_name
+        for server in config.get('servers', []):
+            if server.get('docker_name') == task.container_name:
+                display_name = server.get('name', task.container_name)
+                break
+        
+        # Add last run result
+        last_run_result = "Not run yet"
+        if task.last_run_success is not None:
+            if task.last_run_success:
+                last_run_result = "Success"
+            else:
+                last_run_result = f"Failed: {task.last_run_error or 'Unknown error'}"
+        
+        formatted_tasks.append({
+            'id': task.task_id,
+            'container_name': task.container_name,
+            'display_name': display_name,
+            'action': task.action,
+            'cycle': task.cycle,
+            'cycle_info': cycle_info,
+            'next_run': next_run,
+            'last_run': last_run,
+            'created_by': task.created_by or "Unknown",
+            'is_active': task.next_run_ts is not None,
+            'last_run_result': last_run_result,
+            'last_run_success': task.last_run_success
+        })
+    
+    return render_template('config.html', 
+                           config=config,
+                           common_timezones=COMMON_TIMEZONES, # Use imported COMMON_TIMEZONES
+                           current_timezone=config.get('selected_timezone', 'UTC'),
+                           all_containers=live_containers_list,  # Renamed from 'containers' to 'all_containers'
+                           configured_servers=configured_servers,  # Added
+                           active_container_names=active_container_names, # NEW Added
+                           cache_error=cache_error,
+                           last_cache_update=last_cache_update,
+                           formatted_timestamp=formatted_timestamp,
+                           auto_refresh_interval=config.get('auto_refresh_interval', 30),
+                           version_tag=now, 
+                           show_clear_logs_button=config.get('show_clear_logs_button', True),
+                           show_download_logs_button=config.get('show_download_logs_button', True),
+                           DEFAULT_CONFIG=DEFAULT_CONFIG, # Add DEFAULT_CONFIG
+                           tasks=formatted_tasks # Add schedule data
+                          )
+
+@main_bp.route('/save_config_api', methods=['POST'])
+# Use direct auth decorator
+@auth.login_required
+def save_config_api():
+    logger = current_app.logger
+    logger.info("save_config_api (blueprint) called...")
+    result = {'success': False, 'message': 'An unexpected error occurred.'}
+    
+    try:
+        from utils.config_loader import (
+            process_config_form, BOT_CONFIG_FILE, DOCKER_CONFIG_FILE, 
+            CHANNELS_CONFIG_FILE, WEB_CONFIG_FILE
+        )
+        
+        # Explicitly import server_order utilities
+        try:
+            from utils.server_order import save_server_order
+            server_order_utils_available = True
+        except ImportError:
+            server_order_utils_available = False
+            logger.warning("Server order utilities not available, server order changes will require restart")
+        
+        # Is configuration splitting enabled?
+        config_split_enabled = request.form.get('config_split_enabled') == '1'
+        
+        # Process form
+        form_data = request.form.to_dict(flat=False)
+        
+        # Convert all lists with only one element to normal values
+        # This logic can be adjusted if you want to keep certain fields as lists
+        cleaned_form_data = {}
+        for key, value in form_data.items():
+            if isinstance(value, list) and len(value) == 1:
+                cleaned_form_data[key] = value[0]
+            else:
+                cleaned_form_data[key] = value
+        
+        # Perform configuration processing
+        processed_data, success, message = process_config_form(cleaned_form_data, load_config())
+        
+        # Process server order separately for immediate effect
+        if success and server_order_utils_available:
+            server_order = processed_data.get('server_order')
+            if server_order:
+                # If it's a string with separators, split it
+                if isinstance(server_order, str):
+                    server_order = [name.strip() for name in server_order.split('__,__') if name.strip()]
+                
+                # Save to dedicated file
+                save_server_order(server_order)
+                logger.info(f"Server order saved separately: {server_order}")
+        
+        # List of saved configuration files
+        saved_files = []
+        
+        if success:
+            # Save configuration
+            save_config(processed_data)
+            
+            # Update scheduler logging settings if they have changed
+            try:
+                # Import here to avoid circular imports
+                from utils.scheduler import initialize_logging
+                initialize_logging()
+                logger.info("Scheduler logging settings updated after configuration save")
+            except Exception as e:
+                logger.warning(f"Failed to update scheduler logging: {str(e)}")
+            
+            # Prepare file paths for display (filenames only)
+            saved_files = [
+                os.path.basename(BOT_CONFIG_FILE),
+                os.path.basename(DOCKER_CONFIG_FILE),
+                os.path.basename(CHANNELS_CONFIG_FILE),
+                os.path.basename(WEB_CONFIG_FILE)
+            ]
+            
+            logger.info(f"Configuration saved successfully via API: {message}")
+            log_user_action("SAVE", "Configuration", source="Web UI Blueprint")
+            result = {
+                'success': True, 
+                'message': message or 'Configuration saved successfully.',
+                'config_files': saved_files if config_split_enabled else []
+            }
+            flash(result['message'], 'success')
+        else:
+            logger.warning(f"Failed to save configuration via API: {message}")
+            result = {'success': False, 'message': message or 'Failed to save configuration.'}
+            flash(result['message'], 'error')
+
+    except Exception as e:
+        logger.error(f"Unexpected error saving configuration via API (blueprint): {str(e)}", exc_info=True)
+        result['message'] = f"Error: {str(e)}"
+        flash(f"Error saving configuration: {str(e)}", 'danger')
+    
+    # Check if it's an AJAX request (has the X-Requested-With header)
+    is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    
+    if is_ajax_request:
+        # Return JSON for AJAX requests
+        return jsonify(result)
+    else:
+        # Redirect to configuration page for normal form submits
+        return redirect(url_for('.config_page'))
+
+@main_bp.route('/discord_bot_setup')
+# Use direct auth decorator
+@auth.login_required
+def discord_bot_setup():
+    config = load_config()
+    return render_template('discord_bot_setup.html', config=config)
+
+@main_bp.route('/download_monitor_script', methods=['POST'])
+# Use direct auth decorator
+@auth.login_required
+def download_monitor_script():
+    """
+    Generate and download a monitoring script for the heartbeat feature.
+    Supports Python, Bash, and Windows Batch formats.
+    """
+    logger = current_app.logger
+    
+    try:
+        # Get form data from request
+        form_data = request.form.to_dict()
+        
+        # Extract monitoring configuration
+        monitor_bot_token = form_data.get('monitor_bot_token', '')
+        ddc_bot_user_id = form_data.get('ddc_bot_user_id', '')
+        heartbeat_channel_id = form_data.get('heartbeat_channel_id', '')
+        alert_channel_ids = form_data.get('alert_channel_ids', '')
+        alert_webhook_url = form_data.get('alert_webhook_url', '')
+        monitor_timeout_seconds = form_data.get('monitor_timeout_seconds', '271')  # Default: ~4.5 minutes
+        script_type = form_data.get('script_type', 'python')
+        
+        # Validate basic fields (common to all scripts)
+        if not heartbeat_channel_id or not ddc_bot_user_id:
+            logger.warning("Missing required fields for monitor script generation")
+            flash("Heartbeat Channel ID and DDC Bot User ID are required.", "warning")
+            return redirect(url_for('.config_page'))
+        
+        # Validate script-specific fields
+        if script_type == 'python' and not monitor_bot_token:
+            logger.warning("Missing bot token for Python script")
+            flash("Bot Token is required for the Python script.", "warning")
+            return redirect(url_for('.config_page'))
+        elif (script_type in ['bash', 'batch']) and not alert_webhook_url:
+            logger.warning("Missing webhook URL for shell scripts")
+            flash("Webhook URL is required for Shell scripts.", "warning")
+            return redirect(url_for('.config_page'))
+        
+        # Generate the appropriate script content
+        if script_type == 'python':
+            script_content = generate_python_monitor_script(form_data)
+            file_extension = 'py'
+            mime_type = 'text/x-python'
+        elif script_type == 'bash':
+            script_content = generate_bash_monitor_script(form_data)
+            file_extension = 'sh'
+            mime_type = 'text/x-shellscript'
+        elif script_type == 'batch':
+            script_content = generate_batch_monitor_script(form_data)
+            file_extension = 'bat'
+            mime_type = 'application/x-msdos-program'
+        else:
+            flash(f"Unknown script type: {script_type}", "danger")
+            return redirect(url_for('.config_page'))
+        
+        # Create a buffer with the script content
+        buffer = io.BytesIO(script_content.encode('utf-8'))
+        buffer.seek(0)
+        
+        # Log action
+        script_names = {
+            'python': 'Python',
+            'bash': 'Bash',
+            'batch': 'Windows Batch'
+        }
+        log_user_action(
+            action="DOWNLOAD", 
+            target=f"Heartbeat monitor script ({script_names.get(script_type, script_type)})", 
+            source="Web UI"
+        )
+        logger.info(f"Generated and downloaded heartbeat monitor script ({script_type})")
+        
+        return send_file(
+            buffer, 
+            as_attachment=True, 
+            download_name=f'ddc_heartbeat_monitor.{file_extension}', 
+            mimetype=mime_type
+        )
+    except Exception as e:
+        logger.error(f"Error generating monitor script: {e}", exc_info=True)
+        flash(f"Error generating monitor script: {str(e)}", "danger")
+        return redirect(url_for('.config_page'))

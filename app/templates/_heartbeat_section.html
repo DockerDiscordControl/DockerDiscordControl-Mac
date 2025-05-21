@@ -1,0 +1,88 @@
+<hr class="my-4">
+<div class="mb-3 card p-3">
+    <div class="form-check form-switch mb-2">
+        <input class="form-check-input" type="checkbox" id="enableHeartbeatSection" name="enableHeartbeatSection" data-bs-toggle="collapse" data-bs-target="#heartbeatCollapse" aria-expanded="false" aria-controls="heartbeatCollapse" {% if config.heartbeat_channel_id %}checked{% endif %}>
+        <label class="form-check-label" for="enableHeartbeatSection">
+            <strong>Optional: Enable Discord Heartbeat Monitoring Setup <span class="badge bg-warning text-dark">BETA</span></strong>
+        </label>
+        <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="Configure the bot to send a periodic heartbeat message to a specific Discord channel. An external script (downloadable below) can monitor this channel and send alerts if the heartbeat stops."></i>
+    </div>
+
+    <div class="collapse {% if config.heartbeat_channel_id %}show{% endif %}" id="heartbeatCollapse">
+        <div class="alert alert-warning mt-2 mb-3">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>
+            <strong>BETA Feature:</strong> The heartbeat monitoring is currently in beta testing. While functional, it may be subject to changes or improvements in future updates.
+        </div>
+
+        <p class="form-text mb-3">Configure the DDC bot's heartbeat and the parameters for the external monitoring script you can download below.</p>
+        
+        <h6 class="text-light">DDC Bot Settings (Heartbeat Sender)</h6>
+        <div class="mb-3">
+            <label for="heartbeat_channel_id" class="form-label">Heartbeat Channel ID (DDC Bot)</label>
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="The ID of the Discord channel where THIS bot should send its heartbeat messages."></i>
+            <input type="text" class="form-control" id="heartbeat_channel_id" name="heartbeat_channel_id" value="{{ config.heartbeat_channel_id or '' }}" placeholder="Enter Channel ID for DDC Heartbeat" pattern="\d*">
+            <p class="form-text mt-1"><small>Create a dedicated channel for heartbeat messages to avoid cluttering other channels. The DDC bot must have permission to send messages in this channel.</small></p>
+        </div>
+        
+        <hr class="my-3">
+        <h6 class="text-light">External Monitor Script Settings</h6>
+        <p class="form-text mb-2">These values are used to generate the Python monitoring script below. You need a separate bot for monitoring.</p>
+        
+        <div class="mb-3">
+            <label for="monitor_bot_token" class="form-label">Monitoring Bot Token</label>
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="The bot token for the SEPARATE bot that will run the monitoring script. Create a new bot application in the Discord Developer Portal if needed."></i>
+            <input type="password" class="form-control" id="monitor_bot_token" name="monitor_bot_token" value="{{ config.monitor_bot_token or '' }}" placeholder="Enter Token for the Monitoring Bot">
+            <p class="form-text mt-1" style="color: #ffc107;"><small><i class="bi bi-exclamation-triangle-fill"></i> Important: Use a DIFFERENT bot token here, not the DDC bot's token! The monitor needs its own identity to send alerts reliably, even if the DDC bot is offline.</small></p>
+        </div>
+        
+        <div class="mb-3">
+            <label for="ddc_bot_user_id" class="form-label">DDC Bot User ID</label>
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="The User ID of THIS DDC bot. The monitor script needs this to identify the correct heartbeat messages. Right-click the DDC bot user in Discord -> Copy User ID (requires Developer Mode)."></i>
+            <input type="text" class="form-control" id="ddc_bot_user_id" name="ddc_bot_user_id" value="{{ config.ddc_bot_user_id or '' }}" placeholder="Enter DDC Bot User ID" pattern="\d*">
+        </div>
+        
+        <div class="mb-3">
+            <label for="alert_channel_ids" class="form-label">Alert Channel IDs (Comma-separated)</label>
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="One or more Discord channel IDs where the monitoring script should send an alert if the DDC bot heartbeat fails. Separate multiple IDs with commas."></i>
+            <input type="text" class="form-control" id="alert_channel_ids" name="alert_channel_ids" value="{{ config.alert_channel_ids or '' }}" placeholder="e.g., 12345,67890">
+            <p class="form-text mt-1"><small>Required for Python script. These are the channels where the monitoring bot will send alerts.</small></p>
+        </div>
+        
+        <div class="mb-3">
+            <label for="alert_webhook_url" class="form-label">Discord Webhook URL (for Bash/Batch scripts)</label>
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="A Discord webhook URL for sending alerts from the shell scripts (Bash/Batch). Not needed for the Python script."></i>
+            <input type="text" class="form-control" id="alert_webhook_url" name="alert_webhook_url" value="{{ config.alert_webhook_url or '' }}" placeholder="https://discord.com/api/webhooks/...">
+            <p class="form-text mt-1"><small>Required for Bash and Batch scripts. These scripts use webhooks instead of a bot token for simplicity.</small></p>
+        </div>
+        
+        <div class="mb-3">
+            <label for="monitor_timeout_seconds" class="form-label">Monitor Timeout (Seconds)</label>
+            <i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="right" title="The maximum time (in seconds) allowed since the last heartbeat message before the monitor sends an alert. Default is 271 (approx. 4.5 minutes)."></i>
+            <input type="number" class="form-control" id="monitor_timeout_seconds" name="monitor_timeout_seconds" value="{{ config.monitor_timeout_seconds or 271 }}" min="60">
+            <p class="form-text mt-1"><small>Recommended: Set this to at least 3-4x the heartbeat interval to allow for occasional Discord API delays.</small></p>
+        </div>
+        
+        <div class="mb-3">
+            <label for="script_type" class="form-label">Select Script Type:</label>
+            <select class="form-select" id="script_type" name="script_type">
+                <option value="python">Python (Full-featured, requires Discord.py)</option>
+                <option value="bash">Bash/Shell Script (Linux/macOS, requires curl & jq)</option>
+                <option value="batch">Windows Batch Script (Windows 10+, requires curl)</option>
+            </select>
+            <p class="form-text mt-1">
+                <small><strong>Python script:</strong> Requires Python 3.6+ with discord.py installed. Most powerful option.</small><br>
+                <small><strong>Bash script:</strong> For Linux/macOS systems. Requires curl and jq.</small><br>
+                <small><strong>Batch script:</strong> For Windows systems. Works on Windows 10 (version 1803+).</small>
+            </p>
+        </div>
+        
+        <div class="alert alert-info">
+            <i class="bi bi-info-circle me-2"></i>
+            <strong>How it works:</strong> The DDC bot sends periodic heartbeat messages to the specified channel. The external monitor script runs independently and watches for these messages. If the monitor doesn't see a heartbeat within the timeout period, it sends an alert.
+        </div>
+        
+        <button type="submit" form="config-form" formaction="{{ url_for('main_bp.download_monitor_script') }}" class="btn btn-sm btn-info">
+            <i class="bi bi-download"></i> Download Monitor Script
+        </button>
+    </div>
+</div> 

@@ -1,0 +1,339 @@
+<!-- Scheduled Tasks List -->
+<div>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+        <h4>Scheduled Tasks</h4>
+        <div>
+            <div class="input-group input-group-sm">
+                <select id="taskFilterStatus" class="form-select form-select-sm" style="width: auto;">
+                    <option value="all">All Status</option>
+                    <option value="active">Active Only</option>
+                    <option value="deactivated">Deactivated</option>
+                    <option value="expired">Expired</option>
+                </select>
+                <button id="refreshTasksBtn" class="btn btn-sm btn-outline-secondary ms-2">
+                    <i class="bi bi-arrow-clockwise"></i> Refresh
+                </button>
+            </div>
+        </div>
+    </div>
+    <p class="form-text mb-3">List of tasks currently scheduled for execution.</p>
+    <div class="table-responsive">
+        <table class="table table-dark table-bordered table-hover table-sm">
+            <thead>
+                <tr>
+                    <th scope="col" style="width: 5%;">ID</th>
+                    <th scope="col">Container</th>
+                    <th scope="col">Action</th>
+                    <th scope="col">Cycle</th>
+                    <th scope="col">Schedule Details</th>
+                    <th scope="col">Next Run</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Active</th>
+                    <th scope="col">Last Run Result</th>
+                    <th scope="col">Created At</th>
+                    <th scope="col" style="width: 10%;" class="text-center">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="taskListBody">
+                <!-- Task rows will be inserted here by JavaScript -->
+                <tr>
+                    <td colspan="8" class="text-center" id="taskListLoading">Loading tasks...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <div id="taskListError" class="alert alert-danger mt-2" style="display: none;"></div>
+</div>
+
+<script>
+function formatScheduleDetails(details) {
+    if (!details) return 'N/A';
+    if (details.cron_string) {
+        return `Cron: <code>${details.cron_string}</code>`;
+    }
+    let parts = [];
+    if (details.time) parts.push(`Time: ${details.time}`);
+    if (details.day) parts.push(`Day: ${details.day}`);
+    if (details.month) parts.push(`Month: ${details.month}`);
+    if (details.year) parts.push(`Year: ${details.year}`);
+    return parts.join(', ') || 'No details';
+}
+
+function formatDate(dateString, localDateString) {
+    // If a localized string is available, use it
+    if (localDateString) {
+        return localDateString;
+    }
+    
+    if (!dateString) return 'N/A';
+    
+    try {
+        // Handle different date formats
+        let date;
+        if (dateString.includes('Z')) {
+            // ISO format with Z at the end
+            date = new Date(dateString);
+        } else if (dateString.includes('T') && dateString.includes('+')) {
+            // ISO format with timezone offset
+            date = new Date(dateString);
+        } else if (dateString.includes('T')) {
+            // ISO format without timezone
+            date = new Date(dateString);
+        } else if (!isNaN(dateString)) {
+            // Unix timestamp
+            date = new Date(parseFloat(dateString) * 1000);
+        } else {
+            // Try normal parsing
+            date = new Date(dateString);
+        }
+        
+        // Check if the date is valid
+        if (isNaN(date.getTime())) {
+            console.warn(`Invalid date format: ${dateString}`);
+            return 'Invalid Date Format';
+        }
+        
+        // Format the date
+        return date.toLocaleString();
+    } catch (e) {
+        console.error(`Error formatting date ${dateString}:`, e);
+        return 'Error';
+    }
+}
+
+function renderTaskList(tasks) {
+    const tbody = document.getElementById('taskListBody');
+    const loadingRow = document.getElementById('taskListLoading');
+    const errorDiv = document.getElementById('taskListError');
+    const statusFilter = document.getElementById('taskFilterStatus').value;
+    
+    tbody.innerHTML = '';
+    errorDiv.style.display = 'none';
+
+    if (tasks && tasks.length > 0) {
+        // Filter by status if a filter is selected
+        let filteredTasks = tasks;
+        if (statusFilter !== 'all') {
+            filteredTasks = tasks.filter(task => {
+                // For active tasks: Check frontend status or is_active
+                if (statusFilter === 'active') {
+                    return (task.frontend_status === 'active' || (!task.frontend_status && task.is_active));
+                }
+                // For inactive tasks: Check for deactivated
+                else if (statusFilter === 'deactivated') {
+                    return (task.frontend_status === 'deactivated' || (!task.frontend_status && !task.is_active));
+                }
+                // For expired tasks: Check for expired
+                else if (statusFilter === 'expired') {
+                    return task.frontend_status === 'expired';
+                }
+                return true;
+            });
+        }
+        
+        if (filteredTasks.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="11" class="text-center">No tasks match the selected filter "${statusFilter}".</td></tr>`;
+            return;
+        }
+
+        filteredTasks.forEach(task => {
+            // Ensure that the frontend status is respected by the backend
+            let taskStatus = task.frontend_status || "";
+            let statusClass = "";
+            let canBeActivated = true;
+            
+            // Determine the status based on the backend value
+            if (taskStatus === "expired") {
+                statusClass = "danger"; // red
+                canBeActivated = false; // Expired tasks cannot be activated
+            } else if (taskStatus === "deactivated") {
+                statusClass = "secondary"; // gray
+            } else {
+                taskStatus = "active";
+                statusClass = "success"; // green
+            }
+            
+            const row = tbody.insertRow();
+            row.innerHTML = `
+                <td>${task.id}</td>
+                <td>
+                    <code class="text-info">${task.container || 'N/A'}</code>
+                </td>
+                <td>${task.action || 'N/A'}</td>
+                <td>${task.cycle || 'N/A'}</td>
+                <td>${formatScheduleDetails(task.schedule_details)}</td>
+                <td>
+                    <small>${task.next_run_local || 'N/A'}</small>
+                </td>
+                <td><span class="badge bg-${statusClass}">${taskStatus}</span></td>
+                <td>
+                    <div class="form-check">
+                        <input class="form-check-input toggle-active" type="checkbox" id="active-${task.id}" 
+                               data-task-id="${task.id}" ${task.is_active ? 'checked' : ''} 
+                               ${!canBeActivated ? 'disabled' : ''}>
+                        <label class="form-check-label visually-hidden" for="active-${task.id}">
+                            Active
+                        </label>
+                    </div>
+                </td>
+                <td>
+                    ${task.last_run_success === true ? 
+                        '<span class="badge bg-success" title="Task was executed successfully">Success</span>' : 
+                        task.last_run_success === false ? 
+                        `<span class="badge bg-danger" title="${task.last_run_error || 'Task execution failed'}">Failed</span>` : 
+                        '<span class="text-muted">Not run yet</span>'}
+                </td>
+                <td>${formatDate(task.created_at, task.created_at_local)}</td>
+                <td class="text-center">
+                    <button class="btn btn-sm btn-danger deleteTaskBtn" data-task-id="${task.id}" title="Delete Task">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            `;
+        });
+    } else {
+         tbody.innerHTML = '<tr><td colspan="11" class="text-center">No scheduled tasks found.</td></tr>';
+    }
+}
+
+function fetchTasks() {
+    const loadingRow = document.getElementById('taskListLoading');
+    const errorDiv = document.getElementById('taskListError');
+    const tbody = document.getElementById('taskListBody');
+    
+    if (loadingRow) {
+        tbody.innerHTML = '';
+        tbody.appendChild(loadingRow);
+        loadingRow.style.display = 'table-row';
+    } else {
+         tbody.innerHTML = '<tr><td colspan="11" class="text-center">Loading tasks...</td></tr>';
+    }
+    errorDiv.style.display = 'none';
+
+    fetch('{{ url_for("tasks_bp.list_tasks") }}')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Store the tasks in the window object for later access
+            window.cachedTasks = data;
+            renderTaskList(data);
+        })
+        .catch(error => {
+            console.error('Error fetching tasks:', error);
+            tbody.innerHTML = '';
+            errorDiv.textContent = 'Error loading task list: ' + error.message;
+            errorDiv.style.display = 'block';
+        });
+}
+
+// Event listener for Refresh button
+document.getElementById('refreshTasksBtn').addEventListener('click', fetchTasks);
+
+// Event listener for the status filter
+document.getElementById('taskFilterStatus').addEventListener('change', function() {
+    // If the tasks are already loaded, immediately re-render with the filter
+    const tbody = document.getElementById('taskListBody');
+    if (tbody.innerHTML !== '' && !document.getElementById('taskListLoading')) {
+        renderTaskList(window.cachedTasks || []);
+    } else {
+        // Otherwise reload if nothing has been loaded yet
+        fetchTasks();
+    }
+});
+
+// Event listener for Delete buttons (Event Delegation)
+document.getElementById('taskListBody').addEventListener('click', function(event) {
+    if (event.target.closest('.deleteTaskBtn')) {
+        const button = event.target.closest('.deleteTaskBtn');
+        const taskId = button.getAttribute('data-task-id');
+        if (confirm(`Are you sure you want to delete task #${taskId}?`)) {
+            // Call delete API
+            fetch(`{{ url_for("tasks_bp.delete_task_route", task_id="PLACEHOLDER") }}`.replace('PLACEHOLDER', taskId), {
+                method: 'DELETE',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    console.log(`Task ${taskId} successfully deleted`);
+                    // Update the task list after successful deletion
+                    fetchTasks();
+                } else {
+                    console.error(`Failed to delete task ${taskId}:`, data.error);
+                    alert(`Error: ${data.error || 'Unknown error during deletion'}`);
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting task:', error);
+                alert(`Error: ${error.message || 'Failed to delete task'}`);
+            });
+        }
+    }
+    
+    // Handle toggle of active state
+    if (event.target.closest('.toggle-active')) {
+        const checkbox = event.target.closest('.toggle-active');
+        const taskId = checkbox.getAttribute('data-task-id');
+        const isActive = checkbox.checked;
+        
+        // Update the task's active status
+        updateTaskActiveStatus(taskId, isActive);
+    }
+});
+
+// Function to update a task's active status
+function updateTaskActiveStatus(taskId, isActive) {
+    fetch('{{ url_for("tasks_bp.update_task_status") }}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+            task_id: taskId,
+            is_active: isActive
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.success) {
+            console.log(`Task ${taskId} active status updated to ${isActive}`);
+        } else {
+            console.error(`Failed to update task ${taskId} status:`, data.error);
+            // Revert checkbox state if update failed
+            const checkbox = document.getElementById(`active-${taskId}`);
+            if (checkbox) {
+                checkbox.checked = !isActive;
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error updating task active status:', error);
+        // Revert checkbox state on error
+        const checkbox = document.getElementById(`active-${taskId}`);
+        if (checkbox) {
+            checkbox.checked = !isActive;
+        }
+    });
+}
+
+// Initial load of the list on page load
+document.addEventListener('DOMContentLoaded', fetchTasks);
+
+</script> 

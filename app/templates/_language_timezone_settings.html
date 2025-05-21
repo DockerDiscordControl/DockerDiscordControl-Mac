@@ -1,0 +1,25 @@
+<hr class="my-4">
+<div class="mb-3 card p-3">
+    <h4 class="mt-2">Language and Timezone</h4>
+    <p class="form-text">Configure language and timezone settings for the system.</p>
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            <label for="language" class="form-label">Bot Language</label>
+            <select class="form-select requires-restart" id="language" name="language">
+                <option value="en" {% if config.language == 'en' %}selected{% endif %}>English</option>
+                <option value="de" {% if config.language == 'de' %}selected{% endif %}>Deutsch</option>
+                <option value="fr" {% if config.language == 'fr' %}selected{% endif %}>Français</option>
+            </select>
+            <div class="form-text">Language used by the bot in Discord.</div>
+        </div>
+        <div class="col-md-6 mb-3">
+            <label for="timezone" class="form-label">Timezone</label>
+            <select class="form-select requires-restart" id="timezone" name="timezone">
+                {% for tz in common_timezones %}
+                    <option value="{{ tz }}" {% if config.timezone == tz %}selected{% endif %}>{{ tz }}</option>
+                {% endfor %}
+            </select>
+            <div class="form-text">Timezone for the entire container (affects logs, scheduled tasks, and all time-related functionality).</div>
+        </div>
+    </div>
+</div> 

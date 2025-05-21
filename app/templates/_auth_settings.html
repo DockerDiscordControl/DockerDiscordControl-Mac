@@ -1,0 +1,19 @@
+<hr class="my-4">
+<div class="mb-3 card p-3">
+    <h4>Web UI Authentication</h4>
+    <p class="form-text">
+        Configure the password for accessing this web interface. The username is fixed to <code>admin</code>.
+        If you forget the password, you can manually edit the <code>config.json</code> file and either remove the <code>web_ui_password_hash</code> line 
+        (which will reset it to the default 'admin' on next startup) or replace the hash value.
+    </p>
+    <div class="row">
+        <div class="col-md-6 mb-3">
+            <label for="web_ui_user" class="form-label">Username</label>
+            <input type="text" class="form-control" id="web_ui_user" name="web_ui_user" value="admin" readonly>
+        </div>
+        <div class="col-md-6 mb-3">
+            <label for="new_web_ui_password" class="form-label">New Password (leave blank to keep current)</label>
+            <input type="password" class="form-control requires-restart" id="new_web_ui_password" name="new_web_ui_password" placeholder="Enter new password">
+        </div>
+    </div>
+</div> 

@@ -1,0 +1,47 @@
+# docker-compose.yml
+version: '3.8' # Defines the Compose file version
+
+services:
+  ddc: # Name of the service (freely selectable, here 'ddc')
+    container_name: ddc # Equivalent to --name ddc
+    image: dockerdiscordcontrol # The image to be used (built by rebuild.sh)
+    build: . # Optional: Allows building the image with 'docker-compose build'
+    restart: unless-stopped # Equivalent to --restart unless-stopped
+    ports:
+      - "8374:9374" # Equivalent to -p 8374:9374 (<host-port>:<container-port>)
+                    # Change the host port (8374) if it's already in use.
+    volumes:
+      # Mount for Docker Socket (Adjust if your socket is located elsewhere)
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount for the configuration directory
+      # Use relative paths for easier setup
+      - ./config:/app/config:cached
+      # Mount for logs
+      - ./logs:/app/logs:cached
+    environment:
+      # FLASK_SECRET_KEY: Must be set! Best to use a .env file.
+      FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      # ENV_FLASK_SECRET_KEY: Is also set to the same value (for Supervisor)
+      ENV_FLASK_SECRET_KEY: ${FLASK_SECRET_KEY}
+      # ENV_DOCKER_SOCKET: Path to the Docker socket (used in web_ui.py)
+      ENV_DOCKER_SOCKET: 'unix:///var/run/docker.sock'
+      # DOCKER_SOCKET: Also used in web_ui.py (set both to be safe)
+      DOCKER_SOCKET: 'unix:///var/run/docker.sock'
+      # Explicitly set DOCKER_HOST to correct URL format
+      DOCKER_HOST: 'unix:///var/run/docker.sock'
+      # Uncomment and set this to change the default admin password (admin)
+      # DDC_ADMIN_PASSWORD: ${DDC_ADMIN_PASSWORD}
+    logging: # Equivalent to --log-driver and --log-opt
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Resource configuration for scalability
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'    # Allow up to 2 CPU cores for better performance
+          memory: 512M   # Allow up to 512MB memory for larger installations
+        reservations:
+          cpus: '0.25'   # Reserve 25% of a CPU core for responsiveness
+          memory: 128M   # Reserve 128MB memory as minimum

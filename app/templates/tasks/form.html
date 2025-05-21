@@ -1,0 +1,389 @@
+<h4>Schedule New Task</h4>
+<p class="form-text mb-3">Define tasks to be executed on a schedule (e.g., restart a container daily).</p>
+
+<!-- Task Add Form - Removed outer border/padding -->
+<div id="taskFormContainer">
+    <div class="row g-3">
+        <div class="col-md-6">
+            <label for="taskContainer" class="form-label">Container</label>
+            <select class="form-select" id="taskContainer" name="container" required>
+                <option selected disabled value="">Select active container...</option>
+                {% if active_containers %}
+                    {% for container_name in active_containers %}
+                        <option value="{{ container_name }}">{{ container_name }}</option>
+                    {% endfor %}
+                {% else %}
+                    <option disabled>No active containers configured.</option>
+                {% endif %}
+            </select>
+            <div class="form-text">Name of the Docker container to control.</div>
+        </div>
+        <div class="col-md-6">
+            <label for="taskAction" class="form-label">Action</label>
+            <select class="form-select" id="taskAction" name="action" required>
+                <option selected disabled value="">Please select...</option>
+                <option value="start">Start</option>
+                <option value="stop">Stop</option>
+                <option value="restart">Restart</option>
+                <!-- Add more actions here -->
+            </select>
+            <div class="form-text">Action to apply to the container.</div>
+        </div>
+        <div class="col-md-4">
+            <label for="taskCycle" class="form-label">Cycle</label>
+            <select class="form-select" id="taskCycle" name="cycle" required>
+                <option selected disabled value="">Please select...</option>
+                <option value="once">Once</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+                <option value="cron">Cron</option>
+            </select>
+            <div class="form-text">Task recurrence.</div>
+        </div>
+        <div class="col-md-4">
+            <label for="taskTime" class="form-label">Time (HH:MM) <span class="text-info">{{ timezone_name }}</span></label>
+            <input type="time" class="form-control" id="taskTime" name="time" required>
+            <div class="form-text">Local time in timezone {{ timezone_str }}</div>
+        </div>
+        
+        <!-- Date fields in one row -->
+        <div class="col-md-4" id="dateFieldsContainer">
+            <label class="form-label">Date</label>
+            <div class="row g-2">
+                <div class="col-4" id="dayFieldContainer">
+                    <input type="text" class="form-control" id="taskDay" name="day" placeholder="Day">
+                    <select class="form-control" id="taskWeekday" name="weekday" style="display: none;">
+                        <option value="Mon">Monday</option>
+                        <option value="Tue">Tuesday</option>
+                        <option value="Wed">Wednesday</option>
+                        <option value="Thu">Thursday</option>
+                        <option value="Fri">Friday</option>
+                        <option value="Sat">Saturday</option>
+                        <option value="Sun">Sunday</option>
+                    </select>
+                </div>
+                <div class="col-4">
+                    <input type="text" class="form-control" id="taskMonth" name="month" placeholder="Month">
+                </div>
+                <div class="col-4">
+                    <input type="number" class="form-control" id="taskYear" name="year" placeholder="Year" min="2024">
+                </div>
+            </div>
+            <div class="form-text">For 'once', 'monthly', 'weekly' or 'yearly' tasks.</div>
+        </div>
+        
+        <div class="col-md-12" id="taskCronStringRow" style="display: none;">
+            <label for="taskCronString" class="form-label">Cron String</label>
+            <input type="text" class="form-control" id="taskCronString" name="cron_string">
+            <div class="form-text">Enter a valid Cron string (e.g., "*/5 * * * *").</div>
+        </div>
+        
+        <!-- Hidden field for server-side timezone -->
+        <input type="hidden" id="serverTimezone" name="timezone_str" value="{{ timezone_str }}">
+    </div>
+    <div class="mt-3">
+        <button type="button" class="btn btn-primary" id="createTaskButton">Create</button>
+        <button type="button" class="btn btn-secondary" id="cancelTaskButton">Cancel</button>
+    </div>
+    <div id="responseMessage" class="mt-3"></div>
+</div>
+
+<script>
+// Function to get the current date/time
+function getCurrentDateTime() {
+    const now = new Date();
+    const year = now.getFullYear();
+    // Make sure that month and day are always 2 digits
+    const month = (now.getMonth() + 1).toString().padStart(2, '0'); // JavaScript months start at 0
+    const day = now.getDate().toString().padStart(2, '0');
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    
+    return {
+        year: year,
+        month: month, // Now always as string with padding
+        day: day,     // Now always as string with padding
+        time: `${hours}:${minutes}`
+    };
+}
+
+// Function to pre-fill the time fields based on the selected cycle
+function populateDateTimeFields() {
+    const cycle = document.getElementById('taskCycle').value;
+    const dateTime = getCurrentDateTime();
+    
+    // Access all relevant fields
+    const timeField = document.getElementById('taskTime');
+    const dayField = document.getElementById('taskDay');
+    const monthField = document.getElementById('taskMonth');
+    const yearField = document.getElementById('taskYear');
+    const weekdayField = document.getElementById('taskWeekday');
+    
+    // By default, enable all fields and show normal day input
+    timeField.disabled = false;
+    dayField.disabled = false;
+    monthField.disabled = false;
+    yearField.disabled = false;
+    
+    // Toggle day/weekday display
+    if (cycle === 'weekly') {
+        dayField.style.display = 'none';
+        weekdayField.style.display = 'block';
+        // Pre-select current weekday
+        const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        const currentDayIndex = new Date().getDay(); // 0=Sunday, 1=Monday, ...
+        const weekdayValue = weekdays[currentDayIndex];
+        
+        // Select weekday in dropdown
+        for (let i = 0; i < weekdayField.options.length; i++) {
+            if (weekdayField.options[i].value === weekdayValue) {
+                weekdayField.selectedIndex = i;
+                break;
+            }
+        }
+    } else {
+        dayField.style.display = 'block';
+        weekdayField.style.display = 'none';
+    }
+    
+    // Always set current time
+    timeField.value = dateTime.time;
+    
+    // Set day, month and year according to cycle and disable corresponding fields
+    if (cycle === 'once') {
+        // For one-time tasks, fill in and enable all date fields
+        dayField.value = dateTime.day;
+        monthField.value = dateTime.month;
+        yearField.value = dateTime.year;
+    } 
+    else if (cycle === 'yearly') {
+        // For yearly tasks, enable day and month, disable year
+        dayField.value = dateTime.day;
+        monthField.value = dateTime.month;
+        yearField.value = dateTime.year;
+        yearField.disabled = true;
+    } 
+    else if (cycle === 'monthly') {
+        // For monthly tasks, only day is needed
+        dayField.value = dateTime.day;
+        monthField.value = '';
+        yearField.value = '';
+        monthField.disabled = true;
+        yearField.disabled = true;
+    } 
+    else if (cycle === 'weekly') {
+        // For weekly: weekday is already set, disable month and year
+        monthField.value = '';
+        yearField.value = '';
+        monthField.disabled = true;
+        yearField.disabled = true;
+    } 
+    else if (cycle === 'daily') {
+        // For daily tasks, disable all date fields
+        dayField.value = '';
+        monthField.value = '';
+        yearField.value = '';
+        dayField.disabled = true;
+        monthField.disabled = true;
+        yearField.disabled = true;
+    }
+    else if (cycle === 'cron') {
+        // For cron tasks, disable all time and date fields
+        timeField.disabled = true;
+        dayField.disabled = true;
+        monthField.disabled = true;
+        yearField.disabled = true;
+    }
+}
+
+// Event listener for changes in the cycle field
+document.getElementById('taskCycle').addEventListener('change', function() {
+    // Show/hide Cron field based on selection
+    const cronRow = document.getElementById('taskCronStringRow');
+    if (this.value === 'cron') {
+        cronRow.style.display = 'block';
+    } else {
+        cronRow.style.display = 'none';
+    }
+    
+    // Pre-fill date/time fields and enable/disable accordingly
+    populateDateTimeFields();
+});
+
+// Form reset function
+function resetTaskForm() {
+    // Reset all input fields
+    document.getElementById('taskContainer').selectedIndex = 0;
+    document.getElementById('taskAction').selectedIndex = 0;
+    document.getElementById('taskCycle').selectedIndex = 0;
+    document.getElementById('taskTime').value = '';
+    document.getElementById('taskDay').value = '';
+    document.getElementById('taskMonth').value = '';
+    document.getElementById('taskYear').value = '';
+    document.getElementById('taskCronString').value = '';
+    
+    // Re-enable fields
+    document.getElementById('taskTime').disabled = false;
+    document.getElementById('taskDay').disabled = false;
+    document.getElementById('taskMonth').disabled = false;
+    document.getElementById('taskYear').disabled = false;
+    
+    // Hide cron field
+    document.getElementById('taskCronStringRow').style.display = 'none';
+    
+    // Reset feedback message
+    document.getElementById('responseMessage').textContent = '';
+    document.getElementById('responseMessage').className = 'mt-3';
+    
+    // Reinitialize time
+    const dateTime = getCurrentDateTime();
+    document.getElementById('taskTime').value = dateTime.time;
+}
+
+// Form submit handling - triggered by button click
+document.getElementById('createTaskButton').addEventListener('click', function() {
+    // Collect all form fields
+    const container = document.getElementById('taskContainer').value;
+    const action = document.getElementById('taskAction').value;
+    const cycle = document.getElementById('taskCycle').value;
+    const time = document.getElementById('taskTime').value;
+    const timezone = document.getElementById('serverTimezone').value;
+    
+    // Validation
+    if (!container || container === '') {
+        alert("Please select a container");
+        return;
+    }
+    if (!action || action === '') {
+        alert("Please select an action");
+        return;
+    }
+    if (!cycle || cycle === '') {
+        alert("Please select a cycle");
+        return;
+    }
+    if (cycle !== 'cron' && (!time || time === '')) {
+        alert("Please enter a time");
+        return;
+    }
+    
+    // Additional validation based on cycle
+    if (cycle === 'once') {
+        const day = document.getElementById('taskDay').value;
+        const month = document.getElementById('taskMonth').value;
+        const year = document.getElementById('taskYear').value;
+        
+        if (!day || !month || !year) {
+            alert("For one-time tasks, you must specify day, month, and year");
+            return;
+        }
+        
+        // Check if the date is in the future
+        const taskDate = new Date(`${year}-${month}-${day}T${time}:00`);
+        if (taskDate <= new Date()) {
+            alert("One-time tasks must be scheduled for a future date/time");
+            return;
+        }
+    } else if (cycle === 'monthly') {
+        const day = document.getElementById('taskDay').value;
+        if (!day || day < 1 || day > 31) {
+            alert("For monthly tasks, please enter a valid day of the month (1-31)");
+            return;
+        }
+    }
+    
+    // Prepare data for API request
+    const data = {
+        container: container,
+        action: action,
+        cycle: cycle,
+        timezone_str: timezone,
+        schedule_details: {}
+    };
+    
+    // Add relevant fields to schedule_details object based on cycle
+    if (cycle === 'cron') {
+        const cronString = document.getElementById('taskCronString').value;
+        if (!cronString) {
+            alert("Please enter a cron string");
+            return;
+        }
+        data.schedule_details.cron_string = cronString;
+    } else {
+        data.schedule_details.time = time;
+        
+        // Add relevant date values (if not disabled)
+        if (cycle === 'weekly') {
+            // For weekly tasks, use selected weekday
+            const weekdayField = document.getElementById('taskWeekday');
+            data.schedule_details.day = weekdayField.value; 
+        } else {
+            // For other tasks, use numerical day (if not disabled)
+            const day = document.getElementById('taskDay').value;
+            if (day && !document.getElementById('taskDay').disabled) {
+                data.schedule_details.day = day;
+            }
+        }
+        
+        const month = document.getElementById('taskMonth').value;
+        const year = document.getElementById('taskYear').value;
+        
+        if (month && !document.getElementById('taskMonth').disabled) {
+            data.schedule_details.month = month;
+        }
+        
+        if (year && !document.getElementById('taskYear').disabled) {
+            data.schedule_details.year = year;
+        }
+    }
+
+    const responseMessageDiv = document.getElementById('responseMessage');
+    responseMessageDiv.textContent = '';
+    responseMessageDiv.className = 'mt-3'; 
+    
+    console.log('Sending data:', JSON.stringify(data)); // Debugging
+
+    // Send API request
+    fetch('{{ url_for("tasks_bp.add_task") }}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => {
+        console.log('Response status:', response.status); // Additional debug output
+        return response.json().then(body => ({ status: response.status, body: body }));
+    })
+    .then(data => {
+        if (data.status === 201) {
+            responseMessageDiv.textContent = 'Task added successfully: ' + JSON.stringify(data.body.task);
+            responseMessageDiv.classList.add('alert', 'alert-success');
+            resetTaskForm();
+            // Optional: Reload task list here by calling fetchTasks()
+            if (typeof fetchTasks === 'function') { fetchTasks(); }
+        } else {
+            responseMessageDiv.textContent = 'Error: ' + (data.body.error || 'Unknown error');
+            responseMessageDiv.classList.add('alert', 'alert-danger');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        responseMessageDiv.textContent = 'Error sending request.';
+        responseMessageDiv.classList.add('alert', 'alert-danger');
+    });
+});
+
+// Cancel-Button Event-Listener
+document.getElementById('cancelTaskButton').addEventListener('click', resetTaskForm);
+
+// Pre-fill current date/time when form loads
+document.addEventListener('DOMContentLoaded', function() {
+    const timeField = document.getElementById('taskTime');
+    const dateTime = getCurrentDateTime();
+    timeField.value = dateTime.time;
+});
+</script> 
