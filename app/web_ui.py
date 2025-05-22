@@ -116,6 +116,16 @@ def create_app(test_config=None):
     def before_request_func():
         session.permanent = True
 
+    # Ensure debug mode setting is correctly loaded on application start
+    with app.app_context():
+        try:
+            # Force refresh of debug status
+            from utils.logging_utils import refresh_debug_status
+            debug_status = refresh_debug_status()
+            app.logger.info(f"Application startup: Debug mode is {'ENABLED' if debug_status else 'DISABLED'}")
+        except Exception as e:
+            app.logger.error(f"Error refreshing debug status on application startup: {e}")
+
     @app.after_request
     def add_security_headers(response):
         # Ensure JavaScript files have the correct MIME type

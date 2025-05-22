@@ -4,8 +4,8 @@
 
 Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage specified Docker containers (start, stop, restart, view status) and view container logs.
 
-[![Docker Image CI](https://github.com/DockerDiscordControl/DockerDiscordControl/actions/workflows/docker-image.yml/badge.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/actions/workflows/docker-image.yml)
-[![CodeQL](https://github.com/DockerDiscordControl/DockerDiscordControl/actions/workflows/codeql.yml/badge.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/actions/workflows/codeql.yml)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE)
 
 ## Features
 

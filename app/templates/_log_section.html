@@ -18,11 +18,35 @@
         </button>
     </div>
     
-    <!-- Scheduler Debug Mode Checkbox -->
-    <div class="form-check form-switch mb-3">
-        <input class="form-check-input" type="checkbox" id="schedulerDebugMode" name="scheduler_debug_mode" value="1" {% if config.scheduler_debug_mode %}checked{% endif %}>
-        <label class="form-check-label" for="schedulerDebugMode">Debug Mode: System</label>
-        <div class="form-text">Enable detailed logging for the entire system. This helps troubleshoot issues but increases log size.</div>
+    <!-- Debug Mode Options -->
+    <div class="row mb-3">
+        <!-- Permanent Debug Mode Checkbox -->
+        <div class="col-md-6">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="schedulerDebugMode" name="scheduler_debug_mode" value="1" {% if config.scheduler_debug_mode %}checked{% endif %}>
+                <label class="form-check-label" for="schedulerDebugMode">Permanent Debug Mode</label>
+                <div class="form-text">Enable detailed logging for the entire system. Persists across container restarts.</div>
+            </div>
+        </div>
+        
+        <!-- Temporary Debug Mode Controls -->
+        <div class="col-md-6">
+            <div class="form-group" id="tempDebugControls">
+                <div class="d-flex align-items-center mb-1">
+                    <button type="button" id="enableTempDebugBtn" class="btn btn-sm btn-warning me-2">
+                        <i class="bi bi-stopwatch"></i> Enable Temporary Debug
+                    </button>
+                    <select id="tempDebugDuration" class="form-select form-select-sm" style="width: auto;">
+                        <option value="5">5 minutes</option>
+                        <option value="10" selected>10 minutes</option>
+                        <option value="20">20 minutes</option>
+                        <option value="30">30 minutes</option>
+                        <option value="60">60 minutes</option>
+                    </select>
+                </div>
+                <div id="tempDebugStatus" class="small text-muted">Temporary debug mode is inactive</div>
+            </div>
+        </div>
     </div>
 
     <div class="bg-dark rounded p-3">

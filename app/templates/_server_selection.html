@@ -86,9 +86,12 @@
     <div class="text-start mt-2">
         <small class="text-muted">
             Container list last updated:
-            <span id="cache-timestamp" data-timestamp="{{ last_cache_update|default('N/A') }}">
+            <span id="cache-timestamp" data-timestamp="{{ last_cache_update|default(docker_cache.global_timestamp|default('N/A')) }}">
                 {{ formatted_timestamp|default('Never') }}
             </span>
+            <button type="button" class="btn btn-sm btn-outline-secondary ms-2" id="refresh-docker-list">
+                <i class="bi bi-arrow-repeat"></i> Refresh
+            </button>
         </small>
         <div class="form-text mt-1" id="cache-status-text" style="display: none;">Container list cache is initializing...</div>
     </div>

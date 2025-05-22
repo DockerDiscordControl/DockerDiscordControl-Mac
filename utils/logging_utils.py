@@ -12,31 +12,61 @@ DEBUG_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s [%(file
 
 # Global variable for debug status
 _debug_mode_enabled = None
+# New variables for temporary debug mode
+_temp_debug_mode_enabled = False
+_temp_debug_expiry = 0  # Timestamp when temp debug expires
+_last_debug_status_log = None
 
 def is_debug_mode_enabled() -> bool:
     """
     Checks if debug mode is enabled.
-    This is loaded from the configuration, with the local copy being cached.
+    This is loaded directly from the configuration file to ensure the latest value is used.
     
     Returns:
         bool: True if debug mode is enabled, otherwise False
     """
-    global _debug_mode_enabled
+    global _debug_mode_enabled, _temp_debug_mode_enabled, _temp_debug_expiry, _last_debug_status_log
     
-    # Only reload if status hasn't been checked yet
-    if _debug_mode_enabled is None:
-        try:
-            from utils.config_loader import load_config
-            config = load_config()
-            _debug_mode_enabled = config.get('scheduler_debug_mode', False)
-            # Only output debug message when loaded for the first time
+    # Check if temporary debug mode is active and not expired
+    current_time = time.time()
+    if _temp_debug_mode_enabled and current_time < _temp_debug_expiry:
+        # Print a message every few seconds to confirm temp debug is active
+        if _last_debug_status_log is None or (current_time - _last_debug_status_log > 10):
+            print(f"TEMP DEBUG MODE IS ACTIVE! Expires in {int((_temp_debug_expiry - current_time) / 60)} minutes and {int((_temp_debug_expiry - current_time) % 60)} seconds")
+            _last_debug_status_log = current_time
+        return True
+    elif _temp_debug_mode_enabled and current_time >= _temp_debug_expiry:
+        # Temp debug mode has expired, reset it
+        _temp_debug_mode_enabled = False
+        print(f"Temporary debug mode expired")
+    
+    try:
+        # Store previous value to detect changes
+        previous_value = _debug_mode_enabled
+        
+        # Force config reload to get the latest value
+        from utils.config_loader import load_config
+        config = load_config()
+        # Force cache invalidation to ensure we get the latest config
+        from utils.config_manager import get_config_manager
+        get_config_manager().invalidate_cache()
+        # Now reload config after cache invalidation
+        config = load_config()
+        _debug_mode_enabled = config.get('scheduler_debug_mode', False)
+        
+        # Only output debug message when loaded for the first time or when the value changes
+        if previous_value != _debug_mode_enabled or (_last_debug_status_log is None) or (current_time - _last_debug_status_log > 60):
             print(f"Debug status loaded from configuration: {_debug_mode_enabled}")
-        except Exception as e:
-            # Fallback on errors
-            print(f"Error loading debug status: {e}")
+            _last_debug_status_log = current_time
+    except Exception as e:
+        # Fallback on errors
+        print(f"Error loading debug status: {e}")
+        if _debug_mode_enabled is None:  # Only set to False if currently None
             _debug_mode_enabled = False
     
-    return _debug_mode_enabled
+    # Check once more if temporary debug mode is active
+    result = _debug_mode_enabled or _temp_debug_mode_enabled
+    return result
 
 # A filter that only allows DEBUG logs when debug mode is enabled
 class DebugModeFilter(logging.Filter):
@@ -47,7 +77,18 @@ class DebugModeFilter(logging.Filter):
     def filter(self, record):
         # Check if log level is lower than INFO (i.e., DEBUG)
         if record.levelno < logging.INFO:
-            return is_debug_mode_enabled()
+            # Explicitly call is_debug_mode_enabled to check both permanent and temporary debug mode
+            debug_enabled = is_debug_mode_enabled()
+            
+            # Every 100 DEBUG logs that are filtered out, print a note
+            if not debug_enabled and hasattr(self, '_filter_count'):
+                self._filter_count += 1
+                if self._filter_count % 100 == 0:
+                    print(f"Note: {self._filter_count} DEBUG logs filtered out because debug mode is disabled. Enable via web UI.")
+            elif not debug_enabled:
+                self._filter_count = 1
+            
+            return debug_enabled
         # Always allow all other levels (INFO and higher)
         return True
 
@@ -161,9 +202,128 @@ def refresh_debug_status():
     Should be called when the configuration changes.
     """
     global _debug_mode_enabled
+    
+    # Reset the cache
     _debug_mode_enabled = None
-    # Reload status
-    is_debug_mode_enabled()
+    
+    # Force cache invalidation to ensure we get the latest config
+    try:
+        from utils.config_manager import get_config_manager
+        get_config_manager().invalidate_cache()
+    except Exception as e:
+        print(f"Failed to invalidate config cache: {e}")
+    
+    # Reload the debug status
+    debug_enabled = is_debug_mode_enabled()
+    
+    # Create a logger for this function
+    logger = logging.getLogger('ddc.config')
+    
+    # Output the debug status
+    if debug_enabled:
+        logger.info("Debug mode has been ENABLED - DEBUG messages will be displayed")
+    else:
+        logger.info("Debug mode has been DISABLED - DEBUG messages will be suppressed")
+    
+    return debug_enabled
+
+def enable_temporary_debug(duration_minutes=10):
+    """
+    Enables temporary debug mode for a specified duration.
+    Debug mode will automatically disable after the duration expires.
+    
+    Args:
+        duration_minutes: How long to enable debug mode for (in minutes)
+    
+    Returns:
+        tuple: (success, expiry_time) - success flag and timestamp when debug will expire
+    """
+    global _temp_debug_mode_enabled, _temp_debug_expiry
+    
+    try:
+        # Set expiry time
+        current_time = time.time()
+        _temp_debug_expiry = current_time + (duration_minutes * 60)
+        _temp_debug_mode_enabled = True
+        
+        # Print confirmation message
+        expiry_time = datetime.fromtimestamp(_temp_debug_expiry).strftime('%Y-%m-%d %H:%M:%S')
+        print(f"**** TEMPORARY DEBUG MODE ACTIVATED for {duration_minutes} minutes (until {expiry_time}) ****")
+        print(f"**** Debug mode will now show detailed logs until it expires ****")
+        
+        # Create a special logger for this message to ensure it appears even before setup
+        special_logger = logging.getLogger("ddc.config.temp_debug")
+        if not special_logger.handlers:
+            handler = logging.StreamHandler(sys.stdout)
+            handler.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            special_logger.addHandler(handler)
+            special_logger.setLevel(logging.INFO)
+        
+        # Log the change using the normal logger and the special logger
+        special_logger.info(f"===== TEMPORARY DEBUG MODE ENABLED for {duration_minutes} minutes (until {expiry_time}) =====")
+        
+        # Try to use the regular logger too
+        try:
+            logger = logging.getLogger('ddc.config')
+            logger.info(f"Temporary debug mode ENABLED for {duration_minutes} minutes (until {expiry_time})")
+        except Exception as e:
+            print(f"Note: Could not use regular logger to log debug mode activation: {e}")
+        
+        # Forcibly refresh all filters to recognize debug mode
+        try:
+            for name in logging.root.manager.loggerDict:
+                logger_instance = logging.getLogger(name)
+                for handler in logger_instance.handlers:
+                    for filter_instance in handler.filters:
+                        if isinstance(filter_instance, DebugModeFilter):
+                            handler.removeFilter(filter_instance)
+                            handler.addFilter(DebugModeFilter())
+        except Exception as e:
+            print(f"Error refreshing log filters: {e}")
+        
+        return True, _temp_debug_expiry
+    except Exception as e:
+        print(f"Error enabling temporary debug mode: {e}")
+        return False, 0
+
+def disable_temporary_debug():
+    """
+    Disables temporary debug mode immediately.
+    
+    Returns:
+        bool: Success or failure
+    """
+    global _temp_debug_mode_enabled, _temp_debug_expiry
+    
+    try:
+        _temp_debug_mode_enabled = False
+        _temp_debug_expiry = 0
+        
+        # Log the change
+        logger = logging.getLogger('ddc.config')
+        logger.info("Temporary debug mode DISABLED manually")
+        
+        return True
+    except Exception as e:
+        print(f"Error disabling temporary debug mode: {e}")
+        return False
+
+def get_temporary_debug_status():
+    """
+    Gets the current status of temporary debug mode.
+    
+    Returns:
+        tuple: (is_enabled, expiry_time, remaining_seconds) - status info for temp debug
+    """
+    global _temp_debug_mode_enabled, _temp_debug_expiry
+    
+    current_time = time.time()
+    is_enabled = _temp_debug_mode_enabled and current_time < _temp_debug_expiry
+    remaining_seconds = max(0, _temp_debug_expiry - current_time) if is_enabled else 0
+    
+    return is_enabled, _temp_debug_expiry, remaining_seconds
 
 def setup_all_loggers(level: int = logging.INFO) -> None:
     """

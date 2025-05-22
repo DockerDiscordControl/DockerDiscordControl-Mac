@@ -27,7 +27,7 @@ if 'DDC_DISCORD_SKIP_TOKEN_LOCK' not in os.environ:
 
 # Import custom modules
 from utils.config_loader import load_config, save_config, get_server_config, update_server_config
-from utils.logging_utils import setup_logger
+from utils.logging_utils import setup_logger, refresh_debug_status
 # Import the internal translation system
 from cogs.translation_manager import _, get_translations
 # Import scheduler service
@@ -100,6 +100,13 @@ try:
     tz = pytz.timezone(timezone_str)
 except:
     tz = pytz.timezone('Europe/Berlin')  # Fallback timezone
+
+# Explicitly refresh debug status on bot start
+try:
+    debug_mode = refresh_debug_status()
+    print(f"Bot startup: Debug mode is {'ENABLED' if debug_mode else 'DISABLED'}")
+except Exception as e:
+    print(f"Error refreshing debug status during bot startup: {e}")
 
 # Custom formatter with timezone
 class TimezoneFormatter(logging.Formatter):

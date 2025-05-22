@@ -156,6 +156,17 @@ class ConfigManager:
                 self._cache_timestamp = 0
                 self._cache_ttl = 30  # Cache TTL in seconds
                 
+                # Log throttling timestamps
+                self._last_full_log_time = None
+                self._last_lang_log_time = None
+
+                # Cache protection (anti-thrashing)
+                self._last_cache_invalidation = 0
+                self._min_invalidation_interval = 5.0  # Minimum seconds between invalidations
+                self._force_reload_count = 0
+                self._last_force_reload_reset = 0
+                self._max_force_reloads = 10  # Maximum force reloads per minute
+                
                 # Token decryption cache
                 self._token_cache = None
                 self._token_cache_hash_source = None
@@ -340,9 +351,22 @@ class ConfigManager:
             Dict containing the full configuration.
         """
         try:
-            # Quick cache check without lock for better performance
+            # Anti-thrashing: Limit excessive force_reload requests
             current_time = time.time()
-            cache_age = current_time - self._cache_timestamp
+            if force_reload:
+                # Reset counter every minute
+                if current_time - self._last_force_reload_reset > 60:
+                    self._force_reload_count = 0
+                    self._last_force_reload_reset = current_time
+                
+                # If too many force reloads in the last minute, ignore this one
+                self._force_reload_count += 1
+                if self._force_reload_count > self._max_force_reloads:
+                    logger.debug(f"Ignoring force_reload request (exceeded {self._max_force_reloads}/minute)")
+                    force_reload = False  # Downgrade to normal request
+            
+            # Quick cache check without lock for better performance
+            cache_age = current_time - self._cache_timestamp if self._cache_timestamp > 0 else 0
             
             # Fast path: If cache is valid and no force reload is needed, return cache
             if not force_reload and self._config_cache is not None and cache_age < self._cache_ttl:
@@ -387,7 +411,7 @@ class ConfigManager:
                 
                 # Check again within the lock block, in case another thread
                 # has updated the cache in the meantime
-                cache_age = time.time() - self._cache_timestamp
+                cache_age = time.time() - self._cache_timestamp if self._cache_timestamp > 0 else 0
                 if not force_reload and self._config_cache is not None and cache_age < self._cache_ttl:
                     logger.debug("Using cached configuration (refreshed by another thread)")
                     return self._config_cache.copy()
@@ -395,7 +419,12 @@ class ConfigManager:
                 # Reset the counter if we successfully obtained the lock
                 self._stale_config_return_count = 0
                 
-                logger.info(f"Loading configuration from files (cache age: {cache_age:.1f}s)")
+                # Only log full file loading every few seconds to reduce spam
+                if force_reload or self._last_full_log_time is None or (time.time() - self._last_full_log_time) > 10:
+                    logger.info(f"Loading configuration from files (cache age: {cache_age:.1f}s)")
+                    self._last_full_log_time = time.time()
+                else:
+                    logger.debug(f"Loading configuration from files (cache age: {cache_age:.1f}s)")
                 
                 # Set a short timeout for file operations
                 start_time = time.time()
@@ -476,7 +505,13 @@ class ConfigManager:
                     logger.info(f"Creating default config file: {filename}")
                     self._save_json_file(filename, config_section)
             
-            logger.info(f"Configuration loaded with language: {return_config.get('language')}")
+            # Only log full message occasionally to reduce spam
+            if force_reload or self._last_lang_log_time is None or (time.time() - self._last_lang_log_time) > 10:
+                logger.info(f"Configuration loaded with language: {return_config.get('language')}")
+                self._last_lang_log_time = time.time()
+            else:
+                logger.debug(f"Configuration loaded with language: {return_config.get('language')}")
+                
             return return_config
                 
         except Exception as e:
@@ -599,18 +634,29 @@ class ConfigManager:
                 try:
                     self._notify_subscribers(merged_config)
                     
-                    # Überprüfen, ob der Debug-Status geändert wurde und Logger-Einstellungen aktualisieren
+                    # Check if debug status has changed and update logger settings
                     if 'scheduler_debug_mode' in web_config:
                         try:
-                            # Wenn die Logging-Utils importiert werden können, aktualisieren wir den Debug-Status
+                            # If logging utils can be imported, update the debug status
                             from utils.logging_utils import refresh_debug_status
-                            refresh_debug_status()
                             debug_mode = web_config.get('scheduler_debug_mode', False)
-                            logger.info(f"Debug-Status aktualisiert: {debug_mode}")
+                            logger.info(f"Debug status updated: {debug_mode}")
+                            
+                            # Explicitly save the debug status in the configuration file
+                            # Make sure the file is written again with debug_mode properly set
+                            web_config['scheduler_debug_mode'] = debug_mode
+                            saved = self._save_json_file(self.WEB_CONFIG_FILE, web_config)
+                            if not saved:
+                                logger.error(f"Failed to save debug status to {self.WEB_CONFIG_FILE}")
+                            else:
+                                logger.info(f"Debug status {debug_mode} explicitly saved to {self.WEB_CONFIG_FILE}")
+                            
+                            # Update the debug status in the logging settings
+                            refresh_debug_status()
                         except ImportError:
-                            logger.debug("Konnte refresh_debug_status nicht importieren.")
+                            logger.debug("Could not import refresh_debug_status.")
                         except Exception as e:
-                            logger.warning(f"Fehler beim Aktualisieren des Debug-Status: {e}")
+                            logger.error(f"Error updating debug status: {e}", exc_info=True)
                     
                 except Exception as e:
                     logger.error(f"Error notifying subscribers: {e}")
@@ -691,9 +737,21 @@ class ConfigManager:
         """
         Invalidate the configuration cache, forcing reload on next access.
         """
+        current_time = time.time()
+        
+        # Anti-thrashing: Prevent too many cache invalidations in a short time
+        since_last_invalidation = current_time - self._last_cache_invalidation
+        if since_last_invalidation < self._min_invalidation_interval:
+            logger.debug(f"Ignoring cache invalidation request (too frequent: {since_last_invalidation:.1f}s < {self._min_invalidation_interval:.1f}s)")
+            return
+            
         with self._cache_lock:
             self._config_cache = None
             self._cache_timestamp = 0
+            self._last_full_log_time = None
+            self._last_lang_log_time = None
+            self._last_cache_invalidation = current_time
+            
         logger.debug("Configuration cache invalidated")
     
     def set_cache_ttl(self, seconds: int) -> None:

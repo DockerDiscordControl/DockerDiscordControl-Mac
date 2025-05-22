@@ -359,6 +359,14 @@ def config_page():
     if last_cache_update:
         formatted_timestamp = datetime.fromtimestamp(last_cache_update).strftime('%Y-%m-%d %H:%M:%S')
     
+    # Try to get the timestamp from the global_timestamp field, which is used in the newer code
+    if formatted_timestamp == "Never" and docker_cache.get('global_timestamp'):
+        try:
+            formatted_timestamp = datetime.fromtimestamp(docker_cache['global_timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            logger.debug(f"Using global_timestamp for container list update time: {formatted_timestamp}")
+        except Exception as e:
+            logger.error(f"Error formatting global_timestamp: {e}")
+    
     # Load schedules for display on the main page
     timezone_str = config.get('timezone', 'Europe/Berlin')
     tasks_list = load_tasks()
@@ -442,6 +450,7 @@ def config_page():
                            configured_servers=configured_servers,  # Added
                            active_container_names=active_container_names, # NEW Added
                            cache_error=cache_error,
+                           docker_cache=docker_cache,  # Pass the entire docker_cache for direct access in template
                            last_cache_update=last_cache_update,
                            formatted_timestamp=formatted_timestamp,
                            auto_refresh_interval=config.get('auto_refresh_interval', 30),
@@ -513,6 +522,21 @@ def save_config_api():
             
             # Update scheduler logging settings if they have changed
             try:
+                # Explicitly ensure the debug mode is refreshed
+                from utils.logging_utils import refresh_debug_status
+                debug_status = refresh_debug_status()
+                logger.info(f"Debug mode after config save: {'ENABLED' if debug_status else 'DISABLED'}")
+                
+                # Verify that debug setting was properly saved
+                config_check = load_config()
+                saved_debug_status = config_check.get('scheduler_debug_mode', False)
+                if saved_debug_status != debug_status:
+                    logger.warning(f"Debug status mismatch! Requested: {debug_status}, Saved: {saved_debug_status}")
+                    # Force an additional save with correct debug status
+                    config_check['scheduler_debug_mode'] = debug_status
+                    save_config(config_check)
+                    logger.info(f"Forced additional save with debug status: {debug_status}")
+                
                 # Import here to avoid circular imports
                 from utils.scheduler import initialize_logging
                 initialize_logging()
@@ -646,3 +670,168 @@ def download_monitor_script():
         logger.error(f"Error generating monitor script: {e}", exc_info=True)
         flash(f"Error generating monitor script: {str(e)}", "danger")
         return redirect(url_for('.config_page'))
+
+@main_bp.route('/refresh_containers', methods=['POST'])
+# Use direct auth decorator
+@auth.login_required
+def refresh_containers():
+    """Endpoint to force refresh of Docker container list"""
+    logger = current_app.logger
+    
+    try:
+        # Get Docker containers with force_refresh=True
+        from app.utils.web_helpers import get_docker_containers_live, docker_cache
+        
+        logger.info("Manual refresh of Docker container list requested")
+        containers, error = get_docker_containers_live(logger, force_refresh=True)
+        
+        if error:
+            logger.warning(f"Error during manual container refresh: {error}")
+            return jsonify({
+                'success': False,
+                'message': f"Error refreshing containers: {error}"
+            })
+        
+        # Log the success
+        log_user_action("REFRESH", "Docker Container List", source="Web UI")
+        
+        # Get the timestamp for the response
+        timestamp = docker_cache.get('global_timestamp', time.time())
+        formatted_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+        
+        return jsonify({
+            'success': True,
+            'container_count': len(containers),
+            'timestamp': timestamp,
+            'formatted_time': formatted_time
+        })
+        
+    except Exception as e:
+        logger.error(f"Unexpected error refreshing containers: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f"Unexpected error: {str(e)}"
+        })
+
+@main_bp.route('/enable_temp_debug', methods=['POST'])
+@auth.login_required
+def enable_temp_debug():
+    """
+    API endpoint to enable temporary debug mode.
+    This will enable debug logging for a specified duration without modifying the config file.
+    """
+    logger = current_app.logger
+    
+    try:
+        # Get duration from request, default to 10 minutes
+        duration_minutes = request.form.get('duration', 10)
+        try:
+            duration_minutes = int(duration_minutes)
+        except (ValueError, TypeError):
+            duration_minutes = 10
+            
+        # Enforce reasonable limits
+        if duration_minutes < 1:
+            duration_minutes = 1
+        elif duration_minutes > 60:
+            duration_minutes = 60
+        
+        # Enable temporary debug mode
+        from utils.logging_utils import enable_temporary_debug
+        success, expiry = enable_temporary_debug(duration_minutes)
+        
+        if success:
+            # Format expiry time for display
+            expiry_formatted = datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S')
+            logger.info(f"Temporary debug mode enabled for {duration_minutes} minutes (until {expiry_formatted})")
+            log_user_action("ENABLE", "Temporary Debug Mode", source="Web UI")
+            
+            return jsonify({
+                'success': True,
+                'message': f"Temporary debug mode enabled for {duration_minutes} minutes",
+                'expiry': expiry,
+                'expiry_formatted': expiry_formatted,
+                'duration_minutes': duration_minutes
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': "Failed to enable temporary debug mode"
+            })
+            
+    except Exception as e:
+        logger.error(f"Error enabling temporary debug mode: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f"Error: {str(e)}"
+        })
+
+@main_bp.route('/disable_temp_debug', methods=['POST'])
+@auth.login_required
+def disable_temp_debug():
+    """
+    API endpoint to disable temporary debug mode immediately.
+    """
+    logger = current_app.logger
+    
+    try:
+        # Disable temporary debug mode
+        from utils.logging_utils import disable_temporary_debug
+        success = disable_temporary_debug()
+        
+        if success:
+            logger.info("Temporary debug mode disabled manually")
+            log_user_action("DISABLE", "Temporary Debug Mode", source="Web UI")
+            
+            return jsonify({
+                'success': True,
+                'message': "Temporary debug mode disabled"
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': "Failed to disable temporary debug mode"
+            })
+            
+    except Exception as e:
+        logger.error(f"Error disabling temporary debug mode: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f"Error: {str(e)}"
+        })
+
+@main_bp.route('/temp_debug_status', methods=['GET'])
+@auth.login_required
+def temp_debug_status():
+    """
+    API endpoint to get the current status of temporary debug mode.
+    """
+    try:
+        # Get current status
+        from utils.logging_utils import get_temporary_debug_status
+        is_enabled, expiry, remaining_seconds = get_temporary_debug_status()
+        
+        # Format expiry time
+        expiry_formatted = datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S') if expiry > 0 else ""
+        
+        # Format remaining time
+        remaining_minutes = int(remaining_seconds / 60)
+        remaining_seconds_mod = int(remaining_seconds % 60)
+        remaining_formatted = f"{remaining_minutes}m {remaining_seconds_mod}s" if is_enabled else ""
+        
+        return jsonify({
+            'success': True,
+            'is_enabled': is_enabled,
+            'expiry': expiry,
+            'expiry_formatted': expiry_formatted,
+            'remaining_seconds': remaining_seconds,
+            'remaining_formatted': remaining_formatted
+        })
+            
+    except Exception as e:
+        current_app.logger.error(f"Error getting temporary debug status: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f"Error: {str(e)}",
+            'is_enabled': False
+        })

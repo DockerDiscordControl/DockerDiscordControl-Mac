@@ -304,17 +304,38 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
 
     # Wrapper for editing, needs to be part of this Cog now if periodic_message_edit_loop uses it.
     async def _edit_single_message_wrapper(self, channel_id: int, display_name: str, message_id: int, current_config: dict, allow_toggle: bool):
+        """
+        Handles message editing and updates timestamps.
+        
+        Args:
+            channel_id: Discord channel ID
+            display_name: Display name of the server
+            message_id: Discord message ID to edit
+            current_config: Current configuration
+            allow_toggle: Whether to allow toggle button
+            
+        Returns:
+            bool: Success or failure
+        """
         # This is a method of DockerControlCog that handles message editing
         result = await self._edit_single_message(channel_id, display_name, message_id, current_config) 
         
         if result is True:
+            # Always update the message update time
             now_utc = datetime.now(timezone.utc)
             if channel_id not in self.last_message_update_time:
                 self.last_message_update_time[channel_id] = {}
             self.last_message_update_time[channel_id][display_name] = now_utc
             logger.debug(f"Updated last_message_update_time for '{display_name}' in {channel_id} to {now_utc}")
             
-            # Also update channel activity if configured
+            # DO NOT update channel activity for periodic updates
+            # This is intentional - we only want to update activity for new messages,
+            # not for periodic refreshes, so the Recreate feature can work properly
+            # by detecting when the last message is from a user, not the bot
+            
+            # The following code is commented out to fix the Recreate feature
+            # Channel activity is only updated in on_message and when a new message is sent
+            """
             channel_permissions = current_config.get('channel_permissions', {})
             channel_config_specific = channel_permissions.get(str(channel_id))
             default_recreate_enabled = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('recreate_messages_on_inactivity', True)
@@ -327,6 +348,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             if recreate_enabled and timeout_minutes > 0:
                  self.last_channel_activity[channel_id] = now_utc
                  logger.debug(f"[_EDIT_WRAPPER in COG] Updated last_channel_activity for channel {channel_id} to {now_utc} due to successful bot edit.")
+            """
         return result
 
     # Helper function for editing a single message, needs to be part of this Cog or accessible (e.g. from StatusHandlersMixin)
@@ -537,9 +559,19 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Deletes old bot messages and resends according to the mode."""
         try:
             logger.info(f"Regenerating channel {channel.name} ({channel.id}) in mode '{mode}'")
+            
+            # Clear message ID cache for this channel
             if channel.id in self.channel_server_message_ids:
-                del self.channel_server_message_ids[channel.id]
-                logger.info(f"Cleared message ID cache for channel {channel.id}")
+                # If we're in status mode, only clear the "overview" key
+                if mode == 'status' and "overview" in self.channel_server_message_ids[channel.id]:
+                    # Only clear the overview message tracking
+                    del self.channel_server_message_ids[channel.id]["overview"]
+                    logger.info(f"Cleared 'overview' message ID cache for channel {channel.id}")
+                else:
+                    # Clear all tracking for this channel
+                    del self.channel_server_message_ids[channel.id]
+                    logger.info(f"Cleared all message ID cache for channel {channel.id}")
+            
             await self.delete_bot_messages(channel, limit=300)
             await asyncio.sleep(1.0)
             if mode == 'control':
@@ -1115,7 +1147,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 logger.debug("Inactivity check loop: Initial messages not sent yet, skipping.")
                 return
 
-            logger.debug("Inactivity check loop running")
+            logger.info("=== RECREATE DEBUG: Inactivity check loop running ===")
             
             # Get channel permissions from config
             channel_permissions = self.config.get('channel_permissions', {})
@@ -1123,67 +1155,117 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             default_timeout_minutes = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('inactivity_timeout_minutes', 10)
             now_utc = datetime.now(timezone.utc)
             
+            # Log tracked channels for debugging
+            logger.info(f"RECREATE DEBUG: Currently tracking {len(self.last_channel_activity)} channels for activity")
+            for ch_id, last_time in self.last_channel_activity.items():
+                logger.info(f"RECREATE DEBUG: Channel {ch_id} - Last activity: {last_time} (UTC)")
+            
             # Check each channel we've previously registered activity for
             for channel_id, last_activity_time in list(self.last_channel_activity.items()):
                 channel_config = channel_permissions.get(str(channel_id))
                 
-                # Skip channels with no config or recreate disabled
+                logger.info(f"RECREATE DEBUG: Checking channel {channel_id}")
+                
+                # Skip channels with no config
                 if not channel_config:
+                    logger.info(f"RECREATE DEBUG: Channel {channel_id} has no specific config, skipping")
                     continue
                     
                 recreate_enabled = channel_config.get('recreate_messages_on_inactivity', default_recreate_enabled)
                 timeout_minutes = channel_config.get('inactivity_timeout_minutes', default_timeout_minutes)
                 
+                logger.info(f"RECREATE DEBUG: Channel {channel_id} - recreate_enabled={recreate_enabled}, timeout_minutes={timeout_minutes}")
+                
                 if not recreate_enabled or timeout_minutes <= 0:
-                    logger.debug(f"Inactivity check for channel {channel_id}: recreate_enabled={recreate_enabled}, timeout_minutes={timeout_minutes}. Skipping.")
+                    logger.info(f"RECREATE DEBUG: Channel {channel_id} - Recreate disabled or timeout <= 0, skipping")
                     continue
                     
                 # Calculate time since last activity
                 time_since_last_activity = now_utc - last_activity_time
                 inactivity_threshold = timedelta(minutes=timeout_minutes)
                 
+                logger.info(f"RECREATE DEBUG: Channel {channel_id} - Time since last activity: {time_since_last_activity}, threshold: {inactivity_threshold}")
+                
                 # Check if we've passed the inactivity threshold
                 if time_since_last_activity >= inactivity_threshold:
-                    logger.info(f"Channel {channel_id} has been inactive for {time_since_last_activity}, threshold is {inactivity_threshold}. Attempting regeneration.")
+                    logger.info(f"RECREATE DEBUG: Channel {channel_id} has been inactive for {time_since_last_activity}, threshold is {inactivity_threshold}. Attempting regeneration.")
                     
                     try:
                         # Fetch the Discord channel
                         channel = await self.bot.fetch_channel(channel_id)
                         
                         if not isinstance(channel, discord.TextChannel):
-                            logger.warning(f"Channel {channel_id} is not a text channel, removing from activity tracking.")
+                            logger.warning(f"RECREATE DEBUG: Channel {channel_id} is not a text channel, removing from activity tracking.")
                             del self.last_channel_activity[channel_id]
                             continue
                             
+                        logger.info(f"RECREATE DEBUG: Successfully fetched channel {channel.name} ({channel_id})")
+                            
                         # Check the last message to confirm inactivity
-                        history = await channel.history(limit=1).flatten()
-                        if history and history[0].author.id == self.bot.user.id:
+                        history = await channel.history(limit=3).flatten()
+                        
+                        logger.info(f"RECREATE DEBUG: Found {len(history)} messages in recent history for channel {channel.name}")
+                        
+                        # Log the recent messages for debugging
+                        for i, msg in enumerate(history):
+                            is_bot = msg.author.id == self.bot.user.id
+                            logger.info(f"RECREATE DEBUG: Message {i+1}: Author={msg.author} (IsBot={is_bot}), Content={msg.content[:30]}..., ID={msg.id}")
+                        
+                        # If there are no messages at all, regenerate
+                        if not history:
+                            logger.info(f"RECREATE DEBUG: No messages found in channel {channel.name} ({channel_id}). Regenerating.")
+                            # Determine the mode: control or status
+                            has_control_permission = _channel_has_permission(channel_id, 'control', self.config)
+                            regeneration_mode = 'control' if has_control_permission else 'status'
+                            logger.info(f"RECREATE DEBUG: Regeneration mode for empty channel: {regeneration_mode}")
+                            await self._regenerate_channel(channel, regeneration_mode)
+                            self.last_channel_activity[channel_id] = now_utc
+                            continue
+                        
+                        # Check if the last message is from our bot
+                        if history[0].author.id == self.bot.user.id:
                             # If the last message is from our bot, we should not regenerate
                             # Reset the timer instead, since the bot was the last to post
                             self.last_channel_activity[channel_id] = now_utc
-                            logger.debug(f"Last message in channel {channel.name} ({channel_id}) is from the bot, resetting inactivity timer.")
+                            logger.info(f"RECREATE DEBUG: Last message in channel {channel.name} ({channel_id}) is from the bot, resetting inactivity timer.")
                             continue
                             
+                        # The last message is not from our bot, regenerate
+                        logger.info(f"RECREATE DEBUG: Last message in channel {channel.name} is NOT from our bot. Will regenerate.")
+                        
                         # Determine the mode: control or status
                         has_control_permission = _channel_has_permission(channel_id, 'control', self.config)
+                        has_status_permission = _channel_has_permission(channel_id, 'serverstatus', self.config)
+                        
+                        logger.info(f"RECREATE DEBUG: Channel permissions - control: {has_control_permission}, status: {has_status_permission}")
+                        
                         regeneration_mode = 'control' if has_control_permission else 'status'
+                        
+                        # Force the mode to be valid
+                        if not has_control_permission and not has_status_permission:
+                            logger.warning(f"RECREATE DEBUG: Channel {channel.name} has neither control nor status permissions. Cannot regenerate.")
+                            continue
+                        
+                        logger.info(f"RECREATE DEBUG: Will regenerate with mode: {regeneration_mode}")
                         
                         # Attempt channel regeneration
                         await self._regenerate_channel(channel, regeneration_mode)
                         
                         # Reset activity timer
                         self.last_channel_activity[channel_id] = now_utc
-                        logger.info(f"Channel {channel.name} ({channel_id}) regenerated due to inactivity. Mode: {regeneration_mode}")
+                        logger.info(f"RECREATE DEBUG: Channel {channel.name} ({channel_id}) regenerated due to inactivity. Mode: {regeneration_mode}")
                         
                     except discord.NotFound:
-                        logger.warning(f"Channel {channel_id} not found. Removing from activity tracking.")
+                        logger.warning(f"RECREATE DEBUG: Channel {channel_id} not found. Removing from activity tracking.")
                         del self.last_channel_activity[channel_id]
                     except discord.Forbidden:
-                        logger.error(f"Cannot access channel {channel_id} (forbidden). Continuing tracking but regeneration not possible.")
+                        logger.error(f"RECREATE DEBUG: Cannot access channel {channel_id} (forbidden). Continuing tracking but regeneration not possible.")
                     except Exception as e:
-                        logger.error(f"Error during inactivity check for channel {channel_id}: {e}", exc_info=True)
+                        logger.error(f"RECREATE DEBUG: Error during inactivity check for channel {channel_id}: {e}", exc_info=True)
+                else:
+                    logger.info(f"RECREATE DEBUG: Channel {channel_id} - Inactivity threshold not reached yet.")
         except Exception as e:
-            logger.error(f"Error in inactivity_check_loop: {e}", exc_info=True)
+            logger.error(f"RECREATE DEBUG: Error in inactivity_check_loop: {e}", exc_info=True)
 
     @inactivity_check_loop.before_loop
     async def before_inactivity_check_loop(self):
@@ -1323,7 +1405,16 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         return self.status_cache.copy()
 
     async def _update_overview_message(self, channel_id: int, message_id: int) -> bool:
-        """Updates the overview message with current server statuses."""
+        """
+        Updates the overview message with current server statuses.
+        
+        Args:
+            channel_id: Discord channel ID
+            message_id: Discord message ID to update
+            
+        Returns:
+            bool: Success or failure
+        """
         logger.debug(f"Updating overview message {message_id} in channel {channel_id}")
         try:
             # Get channel
@@ -1371,14 +1462,15 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             # Update the message
             await message.edit(embed=embed)
             
-            # Update timestamp
+            # Update message update timestamp, but NOT channel activity
             now_utc = datetime.now(timezone.utc)
             if channel_id not in self.last_message_update_time:
                 self.last_message_update_time[channel_id] = {}
             self.last_message_update_time[channel_id]["overview"] = now_utc
             
-            # Also update channel activity
-            self.last_channel_activity[channel_id] = now_utc
+            # DO NOT update channel activity
+            # This is commented out to fix the Recreate feature
+            # self.last_channel_activity[channel_id] = now_utc
             
             logger.debug(f"Successfully updated overview message {message_id} in channel {channel_id}")
             return True
