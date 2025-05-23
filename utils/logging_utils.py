@@ -44,14 +44,11 @@ def is_debug_mode_enabled() -> bool:
         # Store previous value to detect changes
         previous_value = _debug_mode_enabled
         
-        # Force config reload to get the latest value
+        # Load config without force invalidation (cache will be used if available)
         from utils.config_loader import load_config
         config = load_config()
-        # Force cache invalidation to ensure we get the latest config
-        from utils.config_manager import get_config_manager
-        get_config_manager().invalidate_cache()
-        # Now reload config after cache invalidation
-        config = load_config()
+        
+        # Use the cached value of debug mode if available
         _debug_mode_enabled = config.get('scheduler_debug_mode', False)
         
         # Only output debug message when loaded for the first time or when the value changes
