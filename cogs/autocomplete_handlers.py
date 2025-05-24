@@ -28,6 +28,7 @@ except ImportError:
 
 # Import utility functions
 from utils.config_loader import load_config
+from utils.config_cache import get_cached_config, get_cached_servers  # Performance optimization
 from utils.logging_utils import setup_logger
 from utils.scheduler import (
     VALID_CYCLES, VALID_ACTIONS, DAYS_OF_WEEK,
@@ -62,8 +63,7 @@ async def schedule_container_select(
 
     logger.debug(f"schedule_container_select: Cache miss or expired. Refreshing. Input: '{value_being_typed}'")
     
-    config = load_config() # Still needs config for server names
-    servers = config.get('servers', [])
+    servers = get_cached_servers()  # Performance optimization: use cache instead of load_config()
     choices_to_cache = [] # This list will be cached
     
     active_docker_data_set = set() # Stores (docker_name, is_running)
@@ -214,8 +214,7 @@ async def schedule_month_select(
     from .translation_manager import _
     
     # Get the current language from config
-    from utils.config_loader import load_config
-    config = load_config()
+    config = get_cached_config()  # Performance optimization: use cache instead of load_config()
     current_language = config.get('language', 'en')
     
     # English month names

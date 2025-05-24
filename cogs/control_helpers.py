@@ -11,6 +11,7 @@ import logging
 from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timezone # Import datetime and timezone
 from utils.config_loader import load_config
+from utils.config_cache import get_cached_config, get_cached_servers, get_cached_guild_id  # Performance optimization
 from .translation_manager import _ # Import the translation function
 from utils.time_utils import format_datetime_with_timezone # Import time helper
 
@@ -65,10 +66,9 @@ logger = logging.getLogger('ddc.control_helpers')
 
 def get_guild_id() -> Union[List[int], None]:
     """Loads the guild ID from the configuration."""
-    config = load_config()
-    guild_id_str = config.get('guild_id')
-    if guild_id_str and guild_id_str.isdigit():
-        return [int(guild_id_str)]
+    guild_id = get_cached_guild_id()  # Performance optimization: use cache
+    if guild_id:
+        return [guild_id]
     # If no or an invalid guild_id is in the config,
     # None is returned, which means the command is global.
     logger.warning("No valid guild_id found in config. Commands will be registered globally.")
@@ -120,14 +120,9 @@ async def container_select(original_ctx, original_current):
 
     logger.info(f"[container_select] Determined search_text: '{search_text}'")
     
-    config = load_config()
-    if not config:
-        logger.error("[container_select] Failed to load configuration. Returning empty list.")
-        return []
-        
-    servers = config.get('servers', [])
+    servers = get_cached_servers()  # Performance optimization: use cache instead of load_config()
     if not servers:
-        logger.warning("[container_select] No servers found in configuration (or config['servers'] is empty). Returning empty list.")
+        logger.warning("[container_select] No servers found in configuration (or servers list is empty). Returning empty list.")
         # return [] # If servers is empty, initial_container_names will be empty naturally
 
     initial_container_names = [server.get('docker_name') for server in servers if server.get('docker_name')]
@@ -146,8 +141,11 @@ async def container_select(original_ctx, original_current):
     logger.info(f"[container_select] EXIT. Returning {len(container_names_to_return)} items: {container_names_to_return[:25]}")
     return container_names_to_return[:25]
 
-def _channel_has_permission(channel_id: int, permission_key: str, config: dict) -> bool:
+def _channel_has_permission(channel_id: int, permission_key: str, config: dict = None) -> bool:
     """Checks if a channel has a specific permission."""
+    if config is None:
+        config = get_cached_config()  # Performance optimization: use cache if no config provided
+    
     channel_permissions = config.get('channel_permissions', {})
     channel_config = channel_permissions.get(str(channel_id))
 
@@ -162,7 +160,7 @@ def _channel_has_permission(channel_id: int, permission_key: str, config: dict) 
 def _get_pending_embed(display_name: str) -> discord.Embed:
     """Generates a standardized embed for the pending status in the box design."""
     # --- Start: Adjusted box formatting for Pending --- #
-    config = load_config() # Load config to get timezone for footer
+    config = get_cached_config()  # Performance optimization: use cache instead of load_config()
     language = config.get('language', 'de') # Needed for translation context
     status_text = _("Pending...") # Use translated text
     current_emoji = "⏳"

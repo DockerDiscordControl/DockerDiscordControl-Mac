@@ -28,6 +28,7 @@ if 'DDC_DISCORD_SKIP_TOKEN_LOCK' not in os.environ:
 # Import custom modules
 from utils.config_loader import load_config, save_config, get_server_config, update_server_config
 from utils.logging_utils import setup_logger, refresh_debug_status
+from utils.config_cache import init_config_cache, get_cached_config  # Performance optimization
 # Import the internal translation system
 from cogs.translation_manager import _, get_translations
 # Import scheduler service
@@ -93,6 +94,9 @@ except ImportError:
 
 # Load configuration ONCE here
 loaded_main_config = load_config()
+
+# Initialize config cache for performance optimization
+init_config_cache(loaded_main_config)
 
 # Set timezone for logging from configuration
 timezone_str = loaded_main_config.get('timezone', 'Europe/Berlin')
@@ -165,7 +169,7 @@ async def action_select(ctx, current):
     This function handles both discord.py and PyCord autocomplete contexts.
     Always returns a simple list of strings to avoid serialization issues.
     """
-    config = load_config()
+    config = get_cached_config()  # Performance optimization: use cache instead of load_config()
     
     # Extract the container name from the context
     container_name = None
@@ -417,6 +421,10 @@ async def on_ready():
         except Exception as e:
             logger.error(f"Error during schedule command processing in on_ready: {e}", exc_info=True)
         
+        # Wait a moment for commands to be fully registered
+        logger.info("Waiting 2 seconds for all commands to be fully registered...")
+        await asyncio.sleep(2)
+        
         # COMMAND SYNCHRONIZATION (important for Discord to recognize the changes)
         logger.info("Synchronizing App Commands after potential Cog registrations...")
 
@@ -436,12 +444,19 @@ async def on_ready():
                         cmd_names = [cmd.name for cmd in app_cmds]
                         logger.info(f"Found {len(cmd_names)} commands to sync: {cmd_names}")
                         
+                        # Debug: Show all command details
+                        for cmd in app_cmds:
+                            logger.info(f"Command details: {cmd.name} - Type: {type(cmd)} - Module: {getattr(cmd, '__module__', 'Unknown')}")
+                        
                         # Check if schedule_* commands are included
                         schedule_cmd_names = [name for name in cmd_names if name.startswith('schedule_')]
                         if schedule_cmd_names:
                             logger.info(f"Schedule commands to sync: {schedule_cmd_names}")
                         else:
-                            logger.warning("No schedule commands found to sync!")
+                            logger.info("Schedule commands not yet visible in application_commands list.")
+                            logger.info("This is normal - commands are registered by the Cog and will be available after sync.")
+                            # Do NOT manually add commands here - they are auto-registered by the Cog
+                            # Manual addition causes duplicate command errors
                     
                     # Perform synchronization with Try/Except
                     try:

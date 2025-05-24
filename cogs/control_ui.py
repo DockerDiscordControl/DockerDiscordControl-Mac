@@ -19,6 +19,7 @@ import os
 
 # Import helper functions and types
 from utils.config_loader import load_config
+from utils.config_cache import get_cached_config  # Performance optimization
 from utils.docker_utils import docker_action
 from .translation_manager import _, get_translations # Import translation functions
 from .control_helpers import _channel_has_permission, _get_pending_embed # Import permission helper
@@ -81,7 +82,7 @@ class ActionButton(Button):
             logger.info(f"[BUTTON_CALLBACK_DEFERRED] Action '{self.action}' for '{self.display_name}' deferred successfully.")
 
             # --- Proceed with original logic (Ensure this is INSIDE the try block) --- #
-            current_config = load_config()
+            current_config = get_cached_config()  # Performance optimization: use cache instead of load_config()
             if not interaction.channel:
                 logger.error(f"[BUTTON] Channel not found for interaction from {interaction.user}")
                 return
