@@ -78,8 +78,8 @@ class CommandHandlersMixin:
 
         # Mark container as pending action
         now = datetime.now(timezone.utc)
-        self.pending_actions[display_name] = now
-        logger.debug(f"[COMMAND] Set pending state for '{display_name}' at {now}")
+        self.pending_actions[display_name] = {'timestamp': now, 'action': internal_action}
+        logger.debug(f"[COMMAND] Set pending state for '{display_name}' at {now} with action '{internal_action}'")
 
         # Defer reply
         await ctx.defer(ephemeral=False)

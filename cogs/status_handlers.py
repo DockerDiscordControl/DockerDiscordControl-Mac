@@ -139,15 +139,56 @@ class StatusHandlersMixin:
 
         # --- Check for pending action first --- (Moved before status_result processing)
         if display_name in self.pending_actions:
-            pending_timestamp = self.pending_actions[display_name]
-            is_pending = (now - pending_timestamp).total_seconds() < 15 # 15 seconds pending window
-            if is_pending:
-                logger.debug(f"[_GEN_EMBED] '{display_name}' is in pending state (action at {pending_timestamp})")
+            pending_data = self.pending_actions[display_name]
+            pending_timestamp = pending_data['timestamp']
+            pending_action = pending_data['action']
+            pending_duration = (now - pending_timestamp).total_seconds()
+            
+            # IMPROVED: Longer timeout and smarter pending logic
+            PENDING_TIMEOUT_SECONDS = 120  # 2 minutes timeout instead of 15 seconds
+            
+            if pending_duration < PENDING_TIMEOUT_SECONDS:
+                logger.debug(f"[_GEN_EMBED] '{display_name}' is in pending state (action: {pending_action} at {pending_timestamp}, duration: {pending_duration:.1f}s)")
                 embed = _get_pending_embed(display_name) # Uses a standardized pending embed
                 return embed, None, False # No view, running status is effectively false for pending display
             else:
-                logger.debug(f"[_GEN_EMBED] '{display_name}' pending state timed out (action at {pending_timestamp})")
-                del self.pending_actions[display_name] # Clear stale pending state
+                # IMPROVED: Smart timeout - check if container status actually changed based on action
+                logger.info(f"[_GEN_EMBED] '{display_name}' pending timeout reached ({pending_duration:.1f}s). Checking if {pending_action} action succeeded...")
+                
+                # Try to get current container status to see if it changed
+                current_server_conf_for_check = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), None)
+                if current_server_conf_for_check:
+                    fresh_status = await self.get_status(current_server_conf_for_check)
+                    if not isinstance(fresh_status, Exception) and isinstance(fresh_status, tuple) and len(fresh_status) >= 2:
+                        current_running_state = fresh_status[1]  # is_running is second element
+                        
+                        # ACTION-AWARE SUCCESS DETECTION
+                        action_succeeded = False
+                        if pending_action == 'start':
+                            # Start succeeds when container is running
+                            action_succeeded = current_running_state
+                        elif pending_action == 'stop':
+                            # Stop succeeds when container is NOT running
+                            action_succeeded = not current_running_state
+                        elif pending_action == 'restart':
+                            # Restart succeeds when container is running (after stop+start cycle)
+                            action_succeeded = current_running_state
+                        
+                        if action_succeeded:
+                            logger.info(f"[_GEN_EMBED] '{display_name}' {pending_action} action succeeded - clearing pending state")
+                            del self.pending_actions[display_name]
+                            # Update cache with fresh status
+                            self.status_cache[display_name] = {'data': fresh_status, 'timestamp': now}
+                        else:
+                            # Action might have failed or container takes very long
+                            logger.warning(f"[_GEN_EMBED] '{display_name}' {pending_action} action did not succeed after {pending_duration:.1f}s timeout - clearing pending state")
+                            del self.pending_actions[display_name]
+                    else:
+                        logger.warning(f"[_GEN_EMBED] '{display_name}' pending timeout - could not get fresh status, clearing pending state")
+                        del self.pending_actions[display_name]
+                else:
+                    logger.warning(f"[_GEN_EMBED] '{display_name}' pending timeout - no server config found, clearing pending state")
+                    del self.pending_actions[display_name]
 
         # --- Determine status_result (from cache or live) ---
         if cached_entry:

@@ -172,7 +172,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         self.last_channel_activity: Dict[int, datetime] = {}
         self.status_cache = {}
         self.cache_ttl_seconds = 75
-        self.pending_actions: Dict[str, datetime] = {}
+        self.pending_actions: Dict[str, Dict[str, Any]] = {}
         self.ordered_server_names = load_server_order()
         logger.info(f"[Cog Init] Loaded server order from persistent file: {self.ordered_server_names}")
         if not self.ordered_server_names:
@@ -277,6 +277,14 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                     logger.debug(f"Direct Cog Periodic Edit Loop: Skipping edit for '{display_name}' in channel {channel_id} (Message ID: {message_id}). Interval not passed. Time since last: {time_since_last_update}. Next update in: {time_to_next_update}.")
 
                 if should_update:
+                    # IMPROVED: Skip refresh for containers in pending state
+                    if display_name in self.pending_actions:
+                        pending_timestamp = self.pending_actions[display_name]['timestamp']
+                        pending_duration = (now_utc - pending_timestamp).total_seconds()
+                        if pending_duration < 120:  # Same timeout as in status_handlers.py
+                            logger.info(f"Direct Cog Periodic Edit Loop: Skipping edit for '{display_name}' - container is pending (duration: {pending_duration:.1f}s)")
+                            continue  # Skip this container
+                    
                     allow_toggle_for_channel = _channel_has_permission(channel_id, 'control', self.config)
                     # Special case for overview message
                     if display_name == "overview":
@@ -942,9 +950,9 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 
                 # Determine status icon
                 if display_name in self.pending_actions:
-                    pending_timestamp = self.pending_actions[display_name]
-                    is_pending = (now_utc - pending_timestamp).total_seconds() < 15
-                    if is_pending:
+                    pending_timestamp = self.pending_actions[display_name]['timestamp']
+                    pending_duration = (now_utc - pending_timestamp).total_seconds()
+                    if pending_duration < 120:  # Same timeout as in status_handlers.py
                         status_emoji = "🟡"  # Yellow for pending
                         # Use "Pending" status text instead of Online/Offline
                         status_text = translate("Pending")

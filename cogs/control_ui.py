@@ -111,8 +111,8 @@ class ActionButton(Button):
 
             # Set Pending State
             now = datetime.now(timezone.utc)
-            self.cog.pending_actions[self.display_name] = now
-            logger.debug(f"[BUTTON] Set pending state for '{self.display_name}' at {now}")
+            self.cog.pending_actions[self.display_name] = {'timestamp': now, 'action': self.action}
+            logger.debug(f"[BUTTON] Set pending state for '{self.display_name}' at {now} with action '{self.action}'")
 
             # --- START: Change - Edit main message instead of original response --- #
             # Get channel and message ID
@@ -315,7 +315,7 @@ class ControlView(View):
         display_name = server_config.get('name', docker_name)
 
         # Check for Pending Status
-        if self.cog.pending_actions.get(display_name):
+        if display_name in self.cog.pending_actions:
              logger.debug(f"[ControlView] Server '{display_name}' is pending. No buttons will be added.")
              return # Stop initialization, add no buttons
 
