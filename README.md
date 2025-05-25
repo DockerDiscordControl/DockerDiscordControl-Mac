@@ -33,10 +33,11 @@ DDC includes a powerful scheduling system to automate container management:
   * `/schedule_yearly` - Run actions on specific dates each year
 * **Management Commands**:
   * `/schedule_info` - List all scheduled tasks with filtering options
-  * Currently, task management is available through the web interface:
-    * Delete tasks in the web UI
+  * `/schedule_delete` - Delete specific scheduled tasks by task ID
+  * Additional task management is available through the web interface:
     * View complete schedule information
-  * **Coming Soon**: Enhanced Discord management with direct buttons for task deletion and editing
+    * Advanced task editing capabilities
+  * **Enhanced Discord Management**: Task deletion is now available directly via Discord commands, with editing capabilities coming soon
 
 **Examples of use cases:**
 * Restart game servers at specific times

@@ -622,6 +622,7 @@ class ScheduleCommandsMixin:
         embed.add_field(name="`/schedule_monthly`", value=_("Schedule a **monthly** task on the specified day and time."), inline=False)
         embed.add_field(name="`/schedule_yearly`", value=_("Schedule a **yearly** task on the specified month, day, and time."), inline=False)
         embed.add_field(name="`/schedule_info`", value=_("Shows information about all scheduled tasks."), inline=False)
+        embed.add_field(name="`/schedule_delete`", value=_("Delete a scheduled task by its task ID."), inline=False)
         
         # Add note about limitations
         embed.add_field(name=_("Note on Day Selection"), 

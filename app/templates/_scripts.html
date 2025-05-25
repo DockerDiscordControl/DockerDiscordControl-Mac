@@ -267,7 +267,7 @@
         // Rate-limiting variables
         let lastLogFetch = 0; // Timestamp of the last request
         let lastActionLogFetch = 0;
-        const MIN_FETCH_INTERVAL = 3000; // Minimum interval between requests in ms (3 seconds)
+        const MIN_FETCH_INTERVAL = 12000; // Minimum interval between requests in ms (12 seconds, increased from 3 seconds)
         let fetchInProgress = false; // Flag to prevent parallel requests
         let actionLogFetchInProgress = false;
 
@@ -556,7 +556,7 @@
         
         // A common interval for both logs
         if (logIntervalId) clearInterval(logIntervalId);
-        logIntervalId = setInterval(fetchAllLogs, 30000); // Updates both logs every 30 seconds
+        logIntervalId = setInterval(fetchAllLogs, 60000); // Updates both logs every 60 seconds (increased from 30 seconds)
         // --- END: Log Update ---
 
         // --- Server Selection Table Logic ---
