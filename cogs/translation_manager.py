@@ -227,6 +227,29 @@ class TranslationManager:
                 "Day of the month (1-31)": "Tag des Monats (1-31)",
                 "Container name (or 'all')": "Container-Name (oder 'all')",
                 "Time period (e.g., next_week)": "Zeitraum (z.B. next_week)",
+                "Task ID to delete": "Zu löschende Task-ID",
+
+                # Task Delete Panel texts
+                "Task Delete Panel": "Task-Löschpanel",
+                "Click any button below to delete the corresponding task:": "Klicke einen der Buttons unten, um die entsprechende Aufgabe zu löschen:",
+                "Legend:** O = Once, D = Daily, W = Weekly, M = Monthly, Y = Yearly": "Legende:** O = Einmalig, D = Täglich, W = Wöchentlich, M = Monatlich, Y = Jährlich",
+                "Showing first 25 of {total} tasks": "Zeige erste 25 von {total} Aufgaben",
+                "Found {total} active tasks": "{total} aktive Aufgaben gefunden",
+                "You do not have permission to delete tasks in this channel.": "Du hast keine Berechtigung, Aufgaben in diesem Kanal zu löschen.",
+                "✅ Successfully deleted scheduled task!\n**Task ID:** {task_id}\n**Container:** {container}\n**Action:** {action}\n**Cycle:** {cycle}": "✅ Geplante Aufgabe erfolgreich gelöscht!\n**Task-ID:** {task_id}\n**Container:** {container}\n**Aktion:** {action}\n**Zyklus:** {cycle}",
+
+                # Updated task command descriptions
+                "Shows task command help": "Zeigt Task-Befehl-Hilfe an",
+                "Delete a scheduled task": "Lösche eine geplante Aufgabe",
+                "Delete a scheduled task by its task ID.": "Lösche eine geplante Aufgabe anhand ihrer Task-ID.",
+                "Show active tasks with delete buttons": "Zeige aktive Aufgaben mit Lösch-Buttons",
+
+                # Task command names (updated from schedule to task)
+                "Schedule a one-time task": "Plane eine einmalige Aufgabe",
+                "Schedule a daily task": "Plane eine tägliche Aufgabe", 
+                "Schedule a weekly task": "Plane eine wöchentliche Aufgabe",
+                "Schedule a monthly task": "Plane eine monatliche Aufgabe",
+                "Schedule a yearly task": "Plane eine jährliche Aufgabe",
 
                 # Error messages
                 "Error during execution: {error}": "Fehler bei der Ausführung: {error}",
@@ -436,6 +459,29 @@ class TranslationManager:
                 "Day of the month (1-31)": "Jour du mois (1-31)",
                 "Container name (or 'all')": "Nom du conteneur (ou 'all')",
                 "Time period (e.g., next_week)": "Période (ex: next_week)",
+                "Task ID to delete": "ID de tâche à supprimer",
+
+                # Task Delete Panel texts
+                "Task Delete Panel": "Panneau de suppression de tâches",
+                "Click any button below to delete the corresponding task:": "Cliquez sur un bouton ci-dessous pour supprimer la tâche correspondante:",
+                "Legend:** O = Once, D = Daily, W = Weekly, M = Monthly, Y = Yearly": "Légende:** O = Une fois, D = Quotidien, W = Hebdomadaire, M = Mensuel, Y = Annuel",
+                "Showing first 25 of {total} tasks": "Affichage des 25 premières tâches sur {total}",
+                "Found {total} active tasks": "{total} tâches actives trouvées",
+                "You do not have permission to delete tasks in this channel.": "Vous n'avez pas la permission de supprimer des tâches dans ce canal.",
+                "✅ Successfully deleted scheduled task!\n**Task ID:** {task_id}\n**Container:** {container}\n**Action:** {action}\n**Cycle:** {cycle}": "✅ Tâche planifiée supprimée avec succès!\n**ID de tâche:** {task_id}\n**Conteneur:** {container}\n**Action:** {action}\n**Cycle:** {cycle}",
+
+                # Updated task command descriptions
+                "Shows task command help": "Affiche l'aide des commandes de tâches",
+                "Delete a scheduled task": "Supprimer une tâche planifiée",
+                "Delete a scheduled task by its task ID.": "Supprimer une tâche planifiée par son ID de tâche.",
+                "Show active tasks with delete buttons": "Afficher les tâches actives avec boutons de suppression",
+
+                # Task command names (updated from schedule to task)
+                "Schedule a one-time task": "Plane une tâche unique",
+                "Schedule a daily task": "Plane une tâche quotidienne", 
+                "Schedule a weekly task": "Plane une tâche hebdomadaire",
+                "Schedule a monthly task": "Plane une tâche mensuelle",
+                "Schedule a yearly task": "Plane une tâche annuelle",
 
                 # Error messages
                 "Error during execution: {error}": "Erreur pendant l'exécution: {error}",

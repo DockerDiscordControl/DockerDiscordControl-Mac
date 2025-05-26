@@ -15,22 +15,27 @@ Licensed under the MIT License
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}">
     <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/font/bootstrap-icons.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/tasks.css') }}" rel="stylesheet">
     <style data-version="{{ now }}">
+        :root {
+            --primary-color: #36cfff;
+        }
+        
         .force-hide {
             display: none !important;
         }
-        body { background-color: #000000; color: #f8f9fa; padding-top: 20px; padding-bottom: 80px; }
-        .form-control, .form-select { background-color: #212529; color: #f8f9fa; border-color: #495057; }
-        .form-control:focus, .form-select:focus { background-color: #2a2e34; color: #f8f9fa; border-color: #80bdff; box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25); }
+        body { background-color: #0D0B08; color: #ffffff; padding-top: 20px; padding-bottom: 80px; }
+        .form-control, .form-select { background-color: #1E2125; color: #ffffff; border-color: #4a5568; }
+        .form-control:focus, .form-select:focus { background-color: #1E2125; color: #ffffff; border-color: #4299e1; box-shadow: 0 0 0 0.2rem rgba(66, 153, 225, 0.25); }
         .form-control::placeholder { color: #6c757d; }
         .form-text, .form-check-label small, .text-muted { color: #adb5bd !important; font-size: 0.9em; } 
         a { color: #61dafb; }
         hr { border-top: 1px solid #495057; opacity: 0.5; }
         label, h4, h5 { font-weight: bold; color: #dee2e6; } 
-        .btn-primary { background-color: #0d6efd; border-color: #0d6efd; font-weight: bold; } 
+        .btn-primary { background-color: #4299e1; border-color: #4299e1; font-weight: bold; } 
         .btn-secondary { background-color: #6c757d; border-color: #6c757d; }
         
-        .logo-header img { max-height: 320px; margin-bottom: 15px; } 
+        .logo-header img { max-height: 200px; width: auto; margin-bottom: -1rem; position: relative; z-index: 5; } 
         .alert { margin-top: 15px; }
         .help-icon { cursor: help; margin-left: 5px; color: #6c757d; font-size: 0.9em; }
         
@@ -51,7 +56,7 @@ Licensed under the MIT License
         
         #save-notification { position: fixed; top: 20px; right: 20px; border-radius: 4px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); z-index: 1050; font-weight: bold; display: none; }
         
-        .card { background-color: #1a1d24; border-color: #323840; margin-bottom: 1.5rem; }
+        .card { background-color: #1E2125; border-color: #4a5568; margin-bottom: 1.5rem; }
         .card-header { background-color: #212529; }
         .card-header h5 { color: #f8f9fa !important; } 
 
@@ -73,9 +78,30 @@ Licensed under the MIT License
         
         /* Neon Text Effect for MAX in the footer */
         .neon-text {
-            color: #ff4d4d;
-            text-shadow: 0 0 10px #ff4d4d, 0 0 20px #ff4d4d, 0 0 40px #ff4d4d;
+            color: var(--primary-color);
+            text-shadow: 0 0 10px var(--primary-color), 0 0 20px var(--primary-color), 0 0 40px var(--primary-color);
             font-weight: bold;
+            transition: all 0.1s ease;
+        }
+        
+        /* Large Neon Text Effect for DDC under logo */
+        .neon-text-large {
+            color: #ff4d4d;
+            text-shadow: 0 0 20px #ff4d4d, 0 0 40px #ff4d4d, 0 0 80px #ff4d4d, 0 0 120px #ff4d4d;
+            font-weight: bold;
+            font-size: 6rem;
+            letter-spacing: 0.2em;
+            margin-top: -1rem;
+            display: block;
+            position: relative;
+            z-index: 10;
+        }
+        
+        .ddc-title {
+            margin-top: -1rem;
+            margin-bottom: 1rem;
+            position: relative;
+            z-index: 10;
         }
         
         /* Flicker effect class - used by JavaScript to simulate neon light flickering */
@@ -83,6 +109,22 @@ Licensed under the MIT License
             color: #000;
             text-shadow: none;
             transition: color 0.05s, text-shadow 0.05s;
+        }
+        
+        .neon-text-large.flicker {
+            color: #000;
+            text-shadow: none;
+            transition: color 0.05s, text-shadow 0.05s;
+        }
+        .donation-section {
+            background-color: #1E2125;
+            border: 1px solid #4a5568;
+            border-radius: 0.5rem;
+            padding: 1rem;
+            margin: 1rem 0;
+        }
+        .bmc-button img {
+            border-radius: 5px;
         }
     </style>
     {# Log Highlighting Styles #}
@@ -150,25 +192,31 @@ Licensed under the MIT License
 
     <script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
     <script>
-        // Neon flicker effect for MAX in footer
+        // Neon flicker effect for MAX in footer and DDC under logo
         (function setupNeonFlicker() {
-            const neonElement = document.getElementById('neon-max');
-            if (!neonElement) return;
+            const neonElements = [
+                { element: document.getElementById('neon-max'), name: 'MAX' },
+                { element: document.getElementById('neon-ddc'), name: 'DDC' }
+            ].filter(item => item.element); // Only include elements that exist
+            
+            if (neonElements.length === 0) return;
             
             function flickerNeon() {
-                // Decide if we flicker now
-                if (Math.random() < 0.7) {
-                    // Create a flicker
-                    neonElement.classList.add('flicker');
-                    
-                    // Random flicker duration between 100ms and 1000ms
-                    const flickerDuration = Math.random() * 900 + 100;
-                    
-                    // Remove the flicker class after the duration
-                    setTimeout(() => {
-                        neonElement.classList.remove('flicker');
-                    }, flickerDuration);
-                }
+                neonElements.forEach(({ element, name }) => {
+                    // Decide if we flicker now (70% chance)
+                    if (Math.random() < 0.7) {
+                        // Create a flicker
+                        element.classList.add('flicker');
+                        
+                        // Random flicker duration between 100ms and 1000ms
+                        const flickerDuration = Math.random() * 900 + 100;
+                        
+                        // Remove the flicker class after the duration
+                        setTimeout(() => {
+                            element.classList.remove('flicker');
+                        }, flickerDuration);
+                    }
+                });
                 
                 // Schedule next flicker check in 5-10 seconds
                 const nextFlickerTime = Math.random() * 5000 + 5000;

@@ -414,4 +414,146 @@ def delete_task_route(task_id):
         return jsonify({"success": True, "message": f"Task {task_id} deleted successfully"}), 200
     else:
         current_app.logger.error(f"Failed to delete task {task_id}")
-        return jsonify({"success": False, "error": "Failed to delete task"}), 500 
+        return jsonify({"success": False, "error": "Failed to delete task"}), 500
+
+@tasks_bp.route('/edit/<task_id>', methods=['GET', 'PUT'])
+def edit_task_route(task_id):
+    """Gets or updates a specific task by ID."""
+    if not task_id:
+        return jsonify({"success": False, "error": "Missing task_id"}), 400
+    
+    # Import required functions
+    from utils.scheduler import find_task_by_id, update_task
+    
+    # Find the task by ID
+    task = find_task_by_id(task_id)
+    if not task:
+        return jsonify({"success": False, "error": f"Task with ID {task_id} not found"}), 404
+    
+    if request.method == 'GET':
+        # Return task data for editing
+        config = load_config()
+        timezone_str = config.get('timezone', 'Europe/Berlin')
+        
+        task_dict = task.to_dict()
+        
+        # Format next_run_local for display
+        if task.next_run_ts:
+            try:
+                import pytz
+                tz = pytz.timezone(timezone_str)
+                next_run_local = datetime.utcfromtimestamp(task.next_run_ts).replace(tzinfo=pytz.UTC).astimezone(tz)
+                task_dict["next_run_local"] = next_run_local.strftime("%Y-%m-%d %H:%M:%S %Z")
+            except Exception as e:
+                current_app.logger.error(f"Error formatting next_run_local: {e}")
+        
+        return jsonify({"success": True, "task": task_dict}), 200
+    
+    elif request.method == 'PUT':
+        # Update task data
+        try:
+            data = request.get_json()
+            if not data:
+                return jsonify({"success": False, "error": "No data provided"}), 400
+            
+            current_app.logger.debug(f"Updating task {task_id} with data: {data}")
+            
+            # Store original values for logging
+            original_container = task.container_name
+            original_action = task.action
+            original_cycle = task.cycle
+            
+            # Update basic fields
+            if 'container' in data:
+                task.container_name = data['container']
+            if 'action' in data:
+                task.action = data['action']
+            if 'cycle' in data:
+                task.cycle = data['cycle']
+            if 'is_active' in data:
+                task.is_active = bool(data['is_active'])
+            
+            # Update schedule details
+            if 'schedule_details' in data:
+                schedule_details = data['schedule_details']
+                
+                # Clear existing schedule details
+                task.time_str = None
+                task.day_val = None
+                task.month_val = None
+                task.year_val = None
+                task.weekday_val = None
+                task.cron_string = None
+                
+                # Set new schedule details based on cycle
+                if task.cycle == 'cron':
+                    if 'cron_string' in schedule_details:
+                        task.cron_string = schedule_details['cron_string']
+                else:
+                    if 'time' in schedule_details:
+                        task.time_str = schedule_details['time']
+                    
+                    if 'day' in schedule_details:
+                        if task.cycle == 'weekly':
+                            # For weekly tasks, day is a weekday string
+                            weekday_map = {'Mon': 0, 'Tue': 1, 'Wed': 2, 'Thu': 3, 'Fri': 4, 'Sat': 5, 'Sun': 6}
+                            task.weekday_val = weekday_map.get(schedule_details['day'])
+                        else:
+                            # For other cycles, day is a number
+                            try:
+                                task.day_val = int(schedule_details['day'])
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    if 'month' in schedule_details:
+                        try:
+                            task.month_val = int(schedule_details['month'])
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    if 'year' in schedule_details:
+                        try:
+                            task.year_val = int(schedule_details['year'])
+                        except (ValueError, TypeError):
+                            pass
+            
+            # Update timezone if provided
+            if 'timezone_str' in data:
+                task.timezone_str = data['timezone_str']
+            
+            # Validate the updated task
+            if not task.is_valid():
+                return jsonify({"success": False, "error": "Updated task data is invalid"}), 400
+            
+            # Recalculate next run time
+            task.calculate_next_run()
+            
+            # Check if the task should be deactivated (for once tasks in the past)
+            if task.cycle == CYCLE_ONCE and task.next_run_ts and task.next_run_ts < time.time():
+                task.is_active = False
+                current_app.logger.info(f"Task {task_id} was automatically deactivated because the execution time is in the past.")
+            
+            # Save the updated task
+            if update_task(task):
+                current_app.logger.info(f"Task {task_id} successfully updated via Web UI")
+                
+                # Entry in User Action Log
+                log_user_action(
+                    action="SCHEDULE_UPDATE", 
+                    target=f"{task.container_name} ({task.action})",
+                    source="Web UI",
+                    details=f"Task ID: {task_id}, Cycle: {task.cycle}, Updated from: {original_container} ({original_action}, {original_cycle})"
+                )
+                
+                return jsonify({
+                    "success": True, 
+                    "message": f"Task {task_id} updated successfully",
+                    "task": task.to_dict()
+                }), 200
+            else:
+                current_app.logger.error(f"Failed to update task {task_id}")
+                return jsonify({"success": False, "error": "Failed to save updated task"}), 500
+                
+        except Exception as e:
+            current_app.logger.error(f"Error updating task {task_id}: {e}", exc_info=True)
+            return jsonify({"success": False, "error": f"Internal error updating task: {e}"}), 500 

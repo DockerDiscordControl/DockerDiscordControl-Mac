@@ -130,7 +130,7 @@ from utils.scheduler import (
 # Import outsourced parts
 from .translation_manager import _, get_translations
 from .control_helpers import get_guild_id, container_select, _channel_has_permission, _get_pending_embed
-from .control_ui import ActionButton, ToggleButton, ControlView
+from .control_ui import ActionButton, ToggleButton, ControlView, TaskDeletePanelView
 
 # Import the autocomplete handlers that have been moved to their own module
 from .autocomplete_handlers import (
@@ -885,7 +885,8 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
     @commands.slash_command(name="ping", description=_("Shows the bot's latency"), guild_ids=get_guild_id())
     async def ping_command(self, ctx: discord.ApplicationContext):
         latency = round(self.bot.latency * 1000)
-        embed = discord.Embed(title="🏓 Pong!", description=f"{latency}ms", color=discord.Color.blurple())
+        ping_message = _("Pong! Latency: {latency:.2f} ms").format(latency=latency)
+        embed = discord.Embed(title="🏓", description=ping_message, color=discord.Color.blurple())
         await ctx.respond(embed=embed)
 
     async def _create_overview_embed(self, ordered_servers, config):
@@ -1312,7 +1313,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         self.bot.loop.create_task(run_regeneration())
         
     # --- SCHEDULE COMMANDS ---
-    @commands.slash_command(name="schedule_once", description=_("Schedule a one-time task"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task_once", description=_("Schedule a one-time task"), guild_ids=get_guild_id())
     async def schedule_once_command(self, ctx: discord.ApplicationContext, 
                               container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
                               action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
@@ -1323,15 +1324,15 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Schedules a one-time task for a Docker container."""
         await self._impl_schedule_once_command(ctx, container_name, action, time, day, month, year)
     
-    @commands.slash_command(name="schedule_daily", description=_("Schedule a daily task"), guild_ids=get_guild_id())
-    async def schedule_daily_command(self, ctx: discord.ApplicationContext, 
+    @commands.slash_command(name="task_daily", description=_("Schedule a daily task"), guild_ids=get_guild_id())
+    async def schedule_daily_command(self, ctx: discord.ApplicationContext,
                               container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
                               action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
                               time: str = discord.Option(description=_("Time in HH:MM format (e.g., 08:00)"), autocomplete=schedule_time_select)):
         """Schedules a daily task for a Docker container."""
         await self._impl_schedule_daily_command(ctx, container_name, action, time)
     
-    @commands.slash_command(name="schedule_weekly", description=_("Schedule a weekly task"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task_weekly", description=_("Schedule a weekly task"), guild_ids=get_guild_id())
     async def schedule_weekly_command(self, ctx: discord.ApplicationContext, 
                               container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
                               action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
@@ -1340,7 +1341,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Schedules a weekly task for a Docker container."""
         await self._impl_schedule_weekly_command(ctx, container_name, action, time, weekday)
     
-    @commands.slash_command(name="schedule_monthly", description=_("Schedule a monthly task"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task_monthly", description=_("Schedule a monthly task"), guild_ids=get_guild_id())
     async def schedule_monthly_command(self, ctx: discord.ApplicationContext, 
                               container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
                               action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
@@ -1349,7 +1350,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Schedules a monthly task for a Docker container."""
         await self._impl_schedule_monthly_command(ctx, container_name, action, time, day)
     
-    @commands.slash_command(name="schedule_yearly", description=_("Schedule a yearly task"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task_yearly", description=_("Schedule a yearly task"), guild_ids=get_guild_id())
     async def schedule_yearly_command(self, ctx: discord.ApplicationContext, 
                               container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
                               action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
@@ -1359,23 +1360,28 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Schedules a yearly task for a Docker container."""
         await self._impl_schedule_yearly_command(ctx, container_name, action, time, month, day)
     
-    @commands.slash_command(name="schedule", description=_("Shows schedule command help"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task", description=_("Shows task command help"), guild_ids=get_guild_id())
     async def schedule_command(self, ctx: discord.ApplicationContext):
         """Shows help for the various scheduling commands."""
         await self._impl_schedule_command(ctx)
     
-    @commands.slash_command(name="schedule_info", description=_("Shows information about scheduled tasks"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task_info", description=_("Shows information about scheduled tasks"), guild_ids=get_guild_id())
     async def schedule_info_command(self, ctx: discord.ApplicationContext,
                                   container_name: str = discord.Option(description=_("Container name (or 'all')"), default="all", autocomplete=container_select),
                                   period: str = discord.Option(description=_("Time period (e.g., next_week)"), default="all", autocomplete=schedule_info_period_select)):
         """Shows information about scheduled tasks."""
         await self._impl_schedule_info_command(ctx, container_name, period)
 
-    @commands.slash_command(name="schedule_delete", description=_("Delete a scheduled task"), guild_ids=get_guild_id())
+    @commands.slash_command(name="task_delete", description=_("Delete a scheduled task"), guild_ids=get_guild_id())
     async def schedule_delete_command(self, ctx: discord.ApplicationContext,
                                     task_id: str = discord.Option(description=_("Task ID to delete"), autocomplete=schedule_task_id_select)):
         """Deletes a scheduled task."""
         await self._impl_schedule_delete_command(ctx, task_id)
+
+    @commands.slash_command(name="task_delete_panel", description=_("Show active tasks with delete buttons"), guild_ids=get_guild_id())
+    async def task_delete_panel_command(self, ctx: discord.ApplicationContext):
+        """Shows a panel with all active tasks and delete buttons for each."""
+        await self._impl_task_delete_panel_command(ctx)
 
     # --- SCHEDULE COMMANDS MOVED TO scheduler_commands.py ---
     # All schedule related implementation logic has been moved to 
@@ -1424,23 +1430,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 await ctx.respond(_("Task with ID '{task_id}' not found.").format(task_id=task_id), ephemeral=True)
                 return
             
-            # Check permissions - user can only delete tasks for containers they have permission for
-            has_permission = False
-            servers = config.get('servers', [])
-            
-            for server in servers:
-                server_name = server.get('docker_name')
-                if server_name == task_to_delete.container_name:
-                    allowed_actions = server.get('allowed_actions', [])
-                    if task_to_delete.action in allowed_actions:
-                        has_permission = True
-                    break
-            
-            if not has_permission:
-                await ctx.respond(_("You don't have permission to delete tasks for container '{container}'.").format(container=task_to_delete.container_name), ephemeral=True)
-                return
-            
-            # Delete the task
+            # Delete the task - only channel-level permissions matter
             if delete_task(task_id):
                 # Log the action
                 log_user_action(
@@ -1462,6 +1452,76 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 
         except Exception as e:
             logger.error(f"Error executing schedule_delete command: {e}", exc_info=True)
+            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
+
+    async def _impl_task_delete_panel_command(self, ctx: discord.ApplicationContext):
+        """Shows a panel with all active tasks and delete buttons for each."""
+        try:
+            # Check channel permissions
+            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
+                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+                return
+            
+            config = self.config
+            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
+                await ctx.respond(_("You do not have permission to use task commands in this channel."), ephemeral=True)
+                return
+            
+            # Import necessary scheduler functions
+            from utils.scheduler import load_tasks, CYCLE_ONCE
+            from .control_ui import TaskDeletePanelView
+            import time
+            
+            # Load all tasks
+            all_tasks = load_tasks()
+            if not all_tasks:
+                await ctx.respond(_("📅 **Task Delete Panel**\n\nNo scheduled tasks found."), ephemeral=True)
+                return
+            
+            # Filter to only active tasks
+            current_time = time.time()
+            active_tasks = []
+            
+            for task in all_tasks:
+                # Skip inactive tasks
+                if not task.is_active:
+                    continue
+                    
+                # Skip expired one-time tasks
+                if task.cycle == CYCLE_ONCE:
+                    if task.next_run_ts is None or task.next_run_ts < current_time:
+                        continue
+                    if getattr(task, 'status', None) == "completed":
+                        continue
+                
+                # Add all active tasks - permission check will be done during deletion
+                active_tasks.append(task)
+            
+            if not active_tasks:
+                await ctx.respond(_("📅 **Task Delete Panel**\n\nNo active tasks found."), ephemeral=True)
+                return
+            
+            # Create simple header message (no task list needed since buttons contain task info)
+            message_content = f"📅 **{_('Task Delete Panel')}**\n\n{_('Click any button below to delete the corresponding task:')}"
+            
+            # Add explanation of abbreviations
+            message_content += f"\n\n**{_('Legend:** O = Once, D = Daily, W = Weekly, M = Monthly, Y = Yearly')}"
+            
+            # Add footer information  
+            if len(active_tasks) > 25:
+                message_content += f"\n\n_({_('Showing first 25 of {total} tasks').format(total=len(active_tasks))})_"
+            else:
+                message_content += f"\n\n_({_('Found {total} active tasks').format(total=len(active_tasks))})_"
+            
+            # Create view with delete buttons
+            view = TaskDeletePanelView(self, active_tasks)
+            
+            # Send the panel as normal message
+            await ctx.respond(message_content, view=view, ephemeral=False)
+            logger.info(f"Task delete panel shown to {ctx.author} with {len(active_tasks)} active tasks")
+            
+        except Exception as e:
+            logger.error(f"Error executing task_delete_panel command: {e}", exc_info=True)
             await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
 
     # --- Cog Teardown ---
