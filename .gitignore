@@ -128,4 +128,4 @@ $RECYCLE.BIN/
 
 # Keep empty log and config directories with .gitkeep
 !logs/.gitkeep
-!config/.gitkeep 
+!config/.gitkeep app/static/css/tasks.css
