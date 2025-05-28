@@ -4,7 +4,7 @@
 
 Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage specified Docker containers (start, stop, restart, view status) and view container logs.
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE)
 
 ## Features
