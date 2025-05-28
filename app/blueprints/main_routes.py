@@ -8,7 +8,7 @@
 
 from flask import (
     Blueprint, render_template, request, redirect, url_for, flash, 
-    jsonify, session, current_app, send_file, Response, make_response
+    jsonify, session, current_app, send_file, Response
 )
 from datetime import datetime, timezone, timedelta # Added datetime for config_page
 from functools import wraps
@@ -592,7 +592,8 @@ def discord_bot_setup():
 @auth.login_required
 def download_monitor_script():
     """
-    Generate and download the standalone DDC Heartbeat Monitor application.
+    Generate and download a monitoring script for the heartbeat feature.
+    Supports Python, Bash, and Windows Batch formats.
     """
     logger = current_app.logger
     
@@ -605,166 +606,69 @@ def download_monitor_script():
         ddc_bot_user_id = form_data.get('ddc_bot_user_id', '')
         heartbeat_channel_id = form_data.get('heartbeat_channel_id', '')
         alert_channel_ids = form_data.get('alert_channel_ids', '')
-        monitor_timeout_seconds = form_data.get('monitor_timeout_seconds', '300')
+        alert_webhook_url = form_data.get('alert_webhook_url', '')
+        monitor_timeout_seconds = form_data.get('monitor_timeout_seconds', '271')  # Default: ~4.5 minutes
+        script_type = form_data.get('script_type', 'python')
         
-        # Validate required fields
+        # Validate basic fields (common to all scripts)
         if not heartbeat_channel_id or not ddc_bot_user_id:
-            logger.warning("Missing required fields for monitor download")
+            logger.warning("Missing required fields for monitor script generation")
             flash("Heartbeat Channel ID and DDC Bot User ID are required.", "warning")
             return redirect(url_for('.config_page'))
         
-        if not monitor_bot_token:
-            logger.warning("Missing bot token for monitor")
-            flash("Monitor Bot Token is required.", "warning")
+        # Validate script-specific fields
+        if script_type == 'python' and not monitor_bot_token:
+            logger.warning("Missing bot token for Python script")
+            flash("Bot Token is required for the Python script.", "warning")
+            return redirect(url_for('.config_page'))
+        elif (script_type in ['bash', 'batch']) and not alert_webhook_url:
+            logger.warning("Missing webhook URL for shell scripts")
+            flash("Webhook URL is required for Shell scripts.", "warning")
             return redirect(url_for('.config_page'))
         
-        if not alert_channel_ids:
-            logger.warning("Missing alert channels for monitor")
-            flash("At least one Alert Channel ID is required.", "warning")
+        # Generate the appropriate script content
+        if script_type == 'python':
+            script_content = generate_python_monitor_script(form_data)
+            file_extension = 'py'
+            mime_type = 'text/x-python'
+        elif script_type == 'bash':
+            script_content = generate_bash_monitor_script(form_data)
+            file_extension = 'sh'
+            mime_type = 'text/x-shellscript'
+        elif script_type == 'batch':
+            script_content = generate_batch_monitor_script(form_data)
+            file_extension = 'bat'
+            mime_type = 'application/x-msdos-program'
+        else:
+            flash(f"Unknown script type: {script_type}", "danger")
             return redirect(url_for('.config_page'))
         
-        # Parse alert channel IDs
-        try:
-            alert_channel_list = [int(ch.strip()) for ch in alert_channel_ids.split(',') if ch.strip()]
-        except ValueError:
-            flash("Invalid Alert Channel IDs. Please use comma-separated numbers.", "warning")
-            return redirect(url_for('.config_page'))
-        
-        # Create configuration for the standalone monitor
-        monitor_config = {
-            "monitor": {
-                "bot_token": monitor_bot_token,
-                "ddc_bot_user_id": int(ddc_bot_user_id),
-                "heartbeat_channel_id": int(heartbeat_channel_id),
-                "alert_channel_ids": alert_channel_list,
-                "heartbeat_timeout_seconds": int(monitor_timeout_seconds),
-                "check_interval_seconds": 30
-            },
-            "logging": {
-                "level": "INFO",
-                "file_enabled": True,
-                "file_name": "ddc_heartbeat_monitor.log",
-                "console_enabled": True
-            },
-            "alerts": {
-                "startup_notification": True,
-                "recovery_notification": True,
-                "include_timestamp": True,
-                "mention_roles": []
-            }
-        }
-        
-        # Create a ZIP file with all monitor files
-        import zipfile
-        import tempfile
-        from pathlib import Path
-        
-        # Create temporary directory
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            # Read the monitor application file
-            monitor_app_path = Path(__file__).parent.parent.parent / "heartbeat_monitor" / "ddc_heartbeat_monitor.py"
-            readme_path = Path(__file__).parent.parent.parent / "heartbeat_monitor" / "README.md"
-            requirements_path = Path(__file__).parent.parent.parent / "heartbeat_monitor" / "requirements.txt"
-            run_bat_path = Path(__file__).parent.parent.parent / "heartbeat_monitor" / "run_monitor.bat"
-            run_sh_path = Path(__file__).parent.parent.parent / "heartbeat_monitor" / "run_monitor.sh"
-            
-            # Create ZIP file
-            zip_path = temp_path / "ddc_heartbeat_monitor.zip"
-            
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Add main application
-                if monitor_app_path.exists():
-                    zipf.write(monitor_app_path, "ddc_heartbeat_monitor.py")
-                
-                # Add README
-                if readme_path.exists():
-                    zipf.write(readme_path, "README.md")
-                
-                # Add requirements
-                if requirements_path.exists():
-                    zipf.write(requirements_path, "requirements.txt")
-                
-                # Add launcher scripts
-                if run_bat_path.exists():
-                    zipf.write(run_bat_path, "run_monitor.bat")
-                
-                if run_sh_path.exists():
-                    zipf.write(run_sh_path, "run_monitor.sh")
-                
-                # Add configured config.json
-                config_json = json.dumps(monitor_config, indent=2)
-                zipf.writestr("config.json", config_json)
-                
-                # Add example config
-                example_config = monitor_config.copy()
-                example_config["monitor"]["bot_token"] = "YOUR_MONITOR_BOT_TOKEN_HERE"
-                example_config["monitor"]["ddc_bot_user_id"] = 123456789012345678
-                example_config["monitor"]["heartbeat_channel_id"] = 123456789012345678
-                example_config["monitor"]["alert_channel_ids"] = [123456789012345678]
-                example_config_json = json.dumps(example_config, indent=2)
-                zipf.writestr("config.json.example", example_config_json)
-                
-                # Add installation instructions
-                install_instructions = """# DDC Heartbeat Monitor - Quick Setup
-
-## What's included:
-- ddc_heartbeat_monitor.py - Main application
-- config.json - Pre-configured with your settings
-- config.json.example - Template for future use
-- requirements.txt - Python dependencies
-- run_monitor.bat - Windows launcher
-- run_monitor.sh - macOS/Linux launcher
-- README.md - Complete documentation
-
-## Quick Start:
-
-### Windows:
-1. Double-click run_monitor.bat
-2. Follow the prompts
-
-### macOS/Linux:
-1. Open Terminal
-2. Navigate to this folder
-3. Run: ./run_monitor.sh
-
-### Manual:
-1. Install Python 3.7+
-2. Run: pip install discord.py
-3. Run: python ddc_heartbeat_monitor.py
-
-## Configuration:
-Your settings are already configured in config.json.
-Edit this file if you need to make changes.
-
-## Support:
-See README.md for detailed documentation and troubleshooting.
-"""
-                zipf.writestr("INSTALL.txt", install_instructions)
-            
-            # Read the ZIP file and send it
-            with open(zip_path, 'rb') as f:
-                zip_data = f.read()
+        # Create a buffer with the script content
+        buffer = io.BytesIO(script_content.encode('utf-8'))
+        buffer.seek(0)
         
         # Log action
+        script_names = {
+            'python': 'Python',
+            'bash': 'Bash',
+            'batch': 'Windows Batch'
+        }
         log_user_action(
             action="DOWNLOAD", 
-            target="DDC Heartbeat Monitor (Standalone Application)", 
+            target=f"Heartbeat monitor script ({script_names.get(script_type, script_type)})", 
             source="Web UI"
         )
-        logger.info("Generated and downloaded standalone heartbeat monitor application")
+        logger.info(f"Generated and downloaded heartbeat monitor script ({script_type})")
         
-        # Create response
-        response = make_response(zip_data)
-        response.headers['Content-Type'] = 'application/zip'
-        response.headers['Content-Disposition'] = 'attachment; filename=ddc_heartbeat_monitor.zip'
-        
-        return response
-        
+        return send_file(
+            buffer, 
+            as_attachment=True, 
+            download_name=f'ddc_heartbeat_monitor.{file_extension}', 
+            mimetype=mime_type
+        )
     except Exception as e:
-        logger.error(f"Error generating monitor application: {e}", exc_info=True)
-        flash(f"Error generating monitor application: {str(e)}", "danger")
+        logger.error(f"Error generating monitor script: {e}", exc_info=True)
+        flash(f"Error generating monitor script: {str(e)}", "danger")
         return redirect(url_for('.config_page'))
 
 @main_bp.route('/refresh_containers', methods=['POST'])

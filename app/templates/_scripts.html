@@ -141,6 +141,11 @@
                     return;
                 }
                 
+                // Exclude task management elements from triggering unsaved changes
+                if (e.target.id === 'taskFilterStatus' || e.target.closest('#taskListBody') || e.target.closest('.task-filters')) {
+                    return;
+                }
+                
                 // Check if the element does not belong to the "requires-restart" class
                 if (!e.target.closest('.requires-restart')) {
                     showUnsavedChangesAlert(false);
@@ -153,6 +158,11 @@
                     return;
                 }
                 
+                // Exclude task management elements from triggering unsaved changes
+                if (e.target.id === 'taskFilterStatus' || e.target.closest('#taskListBody') || e.target.closest('.task-filters')) {
+                    return;
+                }
+                
                 // Check if the element does not belong to the "requires-restart" class
                 if (!e.target.closest('.requires-restart')) {
                     showUnsavedChangesAlert(false);
@@ -162,6 +172,16 @@
             configForm.addEventListener('click', (event) => {
                 // Only display if user interaction has occurred and page is fully loaded
                 if (!userHasInteracted || document.body.getAttribute('data-page-loaded') !== 'true') {
+                    return;
+                }
+                
+                // Exclude task management elements from triggering unsaved changes
+                if (event.target.id === 'refreshTasksBtn' || 
+                    event.target.closest('#taskListBody') || 
+                    event.target.closest('.task-filters') ||
+                    event.target.closest('.editTaskBtn') ||
+                    event.target.closest('.deleteTaskBtn') ||
+                    event.target.closest('.toggle-active')) {
                     return;
                 }
                 
@@ -559,6 +579,16 @@
         logIntervalId = setInterval(fetchAllLogs, 60000); // Updates both logs every 60 seconds (increased from 30 seconds)
         // --- END: Log Update ---
 
+        // --- Temporary Debug Mode Setup ---
+        const enableButton = document.getElementById('enableTempDebugBtn');
+        if (enableButton) {
+            enableButton.addEventListener('click', enableTempDebug);
+        }
+        
+        // Initial check of temp debug status
+        refreshTempDebugStatus();
+        // --- END: Temporary Debug Mode Setup ---
+
         // --- Server Selection Table Logic ---
         const serverTableBody = document.getElementById('docker-container-list');
 
@@ -706,7 +736,7 @@
             <td class="text-center"><div class="form-check"><input class="form-check-input cmd-serverstatus" type="checkbox" name="cmd_serverstatus_${index}" value="1"><label class="form-check-label visually-hidden">/status</label></div></td>
             <td class="text-center"><div class="form-check"><input class="form-check-input" type="checkbox" name="cmd_command_${index}" value="1"><label class="form-check-label visually-hidden">/command</label></div></td>
             <td class="text-center"><div class="form-check"><input class="form-check-input cmd-control" type="checkbox" name="cmd_control_${index}" value="1"><label class="form-check-label visually-hidden">/control</label></div></td>
-            <td class="text-center"><div class="form-check"><input class="form-check-input" type="checkbox" name="cmd_schedule_${index}" value="1"><label class="form-check-label visually-hidden">/schedule</label></div></td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input" type="checkbox" name="cmd_schedule_${index}" value="1"><label class="form-check-label visually-hidden">/task</label></div></td>
             <td class="text-center border-start border-secondary-subtle"><div class="form-check"><input class="form-check-input" type="checkbox" name="post_initial_${index}" value="1" ${defaultRecreate ? 'checked' : ''}><label class="form-check-label visually-hidden">Initial</label></div></td>
             <td class="text-center"><div class="form-check"><input class="form-check-input auto-refresh-checkbox" type="checkbox" name="enable_auto_refresh_${index}" value="1" ${defaultEnableRefresh ? 'checked' : ''} data-target-input=".interval-minutes-input"><label class="form-check-label visually-hidden">Refresh</label></div></td>
             <td><input type="number" class="form-control form-control-sm interval-minutes-input" name="update_interval_minutes_${index}" value="${defaultUpdateInterval}" min="1" style="width: 60px; margin: auto;" ${!defaultEnableRefresh ? 'disabled' : ''}></td>
@@ -941,8 +971,69 @@
             console.error("Server table not found!");
         }
         
+        // --- NEW: Capture channel configuration ---
+        console.log("Processing channel configuration...");
+        const channelTable = document.getElementById('command-permissions-table');
+        if (channelTable) {
+            const channelRows = channelTable.querySelectorAll('tbody tr');
+            console.log(`Found ${channelRows.length} channel rows`);
+            
+            channelRows.forEach((row, index) => {
+                const rowIndex = index + 1; // 1-based indexing
+                
+                // Channel Name
+                const channelNameInput = row.querySelector(`input[name="channel_name_${rowIndex}"]`);
+                if (channelNameInput) {
+                    formData.set(`channel_name_${rowIndex}`, channelNameInput.value || '');
+                    console.log(`Channel ${rowIndex} name: ${channelNameInput.value}`);
+                }
+                
+                // Channel ID
+                const channelIdInput = row.querySelector(`input[name="channel_id_${rowIndex}"]`);
+                if (channelIdInput) {
+                    formData.set(`channel_id_${rowIndex}`, channelIdInput.value || '');
+                    console.log(`Channel ${rowIndex} ID: ${channelIdInput.value}`);
+                }
+                
+                // Command permissions
+                ['serverstatus', 'command', 'control', 'schedule'].forEach(cmd => {
+                    const cmdCheckbox = row.querySelector(`input[name="cmd_${cmd}_${rowIndex}"]`);
+                    if (cmdCheckbox) {
+                        formData.set(`cmd_${cmd}_${rowIndex}`, cmdCheckbox.checked ? '1' : '0');
+                        console.log(`Channel ${rowIndex} cmd_${cmd}: ${cmdCheckbox.checked ? '1' : '0'}`);
+                    }
+                });
+                
+                // Other channel settings
+                const settingsMap = {
+                    'post_initial': 'post_initial',
+                    'enable_auto_refresh': 'enable_auto_refresh', 
+                    'recreate_messages_on_inactivity': 'recreate_messages_on_inactivity'
+                };
+                
+                Object.entries(settingsMap).forEach(([setting, formName]) => {
+                    const checkbox = row.querySelector(`input[name="${formName}_${rowIndex}"]`);
+                    if (checkbox) {
+                        formData.set(`${formName}_${rowIndex}`, checkbox.checked ? '1' : '0');
+                        console.log(`Channel ${rowIndex} ${formName}: ${checkbox.checked ? '1' : '0'}`);
+                    }
+                });
+                
+                // Numeric settings
+                const numericSettings = ['update_interval_minutes', 'inactivity_timeout_minutes'];
+                numericSettings.forEach(setting => {
+                    const input = row.querySelector(`input[name="${setting}_${rowIndex}"]`);
+                    if (input) {
+                        formData.set(`${setting}_${rowIndex}`, input.value || '1');
+                        console.log(`Channel ${rowIndex} ${setting}: ${input.value}`);
+                    }
+                });
+            });
+        } else {
+            console.log("Channel permissions table not found");
+        }
+        
         // Finally process the form commands from checkboxes & radio buttons manually
-        // as they cannot be automatically serialized
         form.querySelectorAll('input[type="checkbox"], input[type="radio"]').forEach(checkbox => {
             const name = checkbox.name;
             // Skip selected_servers, which we have already handled manually
@@ -1209,15 +1300,4 @@
         });
     }
     
-    // Set up event listeners for temp debug mode when DOM is loaded
-    document.addEventListener('DOMContentLoaded', function() {
-        const enableButton = document.getElementById('enableTempDebugBtn');
-        if (enableButton) {
-            enableButton.addEventListener('click', enableTempDebug);
-        }
-        
-        // Initial check of temp debug status
-        refreshTempDebugStatus();
-    });
-
 </script> 
