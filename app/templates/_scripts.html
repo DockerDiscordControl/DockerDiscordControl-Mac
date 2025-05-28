@@ -1,0 +1,1069 @@
+{# --- JavaScript at the end --- #}
+<script>
+    // --- Global variables and functions for Unsaved Changes (moved out of DOMContentLoaded) ---
+    let hasUnsavedChanges = false;
+    let unsavedChangesAlert = null; // Will be assigned in DOMContentLoaded
+    let configForm = null;          // Will be assigned in DOMContentLoaded
+
+    // --- NEW: Variable and function for Restart Alert ---
+    let restartRequiredAlert = null;
+    let restartRequired = false;    // Flag whether restart is required
+    
+    function showRestartRequiredAlert() {
+        if (!restartRequiredAlert) restartRequiredAlert = document.getElementById('restart-required-alert');
+        if (restartRequiredAlert && restartRequired) {
+            restartRequiredAlert.classList.remove('force-hide');
+            console.log('Restart alert is displayed (via classList.remove)');
+        }
+    }
+    // --- End Restart Alert --- 
+
+    function showUnsavedChangesAlert(requiresRestart = false) {
+        // Ensures that the element was found
+        if (!unsavedChangesAlert) unsavedChangesAlert = document.getElementById('unsaved-changes-alert');
+        
+        // Only display if not yet displayed and element exists
+        if (unsavedChangesAlert && !hasUnsavedChanges) {
+            unsavedChangesAlert.classList.remove('force-hide');
+            hasUnsavedChanges = true;
+            console.log('Unsaved changes alert is displayed (via classList.remove)');
+        }
+        
+        // Set the restart flag if required
+        if (requiresRestart) {
+            restartRequired = true;
+            console.log('Restart flag set');
+        }
+    }
+
+    function hideUnsavedChangesAlert() {
+        // Ensures that the element was found
+        if (!unsavedChangesAlert) unsavedChangesAlert = document.getElementById('unsaved-changes-alert');
+        
+        if (unsavedChangesAlert) {
+            // Primarily add class to hide it
+            unsavedChangesAlert.classList.add('force-hide'); 
+            console.log('Unsaved changes alert is hidden (via classList.add)');
+            
+            // Optional: Bootstrap close() can be used if the element
+            // should be completely removed from the DOM after closing.
+            // const alertInstance = bootstrap.Alert.getInstance(unsavedChangesAlert);
+            // if (alertInstance) {
+            //     alertInstance.close(); 
+            // }
+        }
+        hasUnsavedChanges = false;
+    }
+    // --- End Global Definitions ---
+
+    // --- NEW: Global Function for Checkbox Toggle ---
+    function handleCheckboxToggle(checkbox) {
+        const row = checkbox.closest('tr');
+        const targetSelector = checkbox.getAttribute('data-target-input');
+        if (row && targetSelector) {
+            const targetInput = row.querySelector(targetSelector);
+            if (targetInput) {
+                targetInput.disabled = !checkbox.checked;
+            }
+        }
+    }
+    // --- End Global Function Checkbox Toggle ---
+
+    document.addEventListener('DOMContentLoaded', function() {
+        // Tooltip initialization
+        initializeTooltips(document.body); // Initializes all tooltips on the page
+
+        // --- Assignment of elements for Unsaved Changes (here, as DOM is ready) ---
+        unsavedChangesAlert = document.getElementById('unsaved-changes-alert');
+        restartRequiredAlert = document.getElementById('restart-required-alert'); // Assign here
+        configForm = document.getElementById('config-form');
+        
+        // Ensure that alerts are hidden when the page loads
+        if (unsavedChangesAlert) {
+            unsavedChangesAlert.style.display = 'none';
+            hasUnsavedChanges = false;
+        }
+        if (restartRequiredAlert) {
+            restartRequiredAlert.style.display = 'none';
+            restartRequired = false;
+        }
+        
+        // Mark that the page has been fully loaded
+        document.body.setAttribute('data-page-loaded', 'true');
+        
+        // Event listeners for Floating-Save and Floating-Discard buttons
+        const floatingSaveButton = document.getElementById('floating-save-button');
+        if (floatingSaveButton) {
+            floatingSaveButton.addEventListener('click', function() {
+                saveConfigAjax();  // Call existing save function
+            });
+        }
+        
+        const floatingDiscardButton = document.getElementById('floating-discard-button');
+        if (floatingDiscardButton) {
+            floatingDiscardButton.addEventListener('click', function() {
+                if (confirm('Are you sure you want to discard all changes?')) {
+                    window.location.reload();  // Reload page
+                }
+            });
+        }
+        // --- End Assignment ---
+
+        // Event listener for changes in the form (now using global functions)
+        if (configForm) {
+            // Set flag for user interaction
+            let userHasInteracted = false;
+            
+            // Register event for the first user click in the document
+            document.addEventListener('click', function() {
+                userHasInteracted = true;
+            }, {once: true});
+            
+            // For the basic settings that require a restart (tokens, bot settings, etc.)
+            const criticalElements = configForm.querySelectorAll('.requires-restart');
+            criticalElements.forEach(element => {
+                element.addEventListener('input', () => {
+                    if (userHasInteracted && document.body.getAttribute('data-page-loaded') === 'true') {
+                        showUnsavedChangesAlert(true);
+                    }
+                });
+                element.addEventListener('change', () => {
+                    if (userHasInteracted && document.body.getAttribute('data-page-loaded') === 'true') {
+                        showUnsavedChangesAlert(true);
+                    }
+                });
+            });
+
+            // For all other form elements
+            configForm.addEventListener('input', (e) => {
+                // Only display if user interaction has occurred and page is fully loaded
+                if (!userHasInteracted || document.body.getAttribute('data-page-loaded') !== 'true') {
+                    return;
+                }
+                
+                // Check if the element does not belong to the "requires-restart" class
+                if (!e.target.closest('.requires-restart')) {
+                    showUnsavedChangesAlert(false);
+                }
+            });
+            
+            configForm.addEventListener('change', (e) => {
+                // Only display if user interaction has occurred and page is fully loaded
+                if (!userHasInteracted || document.body.getAttribute('data-page-loaded') !== 'true') {
+                    return;
+                }
+                
+                // Check if the element does not belong to the "requires-restart" class
+                if (!e.target.closest('.requires-restart')) {
+                    showUnsavedChangesAlert(false);
+                }
+            });
+            
+            configForm.addEventListener('click', (event) => {
+                // Only display if user interaction has occurred and page is fully loaded
+                if (!userHasInteracted || document.body.getAttribute('data-page-loaded') !== 'true') {
+                    return;
+                }
+                
+                const target = event.target.closest('.remove-channel-btn, #add-channel-btn, .move-up-btn, .move-down-btn');
+                if (target) {
+                    // Check if the clicked element requires a restart
+                    const requiresRestart = target.classList.contains('requires-restart');
+                    showUnsavedChangesAlert(requiresRestart);
+                }
+            });
+        }
+
+        // Automatically hide messages
+        setTimeout(function() {
+            let flashMessages = document.querySelectorAll('.alert-dismissible');
+            flashMessages.forEach(function(message) {
+                let closeBtn = message.querySelector('.btn-close');
+                if (closeBtn) {
+                    closeBtn.click();
+                }
+            });
+        }, 10000); // 10 seconds
+
+        // All checkboxes with 'data-toggle-target' event listener (e.g., for Heartbeat Section)
+        document.querySelectorAll('input[data-toggle-target]').forEach(function(checkbox) {
+            const targetId = checkbox.getAttribute('data-toggle-target');
+            const targetElement = document.getElementById(targetId);
+            if(targetElement) {
+                // Event listener for changes
+                checkbox.addEventListener('change', function() {
+                    targetElement.style.display = this.checked ? 'block' : 'none';
+                });
+                // Set initial state
+                 targetElement.style.display = checkbox.checked ? 'block' : 'none';
+            }
+        });
+
+        // --- Command Permissions Table Logic ---
+        const permissionsTableBody = document.getElementById('command-permissions-table')?.querySelector('tbody');
+
+        if (permissionsTableBody) { // Only execute if the table exists
+            // Event listener for "Add Channel" Button
+            const addChannelBtn = document.getElementById('add-channel-btn');
+            if (addChannelBtn) {
+                addChannelBtn.addEventListener('click', function() {
+                    // Safer method for finding index
+                    let maxIndex = 0;
+                    permissionsTableBody.querySelectorAll('tr').forEach(row => {
+                        const match = row.id.match(/channel-row-(\d+)/);
+                        if (match && match[1]) {
+                            maxIndex = Math.max(maxIndex, parseInt(match[1], 10));
+                        }
+                    });
+                    const newIndex = maxIndex + 1;
+
+                    const newRow = createEmptyChannelRow(newIndex); // Use external helper function
+                    permissionsTableBody.appendChild(newRow);
+                    initializeTooltips(newRow); // Initialize tooltips for new row
+                    addExclusivityListeners(newRow); // <<< NEW: Add exclusivity listener for new row
+                });
+            }
+
+            // Event listener for delete buttons (delegated to tbody)
+            permissionsTableBody.addEventListener('click', function(event) {
+                if (event.target.closest('.remove-channel-btn')) {
+                    removeChannelRow(event); // Use external helper function
+                }
+            });
+
+            // <<< NEW: Add event listener for existing rows on load
+            permissionsTableBody.querySelectorAll('tr').forEach(row => {
+                addExclusivityListeners(row);
+            });
+
+            // Event listener for clicks on Auto Refresh / Recreate checkboxes (delegation)
+            permissionsTableBody.addEventListener('change', function(event) {
+                if (event.target.classList.contains('auto-refresh-checkbox') || event.target.classList.contains('recreate-checkbox')) {
+                     handleCheckboxToggle(event.target);
+                     showUnsavedChangesAlert(false); // Trigger unsaved changes - no restart required
+                }
+            });
+
+            // Set initial status for all rows
+            permissionsTableBody.querySelectorAll('.auto-refresh-checkbox, .recreate-checkbox').forEach(checkbox => {
+                 handleCheckboxToggle(checkbox);
+             });
+        }
+
+        // --- Log Update --- 
+        const logContentElement = document.getElementById('logContent');
+        const refreshLogsBtn = document.getElementById('refreshLogsBtn');
+        const actionLogContentElement = document.getElementById('actionLogContent');
+        const refreshActionLogBtn = document.getElementById('refreshActionLogBtn');
+        const downloadActionLogBtn = document.getElementById('downloadActionLogBtn'); // Link, not a direct button
+        const clearActionLogBtn = document.getElementById('clearActionLogBtn');
+        
+        let logIntervalId = null;
+        let currentLogLevel = 'info'; // Default log level
+        let rawLogsCache = ''; // Cache for the full logs
+        let minimalLogsCache = []; // New cache specifically for important log events
+        const MAX_MINIMAL_LOGS = 500; // Maximum number of minimal log entries to store
+        
+        // Rate-limiting variables
+        let lastLogFetch = 0; // Timestamp of the last request
+        let lastActionLogFetch = 0;
+        const MIN_FETCH_INTERVAL = 3000; // Minimum interval between requests in ms (3 seconds)
+        let fetchInProgress = false; // Flag to prevent parallel requests
+        let actionLogFetchInProgress = false;
+
+        function isMinimalLogEntry(line) {
+            // Define "important success messages" patterns here
+            const successPatterns = [
+                /Container .* started successfully/i,
+                /Configuration saved successfully/i,
+                // Add more patterns for important success messages if needed
+            ];
+            
+            return line.includes('DDC is ready.') ||
+                   successPatterns.some(pattern => pattern.test(line)) ||
+                   (line.includes('Action received') && !line.includes('toggle_details'));
+        }
+
+        function updateMinimalLogsCache(logs) {
+            const lines = logs.split('\n');
+            
+            // Find new minimal log entries and add them to the cache
+            lines.forEach(line => {
+                if (isMinimalLogEntry(line) && !minimalLogsCache.includes(line)) {
+                    minimalLogsCache.push(line);
+                    
+                    // Limit cache to maximum size
+                    if (minimalLogsCache.length > MAX_MINIMAL_LOGS) {
+                        minimalLogsCache.shift(); // Remove the oldest entry
+                    }
+                }
+            });
+        }
+
+        function filterLogs(logs, level) {
+            const lines = logs.split('\n');
+            if (level === 'debug') {
+                return logs; // Show all lines
+            }
+            if (level === 'info') {
+                // Show INFO, WARNING, ERROR, CRITICAL, and Action Received (excluding toggle)
+                return lines.filter(line => 
+                    line.includes(' INFO ') || 
+                    line.includes(' WARNING ') || 
+                    line.includes(' ERROR ') || 
+                    line.includes(' CRITICAL ') || 
+                    (line.includes('Action received') && !line.includes('toggle_details'))
+                ).join('\n');
+            }
+            if (level === 'minimal') {
+                // For minimal logs show the complete minimal logs cache
+                // instead of just the entries that are currently in the log lines
+                return minimalLogsCache.join('\n');
+            }
+            return logs; // Default to showing all if level is unknown
+        }
+
+        function displayFilteredLogs() {
+            if (!logContentElement) return;
+            const filteredLogsText = filterLogs(rawLogsCache, currentLogLevel);
+            const lines = filteredLogsText.split('\n');
+
+            const htmlLines = lines.map(line => {
+                // Escape HTML entities first
+                let processedLine = line.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+                // Define keywords and classes - Order matters for replacement priority
+                const highlights = [
+                    { class: 'log-error', keywords: ['error', 'critical', 'failed'] },
+                    { class: 'log-warning', keywords: ['warning'] },
+                    { class: 'log-success', keywords: ['success', 'successfully', 'started', 'completed', 'ready'] },
+                    { class: 'log-debug', keywords: ['debug'] }
+                    // INFO is not specifically highlighted, it's the default
+                ];
+
+                highlights.forEach(hl => {
+                    // Build regex for all keywords in this class: \b(word1|word2|...)\b
+                    const regex = new RegExp(`\\b(${hl.keywords.join('|')})\\b`, 'gi'); 
+                    // Replace matched keywords, preserving original case ($1)
+                    processedLine = processedLine.replace(regex, `<span class="${hl.class}">$1</span>`);
+                });
+
+                // Return the line with potentially multiple highlighted words
+                return processedLine;
+            });
+
+            // Use innerHTML to render the spans
+            logContentElement.innerHTML = htmlLines.join('\n');
+            logContentElement.scrollTop = logContentElement.scrollHeight; // Scroll to bottom
+        }
+
+        // Container log retrieval function
+        async function fetchContainerLogs() {
+            if (!logContentElement) return false;
+            
+            // Rate-limiting: Check if enough time has passed since the last request
+            const now = Date.now();
+            if (now - lastLogFetch < MIN_FETCH_INTERVAL || fetchInProgress) {
+                console.log('Skipping log fetch: Rate limit or fetch in progress');
+                return false;
+            }
+            
+            fetchInProgress = true;
+            lastLogFetch = now;
+            
+            if (refreshLogsBtn) refreshLogsBtn.disabled = true;
+            
+            try {
+                const response = await fetch("{{ url_for('log_bp.get_logs') }}");
+                if (response.ok) {
+                    rawLogsCache = await response.text(); // Store full logs
+                    updateMinimalLogsCache(rawLogsCache); // Update the minimal logs cache
+                    displayFilteredLogs(); // Display filtered logs
+                    return true;
+                } else if (response.status === 429) {
+                    console.warn('Too many log requests, will retry later');
+                    // For 429, don't overwrite the cache, just show a warning in the UI
+                    if (logContentElement.innerHTML.indexOf('TOO MANY REQUESTS') === -1) {
+                        logContentElement.innerHTML += '<div class="log-warning mt-2">Rate limit reached, will retry later...</div>';
+                    }
+                } else {
+                    rawLogsCache = `Error loading logs: ${response.statusText}`;
+                    logContentElement.textContent = rawLogsCache; // Show error directly
+                }
+            } catch (error) {
+                console.error("Error fetching logs:", error);
+                rawLogsCache = `Error loading logs: ${error.message}`;
+                logContentElement.textContent = rawLogsCache; // Show error directly
+            } finally {
+                fetchInProgress = false;
+                if (refreshLogsBtn) {
+                    setTimeout(() => {
+                        refreshLogsBtn.disabled = false;
+                    }, MIN_FETCH_INTERVAL);
+                }
+            }
+            return false;
+        }
+
+        // Action log retrieval function
+        async function fetchActionLogs() {
+            if (!actionLogContentElement) return false;
+            
+            // Rate-limiting: Check if enough time has passed since the last request
+            const now = Date.now();
+            if (now - lastActionLogFetch < MIN_FETCH_INTERVAL || actionLogFetchInProgress) {
+                console.log('Skipping action log fetch: Rate limit or fetch in progress');
+                return false;
+            }
+            
+            actionLogFetchInProgress = true;
+            lastActionLogFetch = now;
+            
+            if (refreshActionLogBtn) refreshActionLogBtn.disabled = true;
+            
+            try {
+                const response = await fetch("{{ url_for('action_log_bp.get_action_log') }}");
+                if (response.ok) {
+                    const logs = await response.text();
+                    actionLogContentElement.textContent = logs;
+                    return true;
+                } else if (response.status === 429) {
+                    console.warn('Too many action log requests, will retry later');
+                    // For 429, don't overwrite, just show a warning
+                    if (actionLogContentElement.textContent.indexOf('TOO MANY REQUESTS') === -1) {
+                        actionLogContentElement.textContent += '\n\nRate limit reached, will retry later...';
+                    }
+                } else {
+                    actionLogContentElement.textContent = `Error loading action logs: ${response.statusText}`;
+                }
+            } catch (error) {
+                console.error("Error fetching action logs:", error);
+                actionLogContentElement.textContent = `Error loading action logs: ${error.message}`;
+            } finally {
+                actionLogFetchInProgress = false;
+                if (refreshActionLogBtn) {
+                    setTimeout(() => {
+                        refreshActionLogBtn.disabled = false;
+                    }, MIN_FETCH_INTERVAL);
+                }
+            }
+            return false;
+        }
+
+        // Combined function that retrieves both logs
+        async function fetchAllLogs() {
+            const containerLogPromise = fetchContainerLogs();
+            const actionLogPromise = fetchActionLogs();
+            
+            // Execute both retrievals in parallel, but handle them independently
+            await Promise.allSettled([containerLogPromise, actionLogPromise]);
+            
+            console.log('Logs updated');
+        }
+
+        // --- Log Level Button Listeners ---
+        const logLevelRadios = document.querySelectorAll('input[name="logLevel"]');
+        logLevelRadios.forEach(radio => {
+            radio.addEventListener('change', (event) => {
+                currentLogLevel = event.target.value;
+                console.log('Log level changed to:', currentLogLevel); // Debug log
+                displayFilteredLogs(); // Update display with new filter
+            });
+        });
+        // --- End Log Level Button Listeners ---
+
+        // --- Scheduler Debug Mode Listener ---
+        const schedulerDebugCheckbox = document.getElementById('schedulerDebugMode');
+        if (schedulerDebugCheckbox) {
+            schedulerDebugCheckbox.addEventListener('change', function() {
+                showUnsavedChangesAlert(false); // Simple change, doesn't require restart
+                
+                // Information popup about setting change
+                let message = this.checked ? 
+                    "Scheduler Debug Mode enabled. Save configuration to activate detailed logging." : 
+                    "Scheduler Debug Mode disabled. Save configuration to reduce log verbosity.";
+                
+                // Create temporary notification
+                const notification = document.createElement('div');
+                notification.classList.add('toast', 'align-items-center', 'text-white', 'bg-info', 'border-0');
+                notification.setAttribute('role', 'alert');
+                notification.setAttribute('aria-live', 'assertive');
+                notification.setAttribute('aria-atomic', 'true');
+                notification.style.position = 'fixed';
+                notification.style.bottom = '20px';
+                notification.style.right = '20px';
+                notification.style.zIndex = '9999';
+                
+                notification.innerHTML = `
+                    <div class="d-flex">
+                        <div class="toast-body">
+                            ${message}
+                        </div>
+                        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                    </div>
+                `;
+                
+                document.body.appendChild(notification);
+                
+                // Show and auto-hide the notification
+                const toast = new bootstrap.Toast(notification, { delay: 5000 });
+                toast.show();
+                
+                // Remove from DOM after hiding
+                notification.addEventListener('hidden.bs.toast', function() {
+                    document.body.removeChild(notification);
+                });
+            });
+        }
+        // --- End Scheduler Debug Mode Listener ---
+
+        if (refreshLogsBtn) {
+            refreshLogsBtn.addEventListener('click', fetchContainerLogs);
+        }
+        
+        if (refreshActionLogBtn) {
+            refreshActionLogBtn.addEventListener('click', fetchActionLogs);
+        }
+
+        if (clearActionLogBtn) {
+             clearActionLogBtn.addEventListener('click', async () => {
+                 if (confirm("Are you sure you want to permanently clear the user action log? This cannot be undone.")) {
+                    clearActionLogBtn.disabled = true;
+                    try {
+                        const response = await fetch("{{ url_for('action_log_bp.clear_action_log') }}", {
+                             method: 'POST',
+                             headers: { 'X-Requested-With': 'XMLHttpRequest' } // In case CSRF or similar becomes relevant
+                         });
+                        const data = await response.json();
+                        if (response.ok && data.success) {
+                             alert(data.message || 'Action log cleared.');
+                             fetchActionLogs(); // Reload the log (now showing only the CLEAR message)
+                        } else {
+                             alert('Error clearing action log: ' + (data.message || 'Unknown error'));
+                        }
+                    } catch (error) {
+                         console.error("Error clearing action log:", error);
+                         alert('Failed to clear action log: ' + error.message);
+                    } finally {
+                        clearActionLogBtn.disabled = false;
+                    }
+                 }
+             });
+         }
+
+        // Initial loading of both logs
+        fetchAllLogs();
+        
+        // A common interval for both logs
+        if (logIntervalId) clearInterval(logIntervalId);
+        logIntervalId = setInterval(fetchAllLogs, 30000); // Updates both logs every 30 seconds
+        // --- END: Log Update ---
+
+        // --- Server Selection Table Logic ---
+        const serverTableBody = document.getElementById('docker-container-list');
+
+        if (serverTableBody) {
+            // Event listener for changes to the "Active" checkboxes
+            serverTableBody.addEventListener('change', function(event) {
+                if (event.target.classList.contains('server-checkbox')) {
+                    const row = event.target.closest('tr');
+                    if (row) {
+                        const isActive = event.target.checked;
+                        const elementsToToggle = row.querySelectorAll('.action-checkbox, .display-name-input');
+                        elementsToToggle.forEach(el => {
+                            el.disabled = !isActive;
+                        });
+                        updateOrderNumbers(serverTableBody); // <<< Update numbering here
+                        showUnsavedChangesAlert(true); // Server selection requires restart
+                    }
+                }
+            });
+
+            // Optional: Logic for "Select All" checkbox (if needed/desired)
+            const selectAllCheckbox = document.getElementById('select-all-servers');
+            if (selectAllCheckbox) {
+                selectAllCheckbox.addEventListener('change', function() {
+                    const allServerCheckboxes = serverTableBody.querySelectorAll('.server-checkbox');
+                    allServerCheckboxes.forEach(checkbox => {
+                        if (checkbox.checked !== selectAllCheckbox.checked) {
+                            checkbox.checked = selectAllCheckbox.checked;
+                            // Manually trigger the change event to activate the row logic
+                            checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    });
+                });
+            }
+        }
+        // --- END: Server Selection Table Logic ---
+
+        // --- Server Table Sorting Logic ---
+        if (serverTableBody) { 
+            function updateSortButtonStates(tbody) {
+                const rows = tbody.querySelectorAll('tr');
+                rows.forEach((row, index) => {
+                    const upBtn = row.querySelector('.move-up-btn'); // Button for "Move up" (+)
+                    const downBtn = row.querySelector('.move-down-btn'); // Button for "Move down" (-)
+                    if (upBtn) upBtn.disabled = (index === 0);
+                    if (downBtn) downBtn.disabled = (index === rows.length - 1);
+                });
+            }
+
+            // Revised helper function for updating numbers (only for active items)
+            function updateOrderNumbers(tbody) {
+                 const rows = tbody.querySelectorAll('tr[data-container-name]'); 
+                 let activeCounter = 1; // Counter only for active items
+                 rows.forEach((row) => {
+                     const numSpan = row.querySelector('.order-number');
+                     const isActiveCheckbox = row.querySelector('.server-checkbox');
+                     
+                     if (numSpan && isActiveCheckbox) {
+                        if (isActiveCheckbox.checked) {
+                             numSpan.textContent = activeCounter;
+                             numSpan.style.visibility = 'visible';
+                             activeCounter++;
+                        } else {
+                             numSpan.textContent = ''; // Empty for inactive items
+                             numSpan.style.visibility = 'hidden'; // Hidden
+                        }
+                     } 
+                 });
+             }
+
+            // Event Listener for clicks on Up/Down buttons (delegation)
+            serverTableBody.addEventListener('click', function(event) {
+                const upButton = event.target.closest('.move-up-btn');
+                const downButton = event.target.closest('.move-down-btn');
+
+                if (upButton) {
+                    const currentRow = upButton.closest('tr');
+                    const previousRow = currentRow.previousElementSibling;
+                    if (previousRow) {
+                        serverTableBody.insertBefore(currentRow, previousRow);
+                        updateSortButtonStates(serverTableBody);
+                        updateOrderNumbers(serverTableBody); // Update numbers
+                        showUnsavedChangesAlert(true); // Order change requires restart
+                    }
+                }
+
+                if (downButton) {
+                    const currentRow = downButton.closest('tr');
+                    const nextRow = currentRow.nextElementSibling;
+                    if (nextRow) {
+                        serverTableBody.insertBefore(nextRow, currentRow);
+                        updateSortButtonStates(serverTableBody);
+                        updateOrderNumbers(serverTableBody); // Update numbers
+                        showUnsavedChangesAlert(true); // Order change requires restart
+                    }
+                }
+            });
+
+            // Set initial button status and numbers
+            updateSortButtonStates(serverTableBody);
+            updateOrderNumbers(serverTableBody); // Set initial numbering
+        }
+        // --- END: Server Table Sorting ---
+
+    }); // End document.addEventListener('DOMContentLoaded', ...)
+
+    // --- Helper Functions (Defined outside DOMContentLoaded) ---
+
+    // Function to remove a channel row
+    function removeChannelRow(event) {
+        const button = event.target.closest('.remove-channel-btn');
+         if (!button) return;
+
+        const rowId = button.dataset.rowId;
+        const rowToRemove = document.getElementById(rowId);
+        if (rowToRemove) {
+            const tableBody = document.getElementById('command-permissions-table')?.querySelector('tbody');
+            // Check if tableBody exists and if there is more than one row
+            if (tableBody && tableBody.querySelectorAll('tr').length > 1) {
+                 rowToRemove.remove();
+             } else {
+                 alert('Cannot delete the last channel row.');
+             }
+        }
+    }
+
+    // Helper to create an empty row 
+    function createEmptyChannelRow(index) {
+        const tr = document.createElement('tr');
+        tr.id = `channel-row-${index}`;
+        const defaultUpdateInterval = 5;
+        const defaultInactivityTimeout = 10; 
+        const defaultEnableRefresh = true;
+        const defaultRecreate = true;
+
+        // Correct string construction without template literals in HTML
+        tr.innerHTML = `
+            <td>
+                <input type="text" class="form-control form-control-sm" name="channel_name_${index}" placeholder="Channel Name">
+            </td>
+            <td>
+                <input type="text" class="form-control form-control-sm" name="channel_id_${index}" placeholder="Channel ID" id="channel_id_${index}">
+                 <input type="hidden" name="old_channel_id_${index}" value="">
+            </td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input cmd-serverstatus" type="checkbox" name="cmd_serverstatus_${index}" value="1"><label class="form-check-label visually-hidden">/status</label></div></td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input" type="checkbox" name="cmd_command_${index}" value="1"><label class="form-check-label visually-hidden">/command</label></div></td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input cmd-control" type="checkbox" name="cmd_control_${index}" value="1"><label class="form-check-label visually-hidden">/control</label></div></td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input" type="checkbox" name="cmd_schedule_${index}" value="1"><label class="form-check-label visually-hidden">/schedule</label></div></td>
+            <td class="text-center border-start border-secondary-subtle"><div class="form-check"><input class="form-check-input" type="checkbox" name="post_initial_${index}" value="1" ${defaultRecreate ? 'checked' : ''}><label class="form-check-label visually-hidden">Initial</label></div></td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input auto-refresh-checkbox" type="checkbox" name="enable_auto_refresh_${index}" value="1" ${defaultEnableRefresh ? 'checked' : ''} data-target-input=".interval-minutes-input"><label class="form-check-label visually-hidden">Refresh</label></div></td>
+            <td><input type="number" class="form-control form-control-sm interval-minutes-input" name="update_interval_minutes_${index}" value="${defaultUpdateInterval}" min="1" style="width: 60px; margin: auto;" ${!defaultEnableRefresh ? 'disabled' : ''}></td>
+            <td class="text-center"><div class="form-check"><input class="form-check-input recreate-checkbox" type="checkbox" name="recreate_messages_on_inactivity_${index}" value="1" ${defaultRecreate ? 'checked' : ''} data-target-input=".inactivity-minutes-input"><label class="form-check-label visually-hidden">Recreate</label></div></td>
+            <td><input type="number" class="form-control form-control-sm inactivity-minutes-input" name="inactivity_timeout_minutes_${index}" value="${defaultInactivityTimeout}" min="1" style="width: 60px; margin: auto;" ${!defaultRecreate ? 'disabled' : ''}></td>
+            <td class="text-center">
+                <button type="button" class="btn btn-sm btn-danger remove-channel-btn" data-row-id="channel-row-${index}">
+                    <i class="bi bi-trash"></i>
+                </button>
+            </td>
+        `;
+        // Add listeners to the new row
+        addExclusivityListeners(tr);
+        handleCheckboxToggle(tr.querySelector('.auto-refresh-checkbox')); 
+        handleCheckboxToggle(tr.querySelector('.recreate-checkbox'));     
+        return tr;
+    }
+
+    // Helper to initialize tooltips
+    function initializeTooltips(parentElement) {
+        const tooltipTriggerList = parentElement.querySelectorAll('[data-bs-toggle="tooltip"]');
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+             // Remove existing tooltip if necessary to avoid duplicates
+             const existingTooltip = bootstrap.Tooltip.getInstance(tooltipTriggerEl);
+             if (existingTooltip) {
+                 existingTooltip.dispose();
+             }
+             // Create new tooltip
+             new bootstrap.Tooltip(tooltipTriggerEl, {
+                 html: true,
+                 boundary: document.body, // Prevents cutting off
+                 trigger: 'hover focus' // Show on hover and focus
+             });
+         });
+    }
+
+    // <<< NEW: Function to enforce command exclusivity >>>
+    function enforceCommandExclusivity(changedCheckbox) {
+        const row = changedCheckbox.closest('tr');
+        if (!row) return;
+
+        // Use classes for easier selection
+        const controlCheckbox = row.querySelector('.cmd-control');
+        const serverStatusCheckbox = row.querySelector('.cmd-serverstatus');
+
+        if (!controlCheckbox || !serverStatusCheckbox) return;
+
+        // If the changed checkbox is the Control checkbox
+        if (changedCheckbox === controlCheckbox) {
+            if (controlCheckbox.checked) {
+                // Control activated -> Deactivate ServerStatus (and uncheck)
+                if (serverStatusCheckbox.checked) {
+                    serverStatusCheckbox.checked = false;
+                }
+                serverStatusCheckbox.disabled = true;
+                controlCheckbox.disabled = false; // Ensure this checkbox remains active
+            } else {
+                 // Control deactivated -> Reactivate ServerStatus
+                 serverStatusCheckbox.disabled = false;
+            }
+        }
+        // If the changed checkbox is the ServerStatus checkbox
+        else if (changedCheckbox === serverStatusCheckbox) {
+            if (serverStatusCheckbox.checked) {
+                 // ServerStatus activated -> Deactivate Control (and uncheck)
+                 if (controlCheckbox.checked) {
+                     controlCheckbox.checked = false;
+                 }
+                 controlCheckbox.disabled = true;
+                 serverStatusCheckbox.disabled = false; // Ensure this checkbox remains active
+            } else {
+                 // ServerStatus deactivated -> Reactivate Control
+                 controlCheckbox.disabled = false;
+            }
+        }
+    }
+
+    // <<< NEW: Function to add event listeners for exclusivity >>>
+    function addExclusivityListeners(row) {
+        const controlCheckbox = row.querySelector('.cmd-control');
+        const serverStatusCheckbox = row.querySelector('.cmd-serverstatus');
+
+        if (controlCheckbox) {
+            controlCheckbox.addEventListener('change', function() {
+                enforceCommandExclusivity(this);
+            });
+            // Initial check on add/load
+             if (controlCheckbox.checked) {
+                 enforceCommandExclusivity(controlCheckbox);
+             }
+        }
+        if (serverStatusCheckbox) {
+            serverStatusCheckbox.addEventListener('change', function() {
+                enforceCommandExclusivity(this);
+            });
+             // Initial check on add/load (only if control wasn't already checked)
+             if (serverStatusCheckbox.checked && !(controlCheckbox && controlCheckbox.checked)) {
+                 enforceCommandExclusivity(serverStatusCheckbox);
+             }
+        }
+    }
+
+    // AJAX save function
+    function saveConfigAjax() {
+        const form = document.getElementById('config-form');
+        const saveButton = document.getElementById('save-config-button');
+        const notification = document.getElementById('save-notification');
+        if (!form || !saveButton || !notification) {
+            return; // Cancel function
+        }
+        const originalButtonHtml = saveButton.innerHTML;
+        
+        // Create a new FormData object directly WITHOUT loading the form
+        // as we will add the data manually
+        const formData = new FormData();
+        
+        // First add all normal form fields
+        const formElements = form.querySelectorAll('input, select, textarea');
+        formElements.forEach(element => {
+            // Skip checkboxes with name="selected_servers", which we handle separately
+            if (element.name === 'selected_servers') {
+                return;
+            }
+            
+            // For checkboxes, only set the value if they are checked
+            if (element.type === 'checkbox') {
+                formData.set(element.name, element.checked ? (element.value || "1") : "0");
+            } 
+            // For normal fields, simply use the value
+            else if (element.name) {
+                formData.set(element.name, element.value);
+            }
+        });
+        
+        // --- NEW: Capture server configuration --- 
+        const serverTableBody = document.getElementById('docker-container-list');
+        const orderedServerNames = [];
+        const selectedServerNames = [];
+        
+        if (serverTableBody) {
+            console.log("Server table found, processing server configuration...");
+            
+            // First phase: First collect all activated containers in the correct order
+            const activeRows = [];
+            const inactiveRows = [];
+            
+            // Sort rows into active and inactive
+            serverTableBody.querySelectorAll('tr[data-container-name]').forEach((row) => {
+                const checkbox = row.querySelector('.server-checkbox');
+                if (checkbox && checkbox.checked) {
+                    activeRows.push(row);
+                } else {
+                    inactiveRows.push(row);
+                }
+            });
+            
+            // Sort active rows by their numbering
+            activeRows.sort((a, b) => {
+                const numA = a.querySelector('.order-number')?.textContent || "999";
+                const numB = b.querySelector('.order-number')?.textContent || "999";
+                return parseInt(numA) - parseInt(numB);
+            });
+            
+            // First collect all active containers in order
+            activeRows.forEach((row) => {
+                const containerName = row.getAttribute('data-container-name');
+                if (!containerName) return;
+                
+                orderedServerNames.push(containerName);
+                selectedServerNames.push(containerName);
+                console.log(`Active container #${orderedServerNames.length}: ${containerName}`);
+                
+                // Collect actions
+                const actions = [];
+                
+                // Status action
+                const statusCheckbox = row.querySelector('input[name="allow_status_' + containerName + '"]');
+                if (statusCheckbox && statusCheckbox.checked) {
+                    actions.push("status");
+                    formData.append('allow_status_' + containerName, '1');
+                }
+                
+                // Start action
+                const startCheckbox = row.querySelector('input[name="allow_start_' + containerName + '"]');
+                if (startCheckbox && startCheckbox.checked) {
+                    actions.push("start");
+                    formData.append('allow_start_' + containerName, '1');
+                }
+                
+                // Stop action
+                const stopCheckbox = row.querySelector('input[name="allow_stop_' + containerName + '"]');
+                if (stopCheckbox && stopCheckbox.checked) {
+                    actions.push("stop");
+                    formData.append('allow_stop_' + containerName, '1');
+                }
+                
+                // Restart action
+                const restartCheckbox = row.querySelector('input[name="allow_restart_' + containerName + '"]');
+                if (restartCheckbox && restartCheckbox.checked) {
+                    actions.push("restart");
+                    formData.append('allow_restart_' + containerName, '1');
+                }
+                
+                console.log(`Container '${containerName}' allowed actions: ${actions.join(', ')}`);
+                
+                // Display Name
+                const displayNameInput = row.querySelector('input[name="display_name_' + containerName + '"]');
+                if (displayNameInput) {
+                    formData.append('display_name_' + containerName, displayNameInput.value || containerName);
+                }
+            });
+            
+            // Then add inactive containers
+            inactiveRows.forEach((row) => {
+                const containerName = row.getAttribute('data-container-name');
+                if (!containerName) return;
+                
+                orderedServerNames.push(containerName);
+                console.log(`Inactive container added: ${containerName}`);
+            });
+            
+            // Ordered list as string
+            formData.append('server_order', orderedServerNames.join('__,__'));
+            console.log(`Server order: ${orderedServerNames.join(', ')}`);
+            
+            // Selected servers
+            selectedServerNames.forEach(serverName => {
+                formData.append('selected_servers', serverName);
+            });
+            console.log(`Selected servers (${selectedServerNames.length}): ${selectedServerNames.join(', ')}`);
+        } else {
+            console.error("Server table not found!");
+        }
+        
+        // Finally process the form commands from checkboxes & radio buttons manually
+        // as they cannot be automatically serialized
+        form.querySelectorAll('input[type="checkbox"], input[type="radio"]').forEach(checkbox => {
+            const name = checkbox.name;
+            // Skip selected_servers, which we have already handled manually
+            if (name && name !== 'selected_servers') {
+                // Explicitly set the value to '0' if not checked, or to '1' (or value) if checked
+                formData.set(name, checkbox.checked ? (checkbox.value || "1") : "0");
+            }
+        });
+
+        // Add information about split configuration files
+        formData.append('config_split_enabled', '1');
+
+        // Hide unsaved changes alert when starting to save
+        hideUnsavedChangesAlert();
+
+        // Visual feedback
+        saveButton.disabled = true;
+        saveButton.innerHTML = `<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Saving...`;
+        notification.style.display = 'none';
+        
+        // Output of all FormData values in console for debugging purposes
+        console.log("FormData content before sending:");
+        for (let [key, value] of formData.entries()) {
+            console.log(`${key}: ${value}`);
+        }
+
+        fetch("{{ url_for('main_bp.save_config_api') }}", {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        })
+        .then(response => { 
+            if (!response.ok) {
+                 return response.json()
+                     .then(errData => {
+                         const message = errData.message || errData.error || `HTTP error ${response.status}`;
+                         throw new Error(message);
+                      })
+                     .catch((jsonParseError) => {
+                         throw new Error(`HTTP error ${response.status}`);
+                      });
+             }
+            return response.json();
+         })
+        .then(data => {
+             if (data.success) {
+                 notification.textContent = data.message || 'Configuration saved successfully!';
+                 notification.className = 'alert alert-success';
+                 notification.style.display = 'block';
+                 hideUnsavedChangesAlert();
+                 hasUnsavedChanges = false; // Reset flag
+                 
+                 // Show restart message only if necessary and if changes 
+                 // were actually made to critical elements
+                 if (restartRequired) {
+                     if (document.querySelectorAll('.requires-restart').length > 0) {
+                         // Check if changes were actually made to a critical element
+                         let changesDetected = false;
+                         document.querySelectorAll('.requires-restart').forEach(element => {
+                             // For checkboxes: The original setting was changed by saving
+                             if (element.type === 'checkbox' && element.checked) {
+                                 changesDetected = true;
+                             }
+                             // For input fields: If not empty, there was a change
+                             else if (element.value && element.value.trim() !== '') {
+                                 changesDetected = true;
+                             }
+                         });
+                         
+                         if (changesDetected) {
+                             showRestartRequiredAlert();
+                         }
+                     }
+                     
+                     restartRequired = false; // Reset after successful saving
+                 }
+                 
+                 // Display new information about split configuration
+                 if (data.config_files && data.config_files.length > 0) {
+                     const configList = document.createElement('div');
+                     configList.className = 'small mt-2';
+                     configList.innerHTML = 'Saved configuration files: ' + 
+                         data.config_files.map(file => `<code>${file}</code>`).join(', ');
+                     notification.appendChild(configList);
+                 }
+             } else {
+                 throw new Error(data.message || 'An unknown error occurred while saving.');
+             }
+         })
+         .catch(error => {
+             notification.textContent = `Error: ${error.message}`;
+             notification.className = 'alert alert-danger';
+             notification.style.display = 'block';
+         })
+         .finally(() => {
+            if (saveButton) { 
+                 saveButton.disabled = false;
+                 saveButton.innerHTML = originalButtonHtml; // Restore original button text
+             } else {
+                 console.error("Save button element was not found in .finally()!");
+             }
+             setTimeout(() => {
+                  if (notification && notification.style.display !== 'none') { // Additional check for notification
+                      notification.style.display = 'none';
+                  }
+              }, 7000); // 7 seconds
+         });
+    }
+
+    // Function to show/hide Channel ID based on method (No longer needed)
+    /* function toggleChannelId() {
+        const methodSelect = document.getElementById('heartbeat_method');
+        const channelIdGroup = document.getElementById('heartbeat-channel-id-group'); // Assuming this ID exists for the div/group
+
+        if (methodSelect && channelIdGroup) {
+            if (methodSelect.value === 'channel') {
+                channelIdGroup.style.display = ''; // Show the group
+            } else {
+                channelIdGroup.style.display = 'none'; // Hide the group
+            }
+        }
+    } */
+
+</script> 
