@@ -4,7 +4,7 @@
 
 Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage specified Docker containers (start, stop, restart, view status) and view container logs.
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE)
 
 ## Features
@@ -14,29 +14,31 @@ Control your Docker containers directly from Discord! This application provides 
     *   Start, stop, and restart permitted containers via buttons or slash commands.
     *   Expand/collapse detailed status information.
     *   Slash commands (`/serverstatus`, `/ss`, `/command`, `/control`, `/help`, `/ping`).
-    *   Comprehensive scheduling system (see details below).
+    *   Comprehensive task system (see details below).
     *   Permission system per channel (Control Panel vs. Status-Only).
     *   Automatic status message updates with intelligent pending status management.
     *   Advanced performance optimizations with config caching and race condition protection.
     *   Optional heartbeat monitoring integration.
     *   Configurable bot language (English, German, French).
     
-### Scheduling System
+### Task System
 
-DDC includes a powerful scheduling system to automate container management:
+DDC includes a powerful task system to automate container management:
 
-* **One-time Tasks**: `/schedule_once` - Run actions on specific date and time
+* **One-time Tasks**: `/task_once` - Run actions on specific date and time
 * **Recurring Tasks**:
-  * `/schedule_daily` - Run actions every day at specified times
-  * `/schedule_weekly` - Run actions on selected days of the week
-  * `/schedule_monthly` - Run actions on selected days of the month
-  * `/schedule_yearly` - Run actions on specific dates each year
+  * `/task_daily` - Run actions every day at specified times
+  * `/task_weekly` - Run actions on selected days of the week
+  * `/task_monthly` - Run actions on selected days of the month
+  * `/task_yearly` - Run actions on specific dates each year
 * **Management Commands**:
-  * `/schedule_info` - List all scheduled tasks with filtering options
-  * Currently, task management is available through the web interface:
-    * Delete tasks in the web UI
+  * `/task_info` - List all scheduled tasks with filtering options
+  * `/task_delete` - Delete specific scheduled tasks by task ID
+  * `/task_delete_panel` - Interactive panel with delete buttons for all active tasks
+  * Additional task management is available through the web interface:
     * View complete schedule information
-  * **Coming Soon**: Enhanced Discord management with direct buttons for task deletion and editing
+    * Advanced task editing capabilities
+  * **Enhanced Discord Management**: Task deletion is now available directly via Discord commands, with editing capabilities coming soon
 
 **Examples of use cases:**
 * Restart game servers at specific times
@@ -44,7 +46,7 @@ DDC includes a powerful scheduling system to automate container management:
 * Schedule regular maintenance tasks at times with low server usage
 * Automatically restart services that require periodic refreshes
 
-**Note on Day Selection:** Due to Discord's 25-option limit for autocomplete, the day selection in scheduling commands shows a strategic subset of days (1-5, 7, 9, 10, 12-15, 17, 18, 20-22, 24-28, 30, 31). You can still type any valid day manually.
+**Note on Day Selection:** Due to Discord's 25-option limit for autocomplete, the day selection in task commands shows a strategic subset of days (1-5, 7, 9, 10, 12-15, 17, 18, 20-22, 24-28, 30, 31). You can still type any valid day manually.
 
 ### Performance Optimizations
 
@@ -71,26 +73,36 @@ DDC includes several advanced performance optimizations implemented to ensure sm
 
 These optimizations ensure that DDC remains responsive and reliable, especially in environments with slow-starting containers or high user activity.
 
-## What's New in Version 1.1.0
+## What's New in Version 1.2.0
 
-### Major Performance Improvements
+### Enhanced Task Management System
 
-* **🚀 Configuration Caching System**: New thread-safe configuration cache provides ~90% performance improvement for autocomplete functions and frequent config access
-* **⏱️ Extended Pending Timeouts**: Increased from 15 seconds to 120 seconds to accommodate slow-starting containers and complex operations
-* **🎯 Action-Aware Pending Detection**: Smart logic that understands different action types:
-  * Start commands wait for container to become running
-  * Stop commands wait for container to become stopped
-  * Restart commands wait for container to complete the full restart cycle
-* **🔄 Race Condition Protection**: Automatic refresh loop skipping prevents visual inconsistencies during container operations
-* **✨ Visual Consistency**: No more flickering between pending and old status during container operations
+* **🎯 Renamed Commands**: All `/schedule*` commands have been renamed to `/task*` for better clarity:
+  * `/task_once`, `/task_daily`, `/task_weekly`, `/task_monthly`, `/task_yearly`
+  * `/task_info`, `/task_delete`, `/task_delete_panel`
+* **🖱️ Interactive Task Delete Panel**: New `/task_delete_panel` command provides a visual interface with buttons for each active task
+  * Smart button labels with emoji indicators (▶️ start, ⏹️ stop, 🔄 restart)
+  * Cycle abbreviations (O=Once, D=Daily, W=Weekly, M=Monthly, Y=Yearly)
+  * Intelligent date/time formatting based on task cycle type
+  * Support for up to 25 tasks with 5×5 button grid layout
+* **🔐 Simplified Permissions**: Task management now uses channel-level permissions only
+  * Removed complex container-specific permission checks
+  * Consistent with other Discord command permissions
+  * Easier to configure and understand
 
-### Enhanced Reliability
+### Improved User Experience
 
-* **Intelligent Status Management**: Improved handling of slow container operations with proper success detection
-* **Optimized Resource Usage**: Reduced Docker API calls through smart caching strategies
-* **Fallback Mechanisms**: Automatic fallback to file loading ensures reliability even if caching fails
+* **🌍 Enhanced Internationalization**: Complete German and French translations for all task management features
+* **📱 Better Visual Feedback**: Task delete buttons show "Deleted" status after successful removal
+* **⚡ Performance Optimizations**: Continued improvements to configuration caching and status management
+* **🎨 Consistent UI**: All task-related interfaces now use unified design language
 
-These improvements make DDC significantly more responsive and user-friendly, especially in environments with slow-starting containers or high user activity.
+### Web Interface Updates
+
+* **Updated Command Permissions Table**: Web UI now shows `/task` instead of `/schedule` for better consistency
+* **Maintained Backward Compatibility**: Existing configurations continue to work without changes
+
+These improvements make task management more intuitive and accessible while maintaining the robust performance optimizations introduced in version 1.1.0.
 
 *   **Web Interface:**
     *   Configure bot token, server ID, language, timezone, and update intervals.
@@ -263,7 +275,7 @@ DDC implements a comprehensive channel-based permission system that lets adminis
 * **Command Access:** Precisely define which slash commands are available in each channel:
   * `/serverstatus` (or `/ss`) - Display container status messages
   * `/command` (or `/control`) - Execute container control actions
-  * `/schedule_once`, `/schedule_daily`, etc. - Create scheduled tasks for containers
+  * `/task_once`, `/task_daily`, etc. - Create scheduled tasks for containers
 
 This granular permission system allows for scenarios like:
 * A public "#server-status" channel where everyone can see server status but not control anything

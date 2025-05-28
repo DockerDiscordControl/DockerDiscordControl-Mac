@@ -136,7 +136,8 @@ from .control_ui import ActionButton, ToggleButton, ControlView
 from .autocomplete_handlers import (
     schedule_container_select, schedule_action_select, schedule_cycle_select,
     schedule_time_select, schedule_month_select, schedule_weekday_select,
-    schedule_day_select, schedule_info_period_select, schedule_year_select
+    schedule_day_select, schedule_info_period_select, schedule_year_select,
+    schedule_task_id_select
 )
 
 # Import the schedule commands mixin that contains schedule command handlers
@@ -1370,6 +1371,12 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Shows information about scheduled tasks."""
         await self._impl_schedule_info_command(ctx, container_name, period)
 
+    @commands.slash_command(name="schedule_delete", description=_("Delete a scheduled task"), guild_ids=get_guild_id())
+    async def schedule_delete_command(self, ctx: discord.ApplicationContext,
+                                    task_id: str = discord.Option(description=_("Task ID to delete"), autocomplete=schedule_task_id_select)):
+        """Deletes a scheduled task."""
+        await self._impl_schedule_delete_command(ctx, task_id)
+
     # --- SCHEDULE COMMANDS MOVED TO scheduler_commands.py ---
     # All schedule related implementation logic has been moved to 
     # the ScheduleCommandsMixin class in scheduler_commands.py.
@@ -1385,6 +1392,77 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
     # - _impl_schedule_yearly_command
     # - _impl_schedule_command
     # - _impl_schedule_info_command
+
+    # Implementation for schedule_delete command (implemented directly in Cog)
+    async def _impl_schedule_delete_command(self, ctx: discord.ApplicationContext, task_id: str):
+        """Deletes a scheduled task."""
+        try:
+            # Check channel permissions
+            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
+                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+                return
+            
+            config = self.config
+            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
+                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
+                return
+            
+            # Import necessary scheduler functions
+            from utils.scheduler import load_tasks, delete_task
+            from utils.action_logger import log_user_action
+            
+            # Find the task
+            all_tasks = load_tasks()
+            task_to_delete = None
+            
+            for task in all_tasks:
+                if task.task_id == task_id:
+                    task_to_delete = task
+                    break
+            
+            if not task_to_delete:
+                await ctx.respond(_("Task with ID '{task_id}' not found.").format(task_id=task_id), ephemeral=True)
+                return
+            
+            # Check permissions - user can only delete tasks for containers they have permission for
+            has_permission = False
+            servers = config.get('servers', [])
+            
+            for server in servers:
+                server_name = server.get('docker_name')
+                if server_name == task_to_delete.container_name:
+                    allowed_actions = server.get('allowed_actions', [])
+                    if task_to_delete.action in allowed_actions:
+                        has_permission = True
+                    break
+            
+            if not has_permission:
+                await ctx.respond(_("You don't have permission to delete tasks for container '{container}'.").format(container=task_to_delete.container_name), ephemeral=True)
+                return
+            
+            # Delete the task
+            if delete_task(task_id):
+                # Log the action
+                log_user_action(
+                    action="SCHEDULE_DELETE_CMD", 
+                    target=f"{task_to_delete.container_name} ({task_to_delete.action})", 
+                    user=str(ctx.author),
+                    source="Discord Command",
+                    details=f"Deleted task: {task_id}, Cycle: {task_to_delete.cycle}"
+                )
+                
+                await ctx.respond(_("✅ Successfully deleted scheduled task!\n**Task ID:** {task_id}\n**Container:** {container}\n**Action:** {action}\n**Cycle:** {cycle}").format(
+                    task_id=task_id,
+                    container=task_to_delete.container_name,
+                    action=task_to_delete.action,
+                    cycle=task_to_delete.cycle
+                ), ephemeral=True)
+            else:
+                await ctx.respond(_("❌ Failed to delete task. The task might not exist or there was an error."), ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"Error executing schedule_delete command: {e}", exc_info=True)
+            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
 
     # --- Cog Teardown ---
     def cog_unload(self):

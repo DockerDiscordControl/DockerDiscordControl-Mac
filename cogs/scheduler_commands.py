@@ -616,12 +616,13 @@ class ScheduleCommandsMixin:
             description=_("Specialized commands are available for different scheduling cycles:"),
             color=discord.Color.blue()
         )
-        embed.add_field(name="`/schedule_once`", value=_("Schedule a **one-time** task with year, month, day, and time."), inline=False)
-        embed.add_field(name="`/schedule_daily`", value=_("Schedule a **daily** task at the specified time."), inline=False)
-        embed.add_field(name="`/schedule_weekly`", value=_("Schedule a **weekly** task on the specified weekday and time."), inline=False)
-        embed.add_field(name="`/schedule_monthly`", value=_("Schedule a **monthly** task on the specified day and time."), inline=False)
-        embed.add_field(name="`/schedule_yearly`", value=_("Schedule a **yearly** task on the specified month, day, and time."), inline=False)
-        embed.add_field(name="`/schedule_info`", value=_("Shows information about all scheduled tasks."), inline=False)
+        embed.add_field(name="`/task_once`", value=_("Schedule a **one-time** task with year, month, day, and time."), inline=False)
+        embed.add_field(name="`/task_daily`", value=_("Schedule a **daily** task at the specified time."), inline=False)
+        embed.add_field(name="`/task_weekly`", value=_("Schedule a **weekly** task on the specified weekday and time."), inline=False)
+        embed.add_field(name="`/task_monthly`", value=_("Schedule a **monthly** task on the specified day and time."), inline=False)
+        embed.add_field(name="`/task_yearly`", value=_("Schedule a **yearly** task on the specified month, day, and time."), inline=False)
+        embed.add_field(name="`/task_info`", value=_("Shows information about all scheduled tasks."), inline=False)
+        embed.add_field(name="`/task_delete`", value=_("Delete a scheduled task by its task ID."), inline=False)
         
         # Add note about limitations
         embed.add_field(name=_("Note on Day Selection"), 

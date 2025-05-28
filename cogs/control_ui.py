@@ -111,8 +111,8 @@ class ActionButton(Button):
 
             # Set Pending State
             now = datetime.now(timezone.utc)
-            self.cog.pending_actions[self.display_name] = now
-            logger.debug(f"[BUTTON] Set pending state for '{self.display_name}' at {now}")
+            self.cog.pending_actions[self.display_name] = {'timestamp': now, 'action': self.action}
+            logger.debug(f"[BUTTON] Set pending state for '{self.display_name}' at {now} with action '{self.action}'")
 
             # --- START: Change - Edit main message instead of original response --- #
             # Get channel and message ID
@@ -315,7 +315,7 @@ class ControlView(View):
         display_name = server_config.get('name', docker_name)
 
         # Check for Pending Status
-        if self.cog.pending_actions.get(display_name):
+        if display_name in self.cog.pending_actions:
              logger.debug(f"[ControlView] Server '{display_name}' is pending. No buttons will be added.")
              return # Stop initialization, add no buttons
 
@@ -341,3 +341,179 @@ class ControlView(View):
             # Nur Start-Button anzeigen, kein Toggle-Button für offline Server
             if channel_has_control_permission and "start" in allowed_actions:
                  self.add_item(ActionButton(cog_instance, server_config, "start", discord.ButtonStyle.secondary, None, "▶️", row=0))
+
+class TaskDeleteButton(Button):
+    """Button for deleting a specific scheduled task."""
+    
+    def __init__(self, cog_instance: 'DockerControlCog', task_id: str, task_description: str, row: int):
+        self.cog = cog_instance
+        self.task_id = task_id
+        self.task_description = task_description
+        
+        super().__init__(
+            style=discord.ButtonStyle.danger,
+            label=task_description,
+            custom_id=f"task_delete_{task_id}",
+            row=row
+        )
+    
+    async def callback(self, interaction: discord.Interaction):
+        """Deletes the scheduled task."""
+        user = interaction.user
+        
+        logger.info(f"[TASK_DELETE_BTN] Task deletion '{self.task_id}' triggered by {user.name}")
+        
+        try:
+            # Defer interaction
+            await interaction.response.defer(ephemeral=True)
+            
+            # Import necessary modules
+            from utils.scheduler import load_tasks, delete_task
+            from utils.action_logger import log_user_action
+            
+            # Check permissions - only channel-level permissions matter
+            config = get_cached_config()
+            if not _channel_has_permission(interaction.channel.id, 'schedule', config):
+                await interaction.followup.send(_("You do not have permission to delete tasks in this channel."), ephemeral=True)
+                return
+            
+            # Find the task
+            all_tasks = load_tasks()
+            task_to_delete = None
+            
+            for task in all_tasks:
+                if task.task_id == self.task_id:
+                    task_to_delete = task
+                    break
+            
+            if not task_to_delete:
+                await interaction.followup.send(_("Task with ID '{task_id}' not found.").format(task_id=self.task_id), ephemeral=True)
+                return
+            
+            # Delete the task
+            if delete_task(self.task_id):
+                # Log the action
+                log_user_action(
+                    action="TASK_DELETE_PANEL", 
+                    target=f"{task_to_delete.container_name} ({task_to_delete.action})", 
+                    user=str(user),
+                    source="Discord Panel Button",
+                    details=f"Deleted task: {self.task_id}, Cycle: {task_to_delete.cycle}"
+                )
+                
+                await interaction.followup.send(_("✅ Successfully deleted scheduled task!\n**Task ID:** {task_id}\n**Container:** {container}\n**Action:** {action}\n**Cycle:** {cycle}").format(
+                    task_id=self.task_id,
+                    container=task_to_delete.container_name,
+                    action=task_to_delete.action,
+                    cycle=task_to_delete.cycle
+                ), ephemeral=True)
+                
+                # Update the original message by disabling this button and showing it as deleted
+                # We'll disable this button and change its style
+                self.disabled = True
+                self.style = discord.ButtonStyle.secondary
+                self.label = "Deleted"
+                
+                # Edit the original message to reflect the change
+                try:
+                    await interaction.edit_original_response(view=self.view)
+                except:
+                    pass  # If editing fails, that's okay
+                    
+            else:
+                await interaction.followup.send(_("❌ Failed to delete task. The task might not exist or there was an error."), ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"Error in TaskDeleteButton callback: {e}", exc_info=True)
+            await interaction.followup.send(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
+
+
+class TaskDeletePanelView(View):
+    """View with delete buttons for each active scheduled task."""
+    
+    def __init__(self, cog_instance: 'DockerControlCog', active_tasks: list):
+        super().__init__(timeout=300)  # 5 minute timeout
+        self.cog = cog_instance
+        
+        # Add a delete button for each task (max 25 components: 5 rows × 5 buttons per row)
+        for i, task in enumerate(active_tasks[:25]):  # Discord limit: 25 components total
+            try:
+                # Action emoji mapping
+                action_emojis = {
+                    'start': '▶️',
+                    'stop': '⏹️', 
+                    'restart': '🔄'
+                }
+                
+                # Cycle abbreviations
+                cycle_abbrevs = {
+                    'once': 'O',
+                    'daily': 'D', 
+                    'weekly': 'W',
+                    'monthly': 'M',
+                    'yearly': 'Y'
+                }
+                
+                # Get emoji and cycle abbreviation
+                emoji = action_emojis.get(task.action, '❓')
+                cycle_abbrev = cycle_abbrevs.get(task.cycle, task.cycle[:1])
+                
+                # Format date/time based on cycle
+                time_part = ""
+                try:
+                    next_run_dt = task.get_next_run_datetime()
+                    if next_run_dt:
+                        if task.cycle == 'once':
+                            # Full date and time: 29.05.2025 17:00
+                            time_part = next_run_dt.strftime("%d.%m.%Y %H:%M")
+                        elif task.cycle == 'daily':
+                            # Just time: 17:00
+                            time_part = next_run_dt.strftime("%H:%M")
+                        elif task.cycle == 'weekly':
+                            # Weekday and time: tuesday 17:00
+                            weekday = next_run_dt.strftime("%A").lower()
+                            time_part = f"{weekday} {next_run_dt.strftime('%H:%M')}"
+                        elif task.cycle == 'monthly':
+                            # Day and time: 29 17:00
+                            time_part = f"{next_run_dt.day} {next_run_dt.strftime('%H:%M')}"
+                        elif task.cycle == 'yearly':
+                            # Month.day and time: 29.05 17:00
+                            time_part = f"{next_run_dt.day:02d}.{next_run_dt.month:02d} {next_run_dt.strftime('%H:%M')}"
+                        else:
+                            # Fallback
+                            time_part = next_run_dt.strftime("%H:%M")
+                    else:
+                        time_part = "No schedule"
+                except Exception:
+                    time_part = "Unknown"
+                
+                # Build the button label: Emoji + Cycle + Time + Container
+                # Format: "🔄 d 17:00 nginx"
+                base_label = f"{emoji} {cycle_abbrev} {time_part} {task.container_name}"
+                
+                # Ensure label fits Discord's 80 character limit
+                if len(base_label) > 78:
+                    # Calculate available space for container name
+                    prefix_length = len(f"{emoji} {cycle_abbrev} {time_part} ")
+                    available_for_container = 75 - prefix_length  # Leave 3 chars for "..."
+                    
+                    if available_for_container > 3:
+                        truncated_container = task.container_name[:available_for_container] + "..."
+                        task_description = f"{emoji} {cycle_abbrev} {time_part} {truncated_container}"
+                    else:
+                        # If even truncation doesn't fit, use minimal format
+                        task_description = f"{emoji} {cycle_abbrev} {task.container_name[:10]}..."
+                else:
+                    task_description = base_label
+
+                # 5 buttons per row (horizontal layout)
+                row = i // 5
+                if row > 4:  # Discord allows max 5 rows
+                    break
+                    
+                button = TaskDeleteButton(cog_instance, task.task_id, task_description, row)
+                self.add_item(button)
+                
+            except Exception as e:
+                logger.error(f"Error creating delete button for task {getattr(task, 'task_id', 'unknown')}: {e}")
+                continue

@@ -5,6 +5,9 @@
 {% block content %}
     <div class="text-center logo-header">
         <img src="{{ url_for('static', filename='ddc_web.png') }}" alt="DDC Logo">
+        <div class="ddc-title">
+            <span class="neon-text-large" id="neon-ddc">DDC</span>
+        </div>
     </div>
     <h2 class="text-center my-3">DockerDiscordControl</h2>
     <p class="text-center lead" style="color:#adb5bd;">Configure your DDC Bot here.</p>
@@ -55,7 +58,9 @@
         {# NEW: Task Scheduler List #}
         <hr class="my-4">
         <div class="mb-3 card p-3">
-             {% include 'tasks/list.html' %}
+             {% with active_containers=active_container_names %}
+                 {% include 'tasks/list.html' %}
+             {% endwith %}
         </div>
 
         {# Scheduler Section - OLD, replaced by tasks/form.html #}

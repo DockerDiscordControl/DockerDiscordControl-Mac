@@ -10,7 +10,7 @@
                 <th scope="col" class="text-center" style="width: 7%;" data-bs-toggle="tooltip" title="Allows /serverstatus and /ss commands">/serverstatus<i class="bi bi-question-circle help-icon"></i></th>
                 <th scope="col" class="text-center" style="width: 7%;" data-bs-toggle="tooltip" title="Allows /command command...">/command<i class="bi bi-question-circle help-icon"></i></th>
                 <th scope="col" class="text-center" style="width: 7%;" data-bs-toggle="tooltip" title="Allows /control command...">/control<i class="bi bi-question-circle help-icon"></i></th>
-                <th scope="col" class="text-center" style="width: 7%;" data-bs-toggle="tooltip" title="Allows all schedule commands (/schedule_once, /schedule_daily, etc.)...">/schedule<i class="bi bi-question-circle help-icon"></i></th>
+                <th scope="col" class="text-center" style="width: 7%;" data-bs-toggle="tooltip" title="Allows all task commands (/task_once, /task_daily, etc.)...">/task<i class="bi bi-question-circle help-icon"></i></th>
                 <th scope="col" class="text-center border-start border-secondary-subtle" style="width: 8%;" data-bs-toggle="tooltip" title="Post initial status/control messages on bot start?">Initial<i class="bi bi-question-circle help-icon"></i></th>
                 <th scope="col" class="text-center refresh-group-start" style="width: 9%;" data-bs-toggle="tooltip" title="Enable periodic status updates?">Refresh<i class="bi bi-question-circle help-icon"></i></th>
                 <th scope="col" class="refresh-group-end" style="width: 7%;" data-bs-toggle="tooltip" title="Update status messages every X minutes (if refresh is enabled).">Minutes</th>
@@ -50,7 +50,7 @@
                     <td class="text-center">
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" name="cmd_schedule_1" value="1" {% if defaults.commands.schedule %}checked{% endif %}>
-                            <label class="form-check-label visually-hidden">/schedule</label>
+                            <label class="form-check-label visually-hidden">/task</label>
                         </div>
                     </td>
                     <td class="text-center border-start border-secondary-subtle">
@@ -108,7 +108,7 @@
                     <td class="text-center">
                         <div class="form-check">
                             <input class="form-check-input" type="checkbox" name="cmd_schedule_{{ loop.index }}" value="1" {% if channel_data.commands.schedule %}checked{% endif %}>
-                            <label class="form-check-label visually-hidden">/schedule</label>
+                            <label class="form-check-label visually-hidden">/task</label>
                         </div>
                     </td>
                     <td class="text-center border-start border-secondary-subtle">

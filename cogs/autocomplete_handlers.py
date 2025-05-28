@@ -350,4 +350,64 @@ async def schedule_year_select(
     current_year = datetime.now().year
     years_str = [str(current_year + i) for i in range(6)] 
     
-    return _filter_choices(value_being_typed, years_str) 
+    return _filter_choices(value_being_typed, years_str)
+
+# --- Task ID Selection Autocomplete for Schedule Delete ---
+async def schedule_task_id_select(
+    ctx: discord.AutocompleteContext
+):
+    """Autocomplete function for task IDs in schedule_delete command.
+    Shows active scheduled tasks with format: 'task_id - container (action, cycle)'
+    """
+    value_being_typed = ctx.value
+    
+    try:
+        from utils.scheduler import load_tasks, CYCLE_ONCE
+        import time
+        
+        # Load all tasks
+        all_tasks = load_tasks()
+        if not all_tasks:
+            return []
+        
+        # Filter to only active tasks
+        current_time = time.time()
+        active_tasks = []
+        
+        for task in all_tasks:
+            # Skip inactive tasks
+            if not task.is_active:
+                continue
+                
+            # Skip expired one-time tasks
+            if task.cycle == CYCLE_ONCE:
+                if task.next_run_ts is None or task.next_run_ts < current_time:
+                    continue
+                if getattr(task, 'status', None) == "completed":
+                    continue
+            
+            active_tasks.append(task)
+        
+        # Create choices in format: task_id - container (action, cycle)
+        choices = []
+        for task in active_tasks[:25]:  # Discord limit
+            try:
+                # Create display format
+                display_name = f"{task.task_id} - {task.container_name} ({task.action}, {task.cycle})"
+                
+                # For autocomplete, we return the task_id as value but show the descriptive format
+                # Check if user input matches task_id or any part of the display
+                if (not value_being_typed or 
+                    value_being_typed.lower() in task.task_id.lower() or
+                    value_being_typed.lower() in display_name.lower()):
+                    choices.append(task.task_id)
+                    
+            except Exception as e:
+                logger.debug(f"Error formatting task {task.task_id}: {e}")
+                continue
+        
+        return choices[:25]
+        
+    except Exception as e:
+        logger.error(f"Error in schedule_task_id_select: {e}")
+        return [] 
