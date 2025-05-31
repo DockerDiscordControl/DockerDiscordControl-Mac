@@ -40,6 +40,13 @@ from .autocomplete_handlers import (
     schedule_day_select, schedule_info_period_select, schedule_year_select
 )
 
+# Import helper functions
+from utils.schedule_helpers import (
+    parse_and_validate_time, create_and_save_task, 
+    check_schedule_permissions, handle_schedule_command_error,
+    create_task_success_message, ScheduleValidationError
+)
+
 # Configure logger for this module
 logger = setup_logger('ddc.scheduler_commands', level=logging.DEBUG)
 
@@ -237,33 +244,37 @@ class ScheduleCommandsMixin:
                               year: str):
         """Schedules a one-time task for a Docker container."""
         try:
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+            # Check permissions first
+            has_permission, error_msg, server_conf = check_schedule_permissions(ctx, container_name, action)
+            if not has_permission:
+                await ctx.respond(error_msg, ephemeral=True)
                 return
             
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
+            # Parse and validate time
+            try:
+                hour, minute = parse_and_validate_time(time)
+            except ScheduleValidationError as e:
+                await ctx.respond(str(e), ephemeral=True)
                 return
             
-            # Extract time, year, month and day
-            hour, minute = parse_time_string(time)
-            if hour is None or minute is None:
-                await ctx.respond(_("Invalid time format. Please use HH:MM or e.g., 2:30pm."), ephemeral=True)
-                return
-                
+            # Parse and validate year
             try:
                 year_int = int(year)
+                if year_int < 2024 or year_int > 2030:
+                    await ctx.respond(_("Year must be between 2024 and 2030."), ephemeral=True)
+                    return
             except ValueError:
-                await ctx.respond(_("Invalid year format. Please use YYYY format (e.g., 2023)."), ephemeral=True)
+                await ctx.respond(_("Invalid year format. Please use a 4-digit year (e.g., 2024)."), ephemeral=True)
+                return
+            
+            # Parse and validate month
+            try:
+                month_int = parse_month_string(month)
+            except ValueError:
+                await ctx.respond(_("Invalid month format. Please use MM or month name (e.g., 07 or July)."), ephemeral=True)
                 return
                 
-            month_int = parse_month_string(month)
-            if month_int is None:
-                await ctx.respond(_("Invalid month format. Please use month name (e.g., January) or number (1-12)."), ephemeral=True)
-                return
-                
+            # Parse and validate day
             try:
                 day_int = int(day)
                 if not (1 <= day_int <= 31):
@@ -273,7 +284,7 @@ class ScheduleCommandsMixin:
                 await ctx.respond(_("Invalid day format. Please use a number (1-31)."), ephemeral=True)
                 return
             
-            # Validate the inputs
+            # Validate the inputs using existing function
             is_valid_input, error_message = validate_new_task_input(
                 container_name, action, CYCLE_ONCE, year_int, month_int, day_int, hour, minute
             )
@@ -282,7 +293,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Create the task
-            config = get_cached_config() # For timezone
+            config = get_cached_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             task = ScheduledTask(
@@ -296,33 +307,16 @@ class ScheduleCommandsMixin:
                 timezone_str=timezone_str
             )
 
-            if not task.is_valid() or task.next_run_ts is None:
-                await ctx.respond(_("Cannot schedule task: The calculated execution time is invalid (e.g., in the past)."), ephemeral=True)
-                return
-
-            # Check for time collision
-            if check_task_time_collision(task.container_name, task.next_run_ts):
-                await ctx.respond(_("Cannot schedule task: It conflicts with an existing task for the same container within a 10-minute window."), ephemeral=True)
-                return
-                
-            # Save the task
-            if add_task(task):
-                next_run_formatted = datetime.fromtimestamp(task.next_run_ts, pytz.timezone(timezone_str)).strftime('%Y-%m-%d %H:%M %Z%z')
-                # Log in User Action Log
-                log_user_action(
-                    action="SCHEDULE_CREATE_CMD", 
-                    target=f"{task.container_name} ({task.action})", 
-                    user=str(ctx.author),
-                    source="Discord Command",
-                    details=f"Cycle: {task.cycle}, Next run: {next_run_formatted}"
-                )
-                await ctx.respond(_("Task for {container_name} scheduled for {next_run_formatted}.").format(container_name=task.container_name, next_run_formatted=next_run_formatted), ephemeral=True)
+            # Create and save task using helper
+            success, result = create_and_save_task(task, ctx)
+            if success:
+                message = create_task_success_message(task, result)
+                await ctx.respond(message, ephemeral=True)
             else:
-                await ctx.respond(_("Failed to schedule task. It might conflict with an existing task (time collision) or another error occurred."), ephemeral=True)
+                await ctx.respond(result, ephemeral=True)
                 
         except Exception as e:
-            logger.error(f"Error executing schedule_once command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
+            await handle_schedule_command_error(ctx, e, "schedule_once")
     
     # Implementation for daily tasks
     async def _impl_schedule_daily_command(self, ctx: discord.ApplicationContext, 
@@ -331,30 +325,27 @@ class ScheduleCommandsMixin:
                               time: str):
         """Schedules a daily task for a Docker container."""
         try:
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+            # Check permissions first
+            has_permission, error_msg, server_conf = check_schedule_permissions(ctx, container_name, action)
+            if not has_permission:
+                await ctx.respond(error_msg, ephemeral=True)
                 return
             
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
+            # Parse and validate time
+            try:
+                hour, minute = parse_and_validate_time(time)
+            except ScheduleValidationError as e:
+                await ctx.respond(str(e), ephemeral=True)
                 return
             
-            # Extract time
-            hour, minute = parse_time_string(time)
-            if hour is None or minute is None:
-                await ctx.respond(_("Invalid time format. Please use HH:MM or e.g., 2:30pm."), ephemeral=True)
-                return
-            
-            # Validate the inputs
+            # Validate the inputs using existing function
             is_valid_input, error_message = validate_new_task_input(
                 container_name, action, CYCLE_DAILY, hour=hour, minute=minute
             )
             if not is_valid_input:
                 await ctx.respond(f"{_('Error')}: {_(error_message)}", ephemeral=True)
                 return
-                
+            
             # Create the task
             config = get_cached_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
@@ -369,34 +360,17 @@ class ScheduleCommandsMixin:
                 timezone_str=timezone_str
             )
 
-            if not task.is_valid() or task.next_run_ts is None:
-                await ctx.respond(_("Cannot schedule task: Invalid parameters or past execution time."), ephemeral=True)
-                return
-
-            # Check for time collision
-            if check_task_time_collision(task.container_name, task.next_run_ts):
-                await ctx.respond(_("Cannot schedule task: Conflicts with an existing task within 10 minutes."), ephemeral=True)
-                return
-                
-            # Save the task
-            if add_task(task):
-                next_run_formatted = datetime.fromtimestamp(task.next_run_ts, pytz.timezone(timezone_str)).strftime('%Y-%m-%d %H:%M %Z%z')
-                # Log in User Action Log
-                log_user_action(
-                    action="SCHEDULE_CREATE_CMD", 
-                    target=f"{task.container_name} ({task.action})", 
-                    user=str(ctx.author),
-                    source="Discord Command",
-                    details=f"Cycle: {task.cycle}, Next run: {next_run_formatted}"
-                )
-                await ctx.respond(_("Task for {container_name} scheduled daily at {hour:02d}:{minute:02d}.").format(container_name=task.container_name, hour=hour, minute=minute), ephemeral=True)
+            # Create and save task using helper
+            success, result = create_and_save_task(task, ctx)
+            if success:
+                message = create_task_success_message(task, result)
+                await ctx.respond(message, ephemeral=True)
             else:
-                await ctx.respond(_("Failed to schedule task. Possible time collision or other error."), ephemeral=True)
+                await ctx.respond(result, ephemeral=True)
                 
         except Exception as e:
-            logger.error(f"Error executing schedule_daily command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
-            
+            await handle_schedule_command_error(ctx, e, "schedule_daily")
+    
     # Implementation for weekly tasks
     async def _impl_schedule_weekly_command(self, ctx: discord.ApplicationContext, 
                               container_name: str, 
@@ -405,57 +379,39 @@ class ScheduleCommandsMixin:
                               weekday: str):
         """Schedules a weekly task for a Docker container."""
         try:
-            # Debug output for incoming parameters
-            logger.info(f"schedule_weekly called with: container={container_name}, action={action}, time={time}, weekday={weekday}")
-            
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+            # Check permissions first
+            has_permission, error_msg, server_conf = check_schedule_permissions(ctx, container_name, action)
+            if not has_permission:
+                await ctx.respond(error_msg, ephemeral=True)
                 return
             
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
+            # Parse and validate time
+            try:
+                hour, minute = parse_and_validate_time(time)
+            except ScheduleValidationError as e:
+                await ctx.respond(str(e), ephemeral=True)
                 return
             
-            # Extract time and weekday
-            hour, minute = parse_time_string(time)
-            if hour is None or minute is None:
-                logger.error(f"Invalid time format: {time}")
-                await ctx.respond(_("Invalid time format."), ephemeral=True)
-                return
-            
-            # More debug information for weekday conversion
-            logger.info(f"Converting weekday: '{weekday}' with parse_weekday_string")
-            
-            # Convert weekday name to an index (0=Monday, 6=Sunday)
+            # Parse and validate weekday
             weekday_index = parse_weekday_string(weekday)
             if weekday_index is None:
-                # Detailed error for better debugging
-                logger.error(f"Could not convert weekday '{weekday}' to a valid index")
-                await ctx.respond(_("Invalid weekday format. Please use a weekday name like 'Monday' or 'Montag'."), ephemeral=True)
+                await ctx.respond(_("Invalid weekday format. Please use weekday name (e.g., Monday) or number (1-7)."), ephemeral=True)
                 return
-                
-            # Log the weekday for debugging
-            logger.info(f"Weekday '{weekday}' was converted to index {weekday_index}")
             
-            # Validate the inputs
+            # Get weekday name for description
+            weekday_name = DAYS_OF_WEEK[weekday_index - 1] if 1 <= weekday_index <= 7 else weekday
+            
+            # Validate the inputs using existing function
             is_valid_input, error_message = validate_new_task_input(
-                container_name, action, CYCLE_WEEKLY, hour=hour, minute=minute, weekday=weekday_index
+                container_name, action, CYCLE_WEEKLY, weekday=weekday_index, hour=hour, minute=minute
             )
             if not is_valid_input:
-                logger.error(f"Input validation failed: {error_message}")
                 await ctx.respond(f"{_('Error')}: {_(error_message)}", ephemeral=True)
                 return
-                
+            
             # Create the task
             config = get_cached_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
-            
-            logger.info(f"Creating weekly task: container={container_name}, action={action}, time={hour}:{minute}, weekday_index={weekday_index}")
-            
-            # Weekday as string for day_val (important for correct detection)
-            weekday_name = DAYS_OF_WEEK[weekday_index]
             
             task = ScheduledTask(
                 container_name=container_name,
@@ -464,7 +420,7 @@ class ScheduleCommandsMixin:
                 hour=hour, 
                 minute=minute, 
                 weekday=weekday_index,
-                day=weekday_name,  # Set both weekday and day to fill both fields
+                day=weekday_name,
                 description=_("Weekly {action} on {weekday_name} at {hour:02d}:{minute:02d}").format(
                     action=action,
                     weekday_name=weekday_name,
@@ -475,46 +431,17 @@ class ScheduleCommandsMixin:
                 timezone_str=timezone_str
             )
 
-            if not task.is_valid():
-                logger.error(f"Created task is not valid. Validation check failed.")
-                await ctx.respond(_("Cannot schedule task: Invalid parameters or past execution time."), ephemeral=True)
-                return
-                
-            if task.next_run_ts is None:
-                logger.error(f"Created task has no valid next execution time (next_run_ts is None).")
-                await ctx.respond(_("Cannot schedule task: Invalid parameters or past execution time."), ephemeral=True)
-                return
-
-            # Check for time collision
-            if check_task_time_collision(task.container_name, task.next_run_ts):
-                logger.warning(f"Time collision detected for {task.container_name} at {task.next_run_ts}")
-                await ctx.respond(_("Cannot schedule task: Conflicts with an existing task within 10 minutes."), ephemeral=True)
-                return
-                
-            # Save the task
-            logger.info(f"Attempting to save task: {task.task_id} ({task.container_name} - {task.action}) on weekday {weekday_index}")
-            if add_task(task):
-                next_run_formatted = datetime.fromtimestamp(task.next_run_ts, pytz.timezone(timezone_str)).strftime('%Y-%m-%d %H:%M %Z%z')
-                # Log in User Action Log
-                log_user_action(
-                    action="SCHEDULE_CREATE_CMD", 
-                    target=f"{task.container_name} ({task.action})", 
-                    user=str(ctx.author),
-                    source="Discord Command",
-                    details=f"Cycle: {task.cycle}, Next run: {next_run_formatted}, Weekday: {DAYS_OF_WEEK[weekday_index]}"
-                )
-                # Show the actual weekday name in the confirmation
-                weekday_name = DAYS_OF_WEEK[weekday_index].capitalize()
-                logger.info(f"Task successfully created: {task.task_id} for {task.container_name} on {weekday_name}")
-                await ctx.respond(_("Task for {container_name} scheduled weekly on {weekday_name} at {hour:02d}:{minute:02d}.").format(container_name=task.container_name, weekday_name=weekday_name, hour=hour, minute=minute), ephemeral=True)
+            # Create and save task using helper
+            success, result = create_and_save_task(task, ctx)
+            if success:
+                message = create_task_success_message(task, result)
+                await ctx.respond(message, ephemeral=True)
             else:
-                logger.error(f"Error saving task in add_task()")
-                await ctx.respond(_("Failed to schedule task. Possible time collision or other error."), ephemeral=True)
+                await ctx.respond(result, ephemeral=True)
                 
         except Exception as e:
-            logger.error(f"Error executing schedule_weekly command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
-            
+            await handle_schedule_command_error(ctx, e, "schedule_weekly")
+    
     # Implementation for monthly tasks
     async def _impl_schedule_monthly_command(self, ctx: discord.ApplicationContext, 
                               container_name: str, 
@@ -523,39 +450,37 @@ class ScheduleCommandsMixin:
                               day: str):
         """Schedules a monthly task for a Docker container."""
         try:
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+            # Check permissions first
+            has_permission, error_msg, server_conf = check_schedule_permissions(ctx, container_name, action)
+            if not has_permission:
+                await ctx.respond(error_msg, ephemeral=True)
                 return
             
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
+            # Parse and validate time
+            try:
+                hour, minute = parse_and_validate_time(time)
+            except ScheduleValidationError as e:
+                await ctx.respond(str(e), ephemeral=True)
                 return
             
-            # Extract time and day
-            hour, minute = parse_time_string(time)
-            if hour is None or minute is None:
-                await ctx.respond(_("Invalid time format. Please use HH:MM or e.g., 2:30pm."), ephemeral=True)
-                return
-                
+            # Parse and validate day
             try:
                 day_int = int(day)
                 if not (1 <= day_int <= 31):
-                    await ctx.respond(_("Day of month must be between 1 and 31."), ephemeral=True)
+                    await ctx.respond(_("Day must be between 1 and 31."), ephemeral=True)
                     return
             except ValueError:
                 await ctx.respond(_("Invalid day format. Please use a number (1-31)."), ephemeral=True)
                 return
             
-            # Validate the inputs
+            # Validate the inputs using existing function
             is_valid_input, error_message = validate_new_task_input(
                 container_name, action, CYCLE_MONTHLY, day=day_int, hour=hour, minute=minute
             )
             if not is_valid_input:
                 await ctx.respond(f"{_('Error')}: {_(error_message)}", ephemeral=True)
                 return
-                
+            
             # Create the task
             config = get_cached_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
@@ -564,39 +489,23 @@ class ScheduleCommandsMixin:
                 container_name=container_name,
                 action=action,
                 cycle=CYCLE_MONTHLY,
-                day=day_int, hour=hour, minute=minute,
+                day=day_int,
+                hour=hour, minute=minute,
                 description="",
                 created_by=str(ctx.author),
                 timezone_str=timezone_str
             )
 
-            if not task.is_valid() or task.next_run_ts is None:
-                await ctx.respond(_("Cannot schedule task: Invalid parameters or past execution time."), ephemeral=True)
-                return
-
-            # Check for time collision
-            if check_task_time_collision(task.container_name, task.next_run_ts):
-                await ctx.respond(_("Cannot schedule task: Conflicts with an existing task within 10 minutes."), ephemeral=True)
-                return
-                
-            # Save the task
-            if add_task(task):
-                next_run_formatted = datetime.fromtimestamp(task.next_run_ts, pytz.timezone(timezone_str)).strftime('%Y-%m-%d %H:%M %Z%z')
-                # Log in User Action Log
-                log_user_action(
-                    action="SCHEDULE_CREATE_CMD", 
-                    target=f"{task.container_name} ({task.action})", 
-                    user=str(ctx.author),
-                    source="Discord Command",
-                    details=f"Cycle: {task.cycle}, Next run: {next_run_formatted}"
-                )
-                await ctx.respond(_("Task for {container_name} scheduled monthly on day {day} at {hour:02d}:{minute:02d}.").format(container_name=task.container_name, day=day_int, hour=hour, minute=minute), ephemeral=True)
+            # Create and save task using helper
+            success, result = create_and_save_task(task, ctx)
+            if success:
+                message = create_task_success_message(task, result)
+                await ctx.respond(message, ephemeral=True)
             else:
-                await ctx.respond(_("Failed to schedule task. Possible time collision or other error."), ephemeral=True)
+                await ctx.respond(result, ephemeral=True)
                 
         except Exception as e:
-            logger.error(f"Error executing schedule_monthly command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
+            await handle_schedule_command_error(ctx, e, "schedule_monthly")
     
     # Implementation for schedule command (help)
     async def _impl_schedule_command(self, ctx: discord.ApplicationContext):
@@ -798,27 +707,27 @@ class ScheduleCommandsMixin:
                               day: str):
         """Schedules a yearly task for a Docker container."""
         try:
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+            # Check permissions first
+            has_permission, error_msg, server_conf = check_schedule_permissions(ctx, container_name, action)
+            if not has_permission:
+                await ctx.respond(error_msg, ephemeral=True)
                 return
             
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
+            # Parse and validate time
+            try:
+                hour, minute = parse_and_validate_time(time)
+            except ScheduleValidationError as e:
+                await ctx.respond(str(e), ephemeral=True)
                 return
             
-            # Extract time, month and day
-            hour, minute = parse_time_string(time)
-            if hour is None or minute is None:
-                await ctx.respond(_("Invalid time format. Please use HH:MM or e.g., 2:30pm."), ephemeral=True)
+            # Parse and validate month
+            try:
+                month_int = parse_month_string(month)
+            except ValueError:
+                await ctx.respond(_("Invalid month format. Please use MM or month name (e.g., 07 or July)."), ephemeral=True)
                 return
                 
-            month_int = parse_month_string(month)
-            if month_int is None:
-                await ctx.respond(_("Invalid month format. Please use month name (e.g., January) or number (1-12)."), ephemeral=True)
-                return
-                
+            # Parse and validate day
             try:
                 day_int = int(day)
                 if not (1 <= day_int <= 31):
@@ -827,11 +736,11 @@ class ScheduleCommandsMixin:
             except ValueError:
                 await ctx.respond(_("Invalid day format. Please use a number (1-31)."), ephemeral=True)
                 return
-                
-            # Get current year for validation
+            
+            # Use current year for yearly tasks
             current_year = datetime.now().year
             
-            # Validate the inputs using the existing function
+            # Validate the inputs using existing function
             is_valid_input, error_message = validate_new_task_input(
                 container_name, action, "yearly", year=current_year, month=month_int, day=day_int, hour=hour, minute=minute
             )
@@ -854,41 +763,13 @@ class ScheduleCommandsMixin:
                 timezone_str=timezone_str
             )
 
-            if not task.is_valid() or task.next_run_ts is None:
-                await ctx.respond(_("Cannot schedule task: The calculated execution time is invalid (e.g., in the past or invalid date)."), ephemeral=True)
-                return
-
-            # Check for time collision
-            if check_task_time_collision(task.container_name, task.next_run_ts):
-                await ctx.respond(_("Cannot schedule task: It conflicts with an existing task for the same container within a 10-minute window."), ephemeral=True)
-                return
-                
-            # Save the task
-            if add_task(task):
-                next_run_formatted = datetime.fromtimestamp(task.next_run_ts, pytz.timezone(timezone_str)).strftime('%Y-%m-%d %H:%M %Z%z')
-                # Log to action log
-                log_user_action(
-                    action="SCHEDULE_CREATE_CMD", 
-                    target=f"{task.container_name} ({task.action})", 
-                    user=str(ctx.author),
-                    source="Discord Command",
-                    details=f"Cycle: yearly, Next run: {next_run_formatted}"
-                )
-                
-                # Monatsnamen für die Anzeige bekommen statt Nummer
-                month_name = self._get_localized_month_name(month_int, config.get('language', 'de'))
-                
-                # Verbesserte Bestätigungsmeldung mit klarer Datumsangabe
-                await ctx.respond(_("Task for {container_name} scheduled yearly: {day}. {month_name} at {hour:02d}:{minute:02d}.").format(
-                    container_name=task.container_name, 
-                    day=day_int, 
-                    month_name=month_name, 
-                    hour=hour, 
-                    minute=minute
-                ), ephemeral=True)
+            # Create and save task using helper
+            success, result = create_and_save_task(task, ctx)
+            if success:
+                message = create_task_success_message(task, result)
+                await ctx.respond(message, ephemeral=True)
             else:
-                await ctx.respond(_("Failed to schedule task. Possible time collision or other error."), ephemeral=True)
+                await ctx.respond(result, ephemeral=True)
                 
         except Exception as e:
-            logger.error(f"Error executing schedule_yearly command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True) 
+            await handle_schedule_command_error(ctx, e, "schedule_yearly") 

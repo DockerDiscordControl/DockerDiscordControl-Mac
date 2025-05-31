@@ -9,105 +9,16 @@
 import discord
 from discord.ext import commands, tasks
 import asyncio
-import re
 from datetime import datetime, timedelta, timezone
-import traceback
 import os
 import logging
-import sys
 import time
-import json
-import random
-import pytz
-from typing import Dict, Any, List, Optional, Tuple, Union, Literal
-import hashlib
-import typing
-from functools import partial
+from typing import Dict, Any, List, Optional, Tuple, Union
 
-# Create a preliminary logger for the import phase
-_import_logger = logging.getLogger("discord.app_commands_import")
-
-# Conditional import of app_commands and Option
-DiscordOption = None  # Ensure DiscordOption is always defined
-app_commands_available = False
-
-try:
-    from discord import app_commands, Option as DiscordOptionImported
-    DiscordOption = DiscordOptionImported
-    app_commands_available = True
-    _import_logger.debug("Imported app_commands and Option directly from discord module (PyCord style)")
-except ImportError:
-    _import_logger.debug("Could not import app_commands and Option from discord directly. Trying discord.ext.commands.")
-    try:
-        from discord.ext.commands import app_commands
-        app_commands_available = True 
-        # Try to get Option from discord.commands if discord.ext.commands.app_commands exists
-        try:
-            from discord.commands import Option as DiscordOptionImported
-            DiscordOption = DiscordOptionImported
-            _import_logger.debug("Imported app_commands from discord.ext.commands and Option from discord.commands")
-        except ImportError:
-            # DiscordOption remains None if not found here
-            _import_logger.warning("Imported app_commands from discord.ext.commands, but discord.commands.Option not found.")
-    except ImportError:
-        _import_logger.warning("Could not import app_commands from discord.ext.commands either.")
-
-# If app_commands could not be imported from either location, create mock versions
-if not app_commands_available:
-    _import_logger.warning("Could not import app_commands module from any known location, creating mock version")
-    class AppCommandsMock:
-        def __init__(self):
-            pass
-        def command(self, *args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        def describe(self, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        def autocomplete(self, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        class Choice:
-            def __init__(self, name, value):
-                self.name = name
-                self.value = value
-    app_commands = AppCommandsMock() # Assign the mock to app_commands
-    _import_logger.debug("Created mock app_commands module as fallback")
-
-# If DiscordOption is still None (meaning it wasn't imported successfully), create a mock Option
-if DiscordOption is None:
-    _import_logger.warning("DiscordOption was not successfully imported, creating ActualMockOption as fallback.")
-    class ActualMockOption:
-        def __init__(self, actual_input_type: type, description: str = "", name: Optional[str] = None, autocomplete: Optional[Any] = None, **kwargs):
-            self._actual_input_type = actual_input_type # Store the original type like <class 'str'>
-            self.description = description
-            # self.name is used by PyCord's Option constructor when it processes this instance
-            self.name = name 
-            self.autocomplete = autocomplete
-            self.kwargs = kwargs
-
-            # Set the __name__ attribute on the instance to the name of the actual input type.
-            # This is for when the instance itself is passed to something expecting a __name__ (like the error showed).
-            if hasattr(actual_input_type, '__name__'):
-                self.__name__ = actual_input_type.__name__
-            else:
-                self.__name__ = str(actual_input_type) # Fallback
-
-            logger.debug(f"ActualMockOption INSTANCE created: holds _actual_input_type={self._actual_input_type}, instance __name__='{self.__name__}', desc='{self.description}'")
-
-        # This property is crucial. When PyCord's Option constructor (discord.commands.options.Option)
-        # receives an instance of our ActualMockOption (because it was used as a type hint),
-        # it will access `instance_of_our_mock.input_type`.
-        # This must return the *actual class* (e.g., <class 'str'>) for SlashCommandOptionType.from_datatype.
-        @property
-        def input_type(self) -> type:
-            return self._actual_input_type
-
-    DiscordOption = ActualMockOption
-    _import_logger.debug("Replaced DiscordOption with ActualMockOption (has .input_type property and instance.__name__) as fallback.")
+# Import app_commands using central utility
+from utils.app_commands_helper import get_app_commands, get_discord_option
+app_commands = get_app_commands()
+DiscordOption = get_discord_option()
 
 # Import our utility functions
 from utils.config_loader import load_config, DEFAULT_CONFIG
@@ -186,6 +97,14 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             save_server_order(self.ordered_server_names)
             logger.info(f"[Cog Init] Saved default server order: {self.ordered_server_names}")
         self.translations = get_translations()
+
+        # PERFORMANCE OPTIMIZATION: Initialisiere Embed-Cache für StatusHandlersMixin
+        self._embed_cache = {
+            'translated_terms': {},
+            'box_elements': {},
+            'last_cache_clear': datetime.now(timezone.utc)
+        }
+        self._EMBED_CACHE_TTL = 300  # 5 Minuten Cache für Embed-Elemente
 
         logger.info("Ensuring other potential loops (if any residues from old structure) are cancelled.")
         if hasattr(self, 'heartbeat_send_loop') and self.heartbeat_send_loop.is_running(): self.heartbeat_send_loop.cancel()
@@ -296,18 +215,52 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             
         if tasks_to_run:
             logger.info(f"Direct Cog Periodic Edit Loop: Attempting to run {len(tasks_to_run)} message edit tasks.")
-            results = await asyncio.gather(*tasks_to_run, return_exceptions=True)
-            success_count = sum(1 for r in results if r is True)
-            not_found_count = sum(1 for r in results if r is False) 
-            error_count = sum(1 for r in results if isinstance(r, Exception))
-            none_results_count = sum(1 for r in results if r is None) 
+            
+            # PERFORMANCE OPTIMIZATION: Batch-Processing mit Prioritäten
+            # Teile Tasks in kleinere Batches auf, um Discord Rate Limits zu vermeiden
+            BATCH_SIZE = 5  # Maximal 5 gleichzeitige Message-Updates
+            BATCH_DELAY = 0.2  # 200ms Pause zwischen Batches
+            
+            total_tasks = len(tasks_to_run)
+            success_count = 0
+            not_found_count = 0
+            error_count = 0
+            none_results_count = 0
+            
+            # Verarbeite Tasks in Batches
+            for i in range(0, total_tasks, BATCH_SIZE):
+                batch = tasks_to_run[i:i + BATCH_SIZE]
+                batch_num = (i // BATCH_SIZE) + 1
+                total_batches = (total_tasks + BATCH_SIZE - 1) // BATCH_SIZE
+                
+                logger.debug(f"Processing batch {batch_num}/{total_batches} with {len(batch)} tasks")
+                
+                try:
+                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
+                    
+                    # Sammle Ergebnisse
+                    for result in batch_results:
+                        if result is True:
+                            success_count += 1
+                        elif result is False:
+                            not_found_count += 1
+                        elif isinstance(result, Exception):
+                            error_count += 1
+                        else:
+                            none_results_count += 1
+                    
+                    # Kurze Pause zwischen Batches (außer beim letzten)
+                    if i + BATCH_SIZE < total_tasks:
+                        await asyncio.sleep(BATCH_DELAY)
+                        
+                except Exception as e:
+                    logger.error(f"Error processing batch {batch_num}: {e}", exc_info=True)
+                    error_count += len(batch)
 
-            logger.info(f"Direct Cog Periodic message update finished. Total tasks: {len(tasks_to_run)}. Success: {success_count}, NotFound: {not_found_count}, Errors: {error_count}, NoEmbed: {none_results_count}")
+            logger.info(f"Direct Cog Periodic message update finished. Total tasks: {total_tasks}. Success: {success_count}, NotFound: {not_found_count}, Errors: {error_count}, NoEmbed: {none_results_count}")
+            
             if error_count > 0:
-                for i, res in enumerate(results):
-                    if isinstance(res, Exception):
-                        logger.error(f"Direct Cog Periodic Edit Loop: Error during message update task (Index {i}): {type(res).__name__} - {res}")
-            await asyncio.sleep(0.5) 
+                logger.warning(f"Encountered {error_count} errors during batch processing")
         else:
             logger.info("Direct Cog Periodic message update check: No messages were due for update in any channel.")
 
@@ -634,27 +587,27 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
 
     async def send_initial_status(self):
         """Sends the initial status messages after a short delay."""
-        logger.info("[INITIAL STATUS] Starting send_initial_status... [DDC-INIT]")
+        logger.info("Starting send_initial_status")
         initial_send_successful = False
         try:
             await self.bot.wait_until_ready() # Ensure bot is ready before fetching channels
             
             # Directly update the cache before waiting for loops
-            logger.info("[INITIAL STATUS] Running status update once to populate the cache... [DDC-INIT]")
+            logger.info("Running status update once to populate the cache")
             await self.status_update_loop()
-            logger.info("[INITIAL STATUS] Initial cache update completed. [DDC-INIT]")
+            logger.info("Initial cache update completed")
 
             # --- Added: 5-second delay ---
             wait_seconds = 5
-            logger.info(f"[INITIAL STATUS] Waiting {wait_seconds} seconds for cache loop to potentially run... [DDC-INIT]")
+            logger.info(f"Waiting {wait_seconds} seconds for cache loop to potentially run")
             await asyncio.sleep(wait_seconds)
-            logger.info("[INITIAL STATUS] Wait finished. Proceeding with initial status send. [DDC-INIT]")
+            logger.info("Wait finished. Proceeding with initial status send")
             # --- End delay ---
 
             current_config = self.config
             initial_post_channels = []
             channel_permissions = current_config.get('channel_permissions', {})
-            logger.debug("[INITIAL STATUS] Searching for channels with initial posting enabled... [DDC-INIT]")
+            logger.debug("Searching for channels with initial posting enabled")
 
             tasks = []
             for channel_id_str, data in channel_permissions.items():
@@ -679,41 +632,41 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                             try:
                                 channel = await self.bot.fetch_channel(channel_id)
                                 if isinstance(channel, discord.TextChannel):
-                                    logger.info(f"[INITIAL STATUS] Found channel '{channel.name}' ({channel_id}) for initial post in '{mode_to_regenerate}' mode. [DDC-INIT]")
+                                    logger.info(f"Found channel '{channel.name}' ({channel_id}) for initial post in '{mode_to_regenerate}' mode")
                                     tasks.append(self._regenerate_channel(channel, mode_to_regenerate))
                                 else:
-                                    logger.warning(f"[INITIAL STATUS] Channel ID {channel_id} is not a text channel. [DDC-INIT]")
+                                    logger.warning(f"Channel ID {channel_id} is not a text channel")
                             except discord.NotFound:
-                                logger.warning(f"[INITIAL STATUS] Channel ID {channel_id} not found. [DDC-INIT]")
+                                logger.warning(f"Channel ID {channel_id} not found")
                             except discord.Forbidden:
-                                logger.warning(f"[INITIAL STATUS] Missing permissions to fetch channel {channel_id}. [DDC-INIT]")
+                                logger.warning(f"Missing permissions to fetch channel {channel_id}")
                             except Exception as e:
-                                logger.error(f"[INITIAL STATUS] Error processing channel {channel_id}: {e} [DDC-INIT]")
+                                logger.error(f"Error processing channel {channel_id}: {e}")
                 # else: post_initial is False or missing
 
             if tasks:
-                logger.info(f"[INITIAL STATUS] Regenerating {len(tasks)} channels... [DDC-INIT]")
+                logger.info(f"Regenerating {len(tasks)} channels")
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 # Check results for errors
                 error_count = 0
                 for result in results:
                     if isinstance(result, Exception):
                         error_count += 1
-                        logger.error(f"[INITIAL STATUS] Error during channel regeneration: {result} [DDC-INIT]")
+                        logger.error(f"Error during channel regeneration: {result}")
                 if error_count == 0:
                     initial_send_successful = True
-                    logger.info("[INITIAL STATUS] All initial channel regenerations completed successfully. [DDC-INIT]")
+                    logger.info("All initial channel regenerations completed successfully")
                 else:
-                    logger.warning(f"[INITIAL STATUS] Completed initial channel regenerations with {error_count} errors. [DDC-INIT]")
+                    logger.warning(f"Completed initial channel regenerations with {error_count} errors")
                 await asyncio.sleep(0.2) # Sleep if regenerations happened
             else:
-                logger.info("[INITIAL STATUS] No channels configured for initial posting. [DDC-INIT]")
+                logger.info("No channels configured for initial posting")
 
         except Exception as e:
-            logger.error(f"[INITIAL STATUS] Critical error during send_initial_status: {e} [DDC-INIT]", exc_info=True)
+            logger.error(f"Critical error during send_initial_status: {e}", exc_info=True)
         finally:
             self.initial_messages_sent = True
-            logger.info(f"[INITIAL STATUS] send_initial_status finished. Initial messages sent flag set to True. Success: {initial_send_successful} [DDC-INIT]")
+            logger.info(f"send_initial_status finished. Initial messages sent flag set to True. Success: {initial_send_successful}")
             # ... (Logging at the end remains the same)
 
     # _update_single_message WAS REMOVED
@@ -1103,35 +1056,53 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             if not servers:
                 logger.debug("No servers configured, status cache update skipped")
                 return
-                
-            # Process each server
-            update_count = 0
-            error_count = 0
+            
+            # PERFORMANCE OPTIMIZATION: Parallele Verarbeitung mit Batch-Größe
+            BATCH_SIZE = 3  # Maximal 3 gleichzeitige Docker-Abfragen
             now = datetime.now(timezone.utc)
             
-            for server_conf in servers:
-                try:
-                    # Get status information
-                    status_data = await self.get_status(server_conf)
-                    
-                    # If status check was successful and not an exception
-                    if not isinstance(status_data, Exception):
-                        # Extract display name from the returned status data
-                        display_name = status_data[0] if isinstance(status_data, tuple) and len(status_data) > 0 else server_conf.get('name', server_conf.get('docker_name'))
+            update_count = 0
+            error_count = 0
+            
+            # Verarbeite Server in Batches für bessere Performance
+            for i in range(0, len(servers), BATCH_SIZE):
+                batch = servers[i:i + BATCH_SIZE]
+                
+                # Erstelle Tasks für diesen Batch
+                async def process_server(server_conf):
+                    try:
+                        status_data = await self.get_status(server_conf)
                         
-                        # Update cache with timestamp
-                        self.status_cache[display_name] = {
-                            'data': status_data,
-                            'timestamp': now
-                        }
+                        if not isinstance(status_data, Exception):
+                            display_name = status_data[0] if isinstance(status_data, tuple) and len(status_data) > 0 else server_conf.get('name', server_conf.get('docker_name'))
+                            
+                            # Update cache with timestamp
+                            self.status_cache[display_name] = {
+                                'data': status_data,
+                                'timestamp': now
+                            }
+                            return True
+                        else:
+                            logger.error(f"Error getting status for {server_conf.get('name', server_conf.get('docker_name'))}: {status_data}")
+                            return False
+                    except Exception as e:
+                        logger.exception(f"Exception during status update for {server_conf.get('name', server_conf.get('docker_name'))}: {e}")
+                        return False
+                
+                # Führe Batch parallel aus
+                batch_tasks = [process_server(server_conf) for server_conf in batch]
+                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+                
+                # Sammle Ergebnisse
+                for result in batch_results:
+                    if result is True:
                         update_count += 1
                     else:
-                        # Log error but don't remove from cache (keep stale data)
-                        logger.error(f"Error getting status for {server_conf.get('name', server_conf.get('docker_name'))}: {status_data}")
                         error_count += 1
-                except Exception as e:
-                    logger.exception(f"Exception during status update for {server_conf.get('name', server_conf.get('docker_name'))}: {e}")
-                    error_count += 1
+                
+                # Kurze Pause zwischen Batches
+                if i + BATCH_SIZE < len(servers):
+                    await asyncio.sleep(0.1)
             
             # Set last cache update timestamp
             self.last_cache_update = time.time()
@@ -1149,15 +1120,15 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         await self.bot.wait_until_ready()
 
     # --- Inactivity Check Loop ---
-    @tasks.loop(minutes=1)
+    @tasks.loop(seconds=30)
     async def inactivity_check_loop(self):
-        """Checks for channel inactivity and regenerates messages if configured."""
+        """Checks for inactive channels and regenerates messages if needed."""
         try:
             if not self.initial_messages_sent:
                 logger.debug("Inactivity check loop: Initial messages not sent yet, skipping.")
                 return
 
-            logger.info("=== RECREATE DEBUG: Inactivity check loop running ===")
+            logger.debug("Inactivity check loop running")
             
             # Get channel permissions from config
             channel_permissions = self.config.get('channel_permissions', {})
@@ -1166,68 +1137,61 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             now_utc = datetime.now(timezone.utc)
             
             # Log tracked channels for debugging
-            logger.info(f"RECREATE DEBUG: Currently tracking {len(self.last_channel_activity)} channels for activity")
-            for ch_id, last_time in self.last_channel_activity.items():
-                logger.info(f"RECREATE DEBUG: Channel {ch_id} - Last activity: {last_time} (UTC)")
+            logger.debug(f"Currently tracking {len(self.last_channel_activity)} channels for activity")
             
             # Check each channel we've previously registered activity for
             for channel_id, last_activity_time in list(self.last_channel_activity.items()):
                 channel_config = channel_permissions.get(str(channel_id))
                 
-                logger.info(f"RECREATE DEBUG: Checking channel {channel_id}")
+                logger.debug(f"Checking channel {channel_id}")
                 
                 # Skip channels with no config
                 if not channel_config:
-                    logger.info(f"RECREATE DEBUG: Channel {channel_id} has no specific config, skipping")
+                    logger.debug(f"Channel {channel_id} has no specific config, skipping")
                     continue
                     
                 recreate_enabled = channel_config.get('recreate_messages_on_inactivity', default_recreate_enabled)
                 timeout_minutes = channel_config.get('inactivity_timeout_minutes', default_timeout_minutes)
                 
-                logger.info(f"RECREATE DEBUG: Channel {channel_id} - recreate_enabled={recreate_enabled}, timeout_minutes={timeout_minutes}")
+                logger.debug(f"Channel {channel_id} - recreate_enabled={recreate_enabled}, timeout_minutes={timeout_minutes}")
                 
                 if not recreate_enabled or timeout_minutes <= 0:
-                    logger.info(f"RECREATE DEBUG: Channel {channel_id} - Recreate disabled or timeout <= 0, skipping")
+                    logger.debug(f"Channel {channel_id} - Recreate disabled or timeout <= 0, skipping")
                     continue
                     
                 # Calculate time since last activity
                 time_since_last_activity = now_utc - last_activity_time
                 inactivity_threshold = timedelta(minutes=timeout_minutes)
                 
-                logger.info(f"RECREATE DEBUG: Channel {channel_id} - Time since last activity: {time_since_last_activity}, threshold: {inactivity_threshold}")
+                logger.debug(f"Channel {channel_id} - Time since last activity: {time_since_last_activity}, threshold: {inactivity_threshold}")
                 
                 # Check if we've passed the inactivity threshold
                 if time_since_last_activity >= inactivity_threshold:
-                    logger.info(f"RECREATE DEBUG: Channel {channel_id} has been inactive for {time_since_last_activity}, threshold is {inactivity_threshold}. Attempting regeneration.")
+                    logger.info(f"Channel {channel_id} has been inactive for {time_since_last_activity}, attempting regeneration")
                     
                     try:
                         # Fetch the Discord channel
                         channel = await self.bot.fetch_channel(channel_id)
                         
                         if not isinstance(channel, discord.TextChannel):
-                            logger.warning(f"RECREATE DEBUG: Channel {channel_id} is not a text channel, removing from activity tracking.")
+                            logger.warning(f"Channel {channel_id} is not a text channel, removing from activity tracking")
                             del self.last_channel_activity[channel_id]
                             continue
                             
-                        logger.info(f"RECREATE DEBUG: Successfully fetched channel {channel.name} ({channel_id})")
+                        logger.debug(f"Successfully fetched channel {channel.name} ({channel_id})")
                             
                         # Check the last message to confirm inactivity
                         history = await channel.history(limit=3).flatten()
                         
-                        logger.info(f"RECREATE DEBUG: Found {len(history)} messages in recent history for channel {channel.name}")
-                        
-                        # Log the recent messages for debugging
-                        for i, msg in enumerate(history):
-                            is_bot = msg.author.id == self.bot.user.id
-                            logger.info(f"RECREATE DEBUG: Message {i+1}: Author={msg.author} (IsBot={is_bot}), Content={msg.content[:30]}..., ID={msg.id}")
+                        logger.debug(f"Found {len(history)} messages in recent history for channel {channel.name}")
                         
                         # If there are no messages at all, regenerate
                         if not history:
-                            logger.info(f"RECREATE DEBUG: No messages found in channel {channel.name} ({channel_id}). Regenerating.")
+                            logger.info(f"No messages found in channel {channel.name} ({channel_id}). Regenerating")
                             # Determine the mode: control or status
                             has_control_permission = _channel_has_permission(channel_id, 'control', self.config)
                             regeneration_mode = 'control' if has_control_permission else 'status'
-                            logger.info(f"RECREATE DEBUG: Regeneration mode for empty channel: {regeneration_mode}")
+                            logger.debug(f"Regeneration mode for empty channel: {regeneration_mode}")
                             await self._regenerate_channel(channel, regeneration_mode)
                             self.last_channel_activity[channel_id] = now_utc
                             continue
@@ -1237,45 +1201,45 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                             # If the last message is from our bot, we should not regenerate
                             # Reset the timer instead, since the bot was the last to post
                             self.last_channel_activity[channel_id] = now_utc
-                            logger.info(f"RECREATE DEBUG: Last message in channel {channel.name} ({channel_id}) is from the bot, resetting inactivity timer.")
+                            logger.debug(f"Last message in channel {channel.name} ({channel_id}) is from the bot, resetting inactivity timer")
                             continue
                             
                         # The last message is not from our bot, regenerate
-                        logger.info(f"RECREATE DEBUG: Last message in channel {channel.name} is NOT from our bot. Will regenerate.")
+                        logger.info(f"Last message in channel {channel.name} is NOT from our bot. Will regenerate")
                         
                         # Determine the mode: control or status
                         has_control_permission = _channel_has_permission(channel_id, 'control', self.config)
                         has_status_permission = _channel_has_permission(channel_id, 'serverstatus', self.config)
                         
-                        logger.info(f"RECREATE DEBUG: Channel permissions - control: {has_control_permission}, status: {has_status_permission}")
+                        logger.debug(f"Channel permissions - control: {has_control_permission}, status: {has_status_permission}")
                         
                         regeneration_mode = 'control' if has_control_permission else 'status'
                         
                         # Force the mode to be valid
                         if not has_control_permission and not has_status_permission:
-                            logger.warning(f"RECREATE DEBUG: Channel {channel.name} has neither control nor status permissions. Cannot regenerate.")
+                            logger.warning(f"Channel {channel.name} has neither control nor status permissions. Cannot regenerate")
                             continue
                         
-                        logger.info(f"RECREATE DEBUG: Will regenerate with mode: {regeneration_mode}")
+                        logger.debug(f"Will regenerate with mode: {regeneration_mode}")
                         
                         # Attempt channel regeneration
                         await self._regenerate_channel(channel, regeneration_mode)
                         
                         # Reset activity timer
                         self.last_channel_activity[channel_id] = now_utc
-                        logger.info(f"RECREATE DEBUG: Channel {channel.name} ({channel_id}) regenerated due to inactivity. Mode: {regeneration_mode}")
+                        logger.info(f"Channel {channel.name} ({channel_id}) regenerated due to inactivity. Mode: {regeneration_mode}")
                         
                     except discord.NotFound:
-                        logger.warning(f"RECREATE DEBUG: Channel {channel_id} not found. Removing from activity tracking.")
+                        logger.warning(f"Channel {channel_id} not found. Removing from activity tracking")
                         del self.last_channel_activity[channel_id]
                     except discord.Forbidden:
-                        logger.error(f"RECREATE DEBUG: Cannot access channel {channel_id} (forbidden). Continuing tracking but regeneration not possible.")
+                        logger.error(f"Cannot access channel {channel_id} (forbidden). Continuing tracking but regeneration not possible")
                     except Exception as e:
-                        logger.error(f"RECREATE DEBUG: Error during inactivity check for channel {channel_id}: {e}", exc_info=True)
+                        logger.error(f"Error during inactivity check for channel {channel_id}: {e}", exc_info=True)
                 else:
-                    logger.info(f"RECREATE DEBUG: Channel {channel_id} - Inactivity threshold not reached yet.")
+                    logger.debug(f"Channel {channel_id} - Inactivity threshold not reached yet")
         except Exception as e:
-            logger.error(f"RECREATE DEBUG: Error in inactivity_check_loop: {e}", exc_info=True)
+            logger.error(f"Error in inactivity_check_loop: {e}", exc_info=True)
 
     @inactivity_check_loop.before_loop
     async def before_inactivity_check_loop(self):

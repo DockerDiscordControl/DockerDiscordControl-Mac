@@ -126,6 +126,32 @@ $RECYCLE.BIN/
 *.swp
 *.tmp
 
+# DDC Specific - Backup files and directories
+backup_*/
+backup_*.tar.gz
+backup_*.zip
+
+# DDC Specific - Performance and optimization documentation (generated)
+PERFORMANCE_*.md
+PERFORMANCE_OPTIMIZATIONS_*.md
+OPTIMIZATION_SUMMARY.md
+
+# DDC Specific - Runtime generated files
+*.pid
+*.sock
+*.lock
+
+# DDC Specific - Cache and temporary files
+.cache/
+cache/
+tmp/
+temp/
+
+# DDC Specific - Development and testing
+test_output/
+debug_output/
+performance_logs/
+
 # Keep empty log and config directories with .gitkeep
 !logs/.gitkeep
 !config/.gitkeep 

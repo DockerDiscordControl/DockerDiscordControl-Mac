@@ -20,6 +20,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from pathlib import Path
 from discord.ext import commands
+import signal
 
 # Set the environment variable for direct token access
 if 'DDC_DISCORD_SKIP_TOKEN_LOCK' not in os.environ:
@@ -27,8 +28,8 @@ if 'DDC_DISCORD_SKIP_TOKEN_LOCK' not in os.environ:
 
 # Import custom modules
 from utils.config_loader import load_config, save_config, get_server_config, update_server_config
-from utils.logging_utils import setup_logger, refresh_debug_status
-from utils.config_cache import init_config_cache, get_cached_config  # Performance optimization
+from utils.logging_utils import setup_logger, refresh_debug_status, setup_all_loggers
+from utils.config_cache import init_config_cache, get_cached_config
 # Import the internal translation system
 from cogs.translation_manager import _, get_translations
 # Import scheduler service
@@ -38,52 +39,12 @@ from utils.action_logger import log_user_action, user_action_logger
 # Import cogs helper functions
 from cogs.control_helpers import container_select
 
+# Import app_commands using central utility
+from utils.app_commands_helper import initialize_app_commands
+app_commands, DiscordOption, app_commands_available = initialize_app_commands()
+
 # Preliminary logger for the import phase
 _import_logger = logging.getLogger("discord.app_commands_import")
-
-# Conditional import of app_commands (similar to control_helpers.py)
-try:
-    # First try to import app_commands directly from discord (discord.py style)
-    from discord import app_commands
-    _import_logger.debug("Imported app_commands directly from discord module (discord.py style)")
-except ImportError:
-    try:
-        # Then try to import app_commands from discord.ext.commands (for older versions)
-        from discord.ext.commands import app_commands
-        _import_logger.debug("Imported app_commands from discord.ext.commands")
-    except ImportError:
-        # Fallback: Create an empty app_commands module
-        _import_logger.warning("Could not import app_commands module, creating mock version")
-        class AppCommandsMock:
-            def __init__(self):
-                pass
-                
-            def command(self, *args, **kwargs):
-                def decorator(func):
-                    return func
-                return decorator
-                
-            def describe(self, **kwargs):
-                def decorator(func):
-                    return func
-                return decorator
-                
-            def autocomplete(self, **kwargs):
-                def decorator(func):
-                    return func
-                return decorator
-                
-            class Choice:
-                def __init__(self, name, value):
-                    self.name = name
-                    self.value = value
-                    
-            class Range:
-                def __init__(self, *args, **kwargs):
-                    pass
-                
-        app_commands = AppCommandsMock()
-        _import_logger.debug("Created mock app_commands module as fallback")
 
 # Direct access to config_manager, if available, for better token decryption
 try:

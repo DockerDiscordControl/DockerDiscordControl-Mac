@@ -4,7 +4,7 @@ import sys
 import os
 import time
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Constants for logging
 DEFAULT_LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -360,3 +360,35 @@ class LoggerMixin:
 
         self.logger = logging.getLogger(logger_name)
         super().__init__(*args, **kwargs) 
+
+def get_logger(name: str, level: Optional[int] = None) -> logging.Logger:
+    """
+    Zentrale Funktion für Logger-Erstellung mit konsistenter Konfiguration.
+    Ersetzt alle direkten logging.getLogger() Aufrufe im Projekt.
+    
+    Args:
+        name: Logger-Name (z.B. 'ddc.module_name')
+        level: Optional log level override
+        
+    Returns:
+        Konfigurierter Logger
+    """
+    # Verwende setup_logger für konsistente Konfiguration
+    if level is None:
+        # Bestimme Level basierend auf Debug-Modus
+        level = logging.DEBUG if is_debug_mode_enabled() else logging.INFO
+    
+    return setup_logger(name, level=level)
+
+# Convenience-Funktionen für häufig verwendete Logger
+def get_module_logger(module_name: str) -> logging.Logger:
+    """Erstellt Logger für Module mit ddc. Prefix"""
+    return get_logger(f'ddc.{module_name}')
+
+def get_import_logger() -> logging.Logger:
+    """Erstellt Logger für Import-Operationen"""
+    return get_logger('discord.app_commands_import')
+
+def get_action_logger() -> logging.Logger:
+    """Erstellt Logger für User-Actions"""
+    return get_logger('user_actions') 

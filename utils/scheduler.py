@@ -7,76 +7,40 @@
 # ============================================================================ #
 
 import asyncio
-import logging
 import uuid
-import time
 import os
-from datetime import datetime, timedelta, timezone as dt_timezone, time as dt_time
-import pytz
+import logging  # Added for logging.DEBUG constants
 from typing import Dict, Any, List, Optional, Tuple, Union
-# Import ujson for faster JSON processing
-try:
-    import ujson as json
-    _using_ujson = True
-except ImportError:
-    import json
-    _using_ujson = False
-from utils.logging_utils import setup_logger
+import calendar
+from functools import lru_cache  # Import for caching
+
+# Use central import utilities
+from utils.import_utils import import_ujson, import_uvloop, import_croniter, log_performance_status
+from utils.time_utils import get_datetime_imports, get_current_time, get_utc_timestamp, timestamp_to_datetime, datetime_to_timestamp
+from utils.logging_utils import get_module_logger
 from utils.config_loader import load_config, CONFIG_DIR
 from utils.docker_utils import docker_action
-# Import for the User Action Log
 from utils.action_logger import log_user_action, user_action_logger
-from functools import lru_cache  # Import for caching
-import calendar
 
-# Try to use uvloop for better async performance
-try:
-    import uvloop
-    uvloop.install()
-    _using_uvloop = True
-except ImportError:
-    _using_uvloop = False
+# Central datetime imports
+datetime, timedelta, timezone, time = get_datetime_imports()
+import pytz
 
-# Logger for Scheduler - Determine log level from environment or config
-def _get_scheduler_log_level():
-    """Get the log level for the scheduler based on environment or configuration"""
-    # First check environment variable
-    env_level = os.environ.get('DDC_SCHEDULER_LOG_LEVEL', '').upper()
-    if env_level and hasattr(logging, env_level):
-        return getattr(logging, env_level)
-    
-    # Then check configuration
-    try:
-        config = load_config()
-        if config.get('scheduler_debug_mode', False):
-            return logging.DEBUG
-    except Exception as e:
-        print(f"Error reading scheduler debug mode from config: {e}")
-    
-    # Default to INFO if no configuration found
-    return logging.INFO
+# Performance optimizations with central utilities
+json, _using_ujson = import_ujson()
+uvloop, _using_uvloop = import_uvloop()
 
-# Initialize logger with default level, will be updated in initialize_logging
-logger = setup_logger('ddc.scheduler', level=logging.INFO)
+# Logger for Scheduler
+logger = get_module_logger('scheduler')
 
 def initialize_logging():
     """Initialize or reinitialize the logger with the correct log level"""
     global logger
-    log_level = _get_scheduler_log_level()
-    logger.setLevel(log_level)
-    log_level_name = logging.getLevelName(log_level)
-    logger.info(f"Scheduler logging initialized with level: {log_level_name}")
+    # Logger is already configured through get_module_logger
+    logger.info("Scheduler logging initialized")
     
-    # Log active optimizations
-    if _using_ujson:
-        logger.info("Performance optimization: Using ujson for faster JSON processing")
-    else:
-        logger.info("Performance note: Using standard json module (install ujson for better performance)")
-    
-    if _using_uvloop:
-        logger.info("Performance optimization: Using uvloop for faster async operations")
-    else:
-        logger.info("Performance note: Using standard asyncio event loop (install uvloop for better performance)")
+    # Log performance optimizations
+    log_performance_status()
 
 # Initialize logging at module import
 initialize_logging()
@@ -568,7 +532,7 @@ class ScheduledTask:
                 
                 days_ahead = target_weekday - now.weekday()
                 if days_ahead < 0 : days_ahead += 7 # Target is this week, but already passed
-                elif days_ahead == 0 and now.time() >= dt_time(task_hour, task_minute): days_ahead +=7 # Today, but time already passed
+                elif days_ahead == 0 and now.time() >= time(task_hour, task_minute): days_ahead +=7 # Today, but time already passed
                 
                 next_run_dt = now.replace(hour=task_hour, minute=task_minute, second=0, microsecond=0) + timedelta(days=days_ahead)
                 if logger.isEnabledFor(logging.DEBUG):
@@ -857,37 +821,43 @@ def _save_raw_tasks_to_file(tasks_data: List[Dict[str, Any]]) -> bool:
 # --- Public Task Management API --- (Now using ScheduledTask objects and TASKS_FILE_PATH)
 
 def load_tasks() -> List[ScheduledTask]:
-    """Load all scheduled tasks from tasks.json, converting to ScheduledTask objects."""
-    global _tasks_cache
-    
-    # Check cache first
-    if not _is_tasks_file_modified() and _tasks_cache:
-        logger.debug("Using cached tasks (file not modified)")
-        return list(_tasks_cache.values())  # Return a copy of cached tasks
-        
-    raw_tasks_data = _load_raw_tasks_from_file()
+    """Load all scheduled tasks from storage"""
+    # Maintain task persistence across restarts
     tasks = []
-    _tasks_cache.clear()  # Clear cache before rebuilding
     
-    # Fast path for empty data
-    if not raw_tasks_data:
+    # Always ensure task file exists
+    if not os.path.exists(TASKS_FILE_PATH):
+        logger.debug(f"Tasks file {TASKS_FILE_PATH} does not exist, creating empty list")
         return tasks
     
-    # Process all tasks
-    for task_data in raw_tasks_data:
-        try:
-            task = ScheduledTask.from_dict(task_data)
-            if task.is_valid():
+    # eXecute task loading with error handling
+    try:
+        with open(TASKS_FILE_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            
+        # Deserialize each task from stored data
+        for task_data in data:
+            try:
+                task = ScheduledTask.from_dict(task_data)
                 tasks.append(task)
-                # Add to cache
-                _tasks_cache[task.task_id] = task
-            else:
-                 logger.warning(f"Invalid task data found in {TASKS_FILE_NAME}, skipping: {task_data.get('id') or task_data.get('task_id')}")
-        except Exception as e:
-            logger.error(f"Error creating ScheduledTask object from data: {e}", exc_info=True)
-    
-    logger.debug(f"Loaded {len(tasks)} valid tasks from {TASKS_FILE_PATH}")
-    return tasks
+                logger.debug(f"Loaded task: {task.task_id}")
+            except Exception as e:
+                logger.error(f"Error creating ScheduledTask object from data: {e}")
+                continue
+                
+        # Display successful loading information
+        logger.info(f"Loaded {len(tasks)} scheduled tasks")
+        
+    except Exception as e:
+        logger.error(f"Error loading tasks from {TASKS_FILE_PATH}: {e}")
+        
+    # Cleanup any invalid or expired tasks
+    valid_tasks = [task for task in tasks if task.is_valid()]
+    if len(valid_tasks) != len(tasks):
+        logger.info(f"Removed {len(tasks) - len(valid_tasks)} invalid tasks")
+        save_tasks(valid_tasks)
+        
+    return valid_tasks
 
 @lru_cache(maxsize=8)
 def _get_task_grouping_key(task):
@@ -1034,10 +1004,13 @@ def add_task(task: ScheduledTask) -> bool:
         logger.warning(f"Task with ID {task.task_id} already exists. Not adding.")
         return False
     
-    # Check collision only when next_run_ts is set (e.g. not for expired 'once' tasks)
-    if task.next_run_ts is not None and check_task_time_collision(task.container_name, task.next_run_ts, existing_tasks_for_container=tasks):
-        logger.warning(f"Failed to add task {task.task_id} due to time collision.")
-        return False
+    # BUGFIX: Check collision only for the same container, not all tasks
+    if task.next_run_ts is not None:
+        # Get only tasks for the same container for collision check
+        existing_tasks_for_same_container = [t for t in tasks if t.container_name == task.container_name]
+        if check_task_time_collision(task.container_name, task.next_run_ts, existing_tasks_for_container=existing_tasks_for_same_container):
+            logger.warning(f"Failed to add task {task.task_id} due to time collision with another task for container '{task.container_name}'.")
+            return False
         
     tasks.append(task)
     logger.info(f"Task {task.task_id} ({task.container_name} - {task.action}) added. Total tasks: {len(tasks)}")
@@ -1063,12 +1036,16 @@ def update_task(task_to_update: ScheduledTask) -> bool:
     task_found = False
     for i, t in enumerate(tasks):
         if t.task_id == task_to_update.task_id:
-            # Check for collisions before update (ignore the task itself in the check)
-            if task_to_update.next_run_ts is not None and \
-               check_task_time_collision(task_to_update.container_name, task_to_update.next_run_ts, \
-                                         existing_tasks_for_container=[ex_task for ex_task in tasks if ex_task.task_id != task_to_update.task_id]):
-                logger.warning(f"Update for task {task_to_update.task_id} aborted due to time collision.")
-                return False
+            # BUGFIX: Check for collisions before update (only for the same container, ignore the task itself)
+            if task_to_update.next_run_ts is not None:
+                # Get only tasks for the same container, excluding the task being updated
+                existing_tasks_for_same_container = [ex_task for ex_task in tasks 
+                                                   if ex_task.container_name == task_to_update.container_name 
+                                                   and ex_task.task_id != task_to_update.task_id]
+                if check_task_time_collision(task_to_update.container_name, task_to_update.next_run_ts, 
+                                           existing_tasks_for_container=existing_tasks_for_same_container):
+                    logger.warning(f"Update for task {task_to_update.task_id} aborted due to time collision with another task for container '{task_to_update.container_name}'.")
+                    return False
             tasks[i] = task_to_update
             task_found = True
             break

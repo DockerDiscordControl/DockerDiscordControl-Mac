@@ -8,27 +8,15 @@ import discord
 from datetime import datetime
 from typing import List, Dict, Union, Optional, Callable, Any
 from functools import lru_cache
-import time # Added for custom caching
+import time
 
-# Import app_commands if available, otherwise create a mock (already in place)
-_ac_import_logger = logging.getLogger("discord.app_commands_import_ac")
-try:
-    from discord import app_commands # For app_commands.Choice
-    _ac_import_logger.debug("Imported app_commands from discord for Autocomplete Handlers")
-except ImportError:
-    # This case should ideally be covered by the main bot's app_commands mock if discord.py is very old.
-    # For typical PyCord usage, this import should succeed.
-    _ac_import_logger.error("Failed to import app_commands from discord. Autocomplete might not work correctly.")
-    # Fallback to a dummy Choice if needed, though this indicates a setup issue.
-    class Choice:
-        def __init__(self, name: str, value: Union[str, int, float]):
-            self.name = name
-            self.value = value
-    app_commands = type('AppCommandsModule', (object,), {'Choice': Choice})
+# Import app_commands using central utility
+from utils.app_commands_helper import get_app_commands
+app_commands = get_app_commands()
 
 # Import utility functions
 from utils.config_loader import load_config
-from utils.config_cache import get_cached_config, get_cached_servers  # Performance optimization
+from utils.config_cache import get_cached_config, get_cached_servers
 from utils.logging_utils import setup_logger
 from utils.scheduler import (
     VALID_CYCLES, VALID_ACTIONS, DAYS_OF_WEEK,
@@ -41,7 +29,7 @@ logger = setup_logger('ddc.autocomplete_handlers', level=logging.DEBUG)
 # --- Custom Cache for schedule_container_select ---
 _schedule_container_cache = None
 _schedule_container_cache_timestamp = 0
-_SCHEDULE_CONTAINER_CACHE_TTL = 60  # Cache TTL in seconds (e.g., 60 seconds)
+_SCHEDULE_CONTAINER_CACHE_TTL = 60
 
 # --- Container Selection Autocomplete ---
 async def schedule_container_select(

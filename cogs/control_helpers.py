@@ -7,62 +7,22 @@
 # ============================================================================ #
 
 import discord
-import logging
 from typing import List, Dict, Any, Optional, Union
-from datetime import datetime, timezone # Import datetime and timezone
 from utils.config_loader import load_config
 from utils.config_cache import get_cached_config, get_cached_servers, get_cached_guild_id  # Performance optimization
 from .translation_manager import _ # Import the translation function
-from utils.time_utils import format_datetime_with_timezone # Import time helper
+from utils.time_utils import format_datetime_with_timezone, get_datetime_imports # Import time helper
+from utils.logging_utils import get_module_logger
 
-# Create a preliminary logger for the import phase
-_import_logger = logging.getLogger("discord.app_commands_import")
+# Zentrale datetime-Imports
+datetime, timedelta, timezone, time = get_datetime_imports()
 
-# Conditional import of app_commands
-try:
-    # First try to import app_commands directly from discord (discord.py style)
-    from discord import app_commands
-    _import_logger.debug("Imported app_commands directly from discord module (discord.py style)")
-except ImportError:
-    try:
-        # Then try to import app_commands from discord.ext.commands (for older versions)
-        from discord.ext.commands import app_commands
-        _import_logger.debug("Imported app_commands from discord.ext.commands")
-    except ImportError:
-        # Fallback: Create an empty app_commands module
-        _import_logger.warning("Could not import app_commands module, creating mock version")
-        class AppCommandsMock:
-            def __init__(self):
-                pass
-                
-            def command(self, *args, **kwargs):
-                def decorator(func):
-                    return func
-                return decorator
-                
-            def describe(self, **kwargs):
-                def decorator(func):
-                    return func
-                return decorator
-                
-            def autocomplete(self, **kwargs):
-                def decorator(func):
-                    return func
-                return decorator
-                
-            class Choice:
-                def __init__(self, name, value):
-                    self.name = name
-                    self.value = value
-                    
-            class Range:
-                def __init__(self, *args, **kwargs):
-                    pass
-                
-        app_commands = AppCommandsMock()
-        _import_logger.debug("Created mock app_commands module as fallback")
+# Import app_commands using central utility
+from utils.app_commands_helper import get_app_commands
+app_commands = get_app_commands()
 
-logger = logging.getLogger('ddc.control_helpers')
+# Logger mit zentraler Utility
+logger = get_module_logger('control_helpers')
 
 def get_guild_id() -> Union[List[int], None]:
     """Loads the guild ID from the configuration."""

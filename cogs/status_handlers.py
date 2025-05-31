@@ -37,6 +37,51 @@ class StatusHandlersMixin:
     Handles retrieving, processing, and displaying Docker container statuses.
     """
     
+    def _get_cached_translations(self, lang: str) -> dict:
+        """Cached translations für bessere Performance."""
+        cache_key = f"translations_{lang}"
+        now = datetime.now(timezone.utc)
+        
+        # Cache-Invalidierung alle 5 Minuten
+        if (now - self._embed_cache['last_cache_clear']).total_seconds() > self._EMBED_CACHE_TTL:
+            self._embed_cache['translated_terms'].clear()
+            self._embed_cache['box_elements'].clear()
+            self._embed_cache['last_cache_clear'] = now
+            logger.debug("Cleared embed element cache due to TTL expiration")
+        
+        if cache_key not in self._embed_cache['translated_terms']:
+            self._embed_cache['translated_terms'][cache_key] = {
+                'online_text': _("**Online**"),
+                'offline_text': _("**Offline**"),
+                'cpu_text': _("CPU"),
+                'ram_text': _("RAM"),
+                'uptime_text': _("Uptime"),
+                'detail_denied_text': _("Detailed status not allowed."),
+                'last_update_text': _("Last update")
+            }
+            logger.debug(f"Cached translations for language: {lang}")
+        
+        return self._embed_cache['translated_terms'][cache_key]
+    
+    def _get_cached_box_elements(self, display_name: str, BOX_WIDTH: int = 28) -> dict:
+        """Cached box elements für bessere Performance."""
+        cache_key = f"box_{display_name}_{BOX_WIDTH}"
+        
+        if cache_key not in self._embed_cache['box_elements']:
+            header_text = f"── {display_name} "
+            max_name_len = BOX_WIDTH - 4
+            if len(header_text) > max_name_len:
+                header_text = header_text[:max_name_len-1] + "… "
+            padding_width = max(1, BOX_WIDTH - 1 - len(header_text))
+            
+            self._embed_cache['box_elements'][cache_key] = {
+                'header_line': f"┌{header_text}{'─' * padding_width}",
+                'footer_line': f"└{'─' * (BOX_WIDTH - 1)}"
+            }
+            logger.debug(f"Cached box elements for: {display_name}")
+        
+        return self._embed_cache['box_elements'][cache_key]
+    
     async def get_status(self, server_config: Dict[str, Any]) -> Union[Tuple[str, bool, str, str, str, bool], Exception]:
         """
         Gets the status of a server.
@@ -193,10 +238,12 @@ class StatusHandlersMixin:
         # --- Determine status_result (from cache or live) ---
         if cached_entry:
             cache_age = (now - cached_entry['timestamp']).total_seconds()
-            if cache_age < self.cache_ttl_seconds:
-                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s)")
+            # PERFORMANCE OPTIMIZATION: Für Toggle-Operationen verwende längere Cache-TTL
+            effective_ttl = self.cache_ttl_seconds * 2 if allow_toggle else self.cache_ttl_seconds
+            if cache_age < effective_ttl:
+                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s, TTL: {effective_ttl}s)")
             else:
-                logger.debug(f"[_GEN_EMBED] Using STALE cached status for '{display_name}' (age: {cache_age:.1f}s > TTL: {self.cache_ttl_seconds}s)")
+                logger.debug(f"[_GEN_EMBED] Using STALE cached status for '{display_name}' (age: {cache_age:.1f}s > TTL: {effective_ttl}s)")
             status_result = cached_entry['data']
         else:
             logger.debug(f"[_GEN_EMBED] No cache entry for '{display_name}'. Fetching status directly...")
@@ -235,31 +282,28 @@ class StatusHandlersMixin:
             # --- Valid Data: Generate Box Embed ---
             display_name_from_status, running, cpu, ram, uptime, details_allowed = status_result # 'running' is updated here
             status_color = 0x00b300 if running else 0xe74c3c
-            online_text = _("**Online**")
-            offline_text = _("**Offline**")
+            
+            # PERFORMANCE OPTIMIZATION: Verwende gecachte Übersetzungen
+            cached_translations = self._get_cached_translations(lang)
+            online_text = cached_translations['online_text']
+            offline_text = cached_translations['offline_text']
             status_text = online_text if running else offline_text
             current_emoji = "🟢" if running else "🔴"
 
             # Check if we should always collapse
             is_expanded = self.expanded_states.get(display_name, False) and not force_collapse
 
-            # Translated terms - get once only
-            cpu_text = _("CPU")
-            ram_text = _("RAM")
-            uptime_text = _("Uptime")
-            detail_denied_text = _("Detailed status not allowed.")
+            # PERFORMANCE OPTIMIZATION: Verwende gecachte Übersetzungen
+            cpu_text = cached_translations['cpu_text']
+            ram_text = cached_translations['ram_text']
+            uptime_text = cached_translations['uptime_text']
+            detail_denied_text = cached_translations['detail_denied_text']
             
-            # Optimized box generation with prepared strings
+            # PERFORMANCE OPTIMIZATION: Verwende gecachte Box-Elemente
             BOX_WIDTH = 28
-            
-            # Prepare box header
-            header_text = f"── {display_name} "
-            max_name_len = BOX_WIDTH - 4
-            if len(header_text) > max_name_len:
-                header_text = header_text[:max_name_len-1] + "… "
-            padding_width = max(1, BOX_WIDTH - 1 - len(header_text))
-            header_line = f"┌{header_text}{'─' * padding_width}"
-            footer_line = f"└{'─' * (BOX_WIDTH - 1)}"
+            cached_box = self._get_cached_box_elements(display_name, BOX_WIDTH)
+            header_line = cached_box['header_line']
+            footer_line = cached_box['footer_line']
             
             # String builder for description - more efficient than multiple concatenations
             description_parts = [
@@ -304,7 +348,7 @@ class StatusHandlersMixin:
 
             embed = discord.Embed(description=description, color=status_color)
             now_footer = datetime.now(timezone.utc)
-            last_update_text = _("Last update")
+            last_update_text = cached_translations['last_update_text']
             current_time = format_datetime_with_timezone(now_footer, timezone_str, fmt="%H:%M:%S")
             
             # Insert timestamp above the code block

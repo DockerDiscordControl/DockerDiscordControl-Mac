@@ -15,48 +15,60 @@ logger = setup_logger('ddc.docker_utils', level=logging.INFO)
 # Docker client pool for improved performance
 _docker_client = None
 _client_last_used = 0
-_CLIENT_TIMEOUT = 60  # seconds before client is recycled
+_CLIENT_TIMEOUT = 300  # Erhöht von 60 auf 300 Sekunden (5 Minuten)
+_client_ping_cache = 0  # Cache für Ping-Ergebnisse
+_PING_CACHE_TTL = 120   # Ping-Cache für 2 Minuten
 
 async def get_docker_client():
     """
     Returns a Docker client from the pool or creates a new one.
-    Attempts direct instantiation with detailed logging and ping.
+    Optimized with reduced ping frequency and longer client lifetime.
     """
-    global _docker_client, _client_last_used
+    global _docker_client, _client_last_used, _client_ping_cache
     
     current_time = time.time()
     
     # Check if we have a client and if it's still valid
     if _docker_client is not None:
-        # If client was used recently, return it
+        # If client was used recently, return it without ping
         if current_time - _client_last_used < _CLIENT_TIMEOUT:
             _client_last_used = current_time
-            return _docker_client
-        
-        # If client hasn't been used recently, close it
-        try:
-            await asyncio.to_thread(_docker_client.close)
-            logger.info("Closed stale Docker client due to timeout.")
-        except Exception as e:
-            logger.debug(f"Error closing stale Docker client: {e}")
-        _docker_client = None # Ensure client is reset
+            
+            # Only ping if cache is expired
+            if current_time - _client_ping_cache > _PING_CACHE_TTL:
+                try:
+                    await asyncio.to_thread(_docker_client.ping)
+                    _client_ping_cache = current_time
+                    logger.debug("Docker client ping successful (cached)")
+                except Exception as e:
+                    logger.warning(f"Docker client ping failed, recreating client: {e}")
+                    _docker_client = None
+                    _client_ping_cache = 0
+            
+            if _docker_client is not None:
+                return _docker_client
     
-    logger.info(f"Attempting to create DockerClient with base_url='unix:///var/run/docker.sock'. Current DOCKER_HOST env: {os.environ.get('DOCKER_HOST')}")
-    try:
-        client_instance = await asyncio.to_thread(docker.DockerClient, base_url='unix:///var/run/docker.sock', timeout=10) # Increased timeout
-        logger.info("Successfully created DockerClient instance.")
-        
-        # Try a simple command to confirm connection
-        logger.info("Attempting to ping Docker daemon...")
-        await asyncio.to_thread(client_instance.ping)
-        logger.info("Successfully pinged Docker daemon.")
-        
-        _docker_client = client_instance
-        _client_last_used = current_time
-        return _docker_client
-    except Exception as e:
-        logger.error(f"Error creating (or pinging) DockerClient with base_url='unix:///var/run/docker.sock': {e}", exc_info=True)
-        return None
+    # Create new client if needed
+    if _docker_client is None:
+        logger.info(f"Creating new DockerClient with base_url='unix:///var/run/docker.sock'. Current DOCKER_HOST env: {os.environ.get('DOCKER_HOST')}")
+        try:
+            client_instance = await asyncio.to_thread(docker.DockerClient, base_url='unix:///var/run/docker.sock', timeout=15) # Erhöht von 10 auf 15
+            logger.info("Successfully created DockerClient instance.")
+            
+            # Initial ping for new client
+            logger.debug("Performing initial ping for new Docker client...")
+            await asyncio.to_thread(client_instance.ping)
+            logger.info("Successfully pinged Docker daemon.")
+            
+            _docker_client = client_instance
+            _client_last_used = current_time
+            _client_ping_cache = current_time
+            return _docker_client
+        except Exception as e:
+            logger.error(f"Error creating (or pinging) DockerClient with base_url='unix:///var/run/docker.sock': {e}", exc_info=True)
+            return None
+    
+    return _docker_client
 
 async def release_docker_client():
     """Closes the current Docker client if idle for too long."""
