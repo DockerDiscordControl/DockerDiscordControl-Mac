@@ -180,6 +180,41 @@ class ConfigManager:
                     logger.debug("ConfigManager initialized with Gevent support")
                 else:
                     logger.debug("ConfigManager initialized with standard threading")
+                
+                # Check file permissions on startup
+                self._check_startup_permissions()
+    
+    def _check_startup_permissions(self) -> None:
+        """
+        Check file permissions on startup and log warnings.
+        """
+        try:
+            permission_issues = []
+            
+            # Check permissions for all configuration files
+            permission_results = self.check_all_permissions()
+            
+            for file_path, (has_permission, error_msg) in permission_results.items():
+                if not has_permission:
+                    permission_issues.append(error_msg)
+            
+            if permission_issues:
+                logger.warning("=" * 60)
+                logger.warning("CONFIGURATION FILE PERMISSION ISSUES DETECTED!")
+                logger.warning("The following files have incorrect permissions:")
+                for issue in permission_issues:
+                    logger.warning(f"  - {issue}")
+                logger.warning("=" * 60)
+                logger.warning("This will prevent saving configuration changes.")
+                logger.warning("To fix, run these commands on your server:")
+                logger.warning("  docker exec ddc chmod 644 /app/config/*.json")
+                logger.warning("Or on the host:")
+                logger.warning("  chmod 644 /mnt/user/appdata/dockerdiscordcontrol/config/*.json")
+                logger.warning("  chown nobody:users /mnt/user/appdata/dockerdiscordcontrol/config/*.json")
+                logger.warning("=" * 60)
+                
+        except Exception as e:
+            logger.error(f"Error checking startup permissions: {e}")
     
     def subscribe_to_changes(self, callback_fn) -> None:
         """
@@ -302,9 +337,59 @@ class ConfigManager:
             logger.error(f"Error reading {file_path}: {e}")
             return None
     
+    def _check_file_permissions(self, file_path: str) -> Tuple[bool, str]:
+        """
+        Check if a file has proper read/write permissions.
+        
+        Returns:
+            Tuple of (has_permissions, error_message)
+        """
+        try:
+            # Check if file exists
+            if not os.path.exists(file_path):
+                return True, ""  # File doesn't exist yet, will be created
+            
+            # Check read permission
+            if not os.access(file_path, os.R_OK):
+                return False, f"No read permission for {file_path}"
+            
+            # Check write permission
+            if not os.access(file_path, os.W_OK):
+                return False, f"No write permission for {file_path}"
+            
+            # Check if parent directory is writable (for creating backup files)
+            parent_dir = os.path.dirname(file_path)
+            if not os.access(parent_dir, os.W_OK):
+                return False, f"No write permission for directory {parent_dir}"
+            
+            return True, ""
+            
+        except Exception as e:
+            return False, f"Error checking permissions for {file_path}: {str(e)}"
+    
+    def check_all_permissions(self) -> Dict[str, Tuple[bool, str]]:
+        """
+        Check permissions for all configuration files.
+        
+        Returns:
+            Dict mapping file paths to (has_permission, error_message) tuples
+        """
+        results = {}
+        for file_path in [self.BOT_CONFIG_FILE, self.DOCKER_CONFIG_FILE, 
+                          self.CHANNELS_CONFIG_FILE, self.WEB_CONFIG_FILE]:
+            results[file_path] = self._check_file_permissions(file_path)
+        return results
+
     def _save_json_file(self, file_path: str, data: Dict[str, Any]) -> bool:
         """Save data to a JSON file atomically, with error handling."""
         try:
+            # Check permissions first
+            has_permission, error_msg = self._check_file_permissions(file_path)
+            if not has_permission:
+                logger.error(f"PERMISSION ERROR: {error_msg}")
+                logger.error(f"Please fix file permissions. Run: sudo chmod 644 {file_path}")
+                return False
+            
             # Ensure the directory exists
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             
@@ -594,6 +679,14 @@ class ConfigManager:
             channels_config = {k: config.get(k) for k in DEFAULT_CHANNELS_CONFIG}
             web_config = {k: config.get(k) for k in DEFAULT_WEB_CONFIG}
             
+            # DEBUG: Log what's being saved to docker_config
+            print(f"[CONFIG-DEBUG] Saving docker_config with {len(docker_config.get('servers', []))} servers")
+            logger.info(f"[CONFIG] Saving docker_config with servers: {docker_config.get('servers', [])}")
+            if docker_config.get('servers'):
+                for server in docker_config['servers']:
+                    print(f"[CONFIG-DEBUG] Server '{server.get('docker_name')}' allowed_actions: {server.get('allowed_actions', [])}")
+                    logger.info(f"[CONFIG] Server '{server.get('docker_name')}' allowed_actions: {server.get('allowed_actions', [])}")
+            
             # Handle password change if needed
             if new_password:
                 # Hash the new password
@@ -612,6 +705,7 @@ class ConfigManager:
             # Save each component file
             success = True
             errors = []
+            permission_errors = []
             
             for filename, data, section_name in [
                 (self.BOT_CONFIG_FILE, bot_config, "bot"),
@@ -619,9 +713,26 @@ class ConfigManager:
                 (self.CHANNELS_CONFIG_FILE, channels_config, "channels"),
                 (self.WEB_CONFIG_FILE, web_config, "web")
             ]:
+                # Check permissions before attempting to save
+                has_permission, perm_error = self._check_file_permissions(filename)
+                if not has_permission:
+                    permission_errors.append(f"{section_name}: {perm_error}")
+                
                 if not self._save_json_file(filename, data):
                     success = False
                     errors.append(f"Failed to save {section_name} config to {filename}")
+            
+            # Log permission errors prominently
+            if permission_errors:
+                logger.error("=" * 60)
+                logger.error("CONFIGURATION SAVE FAILED - PERMISSION ERRORS:")
+                for error in permission_errors:
+                    logger.error(f"  - {error}")
+                logger.error("=" * 60)
+                logger.error("FIX: Run these commands on your server:")
+                logger.error("  chmod 644 /app/config/*.json")
+                logger.error("  chown nobody:users /app/config/*.json")
+                logger.error("=" * 60)
             
             if success:
                 # Update cache

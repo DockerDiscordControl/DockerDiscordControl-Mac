@@ -334,7 +334,21 @@ pause
 @auth.login_required 
 def config_page():
     logger = current_app.logger
-    config = load_config()
+    
+    # CRITICAL FIX: Use cached config instead of loading directly
+    # This ensures we see the same config that was just saved
+    from utils.config_cache import get_cached_config
+    config = get_cached_config()
+    
+    # Force a fresh reload if requested
+    force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+    if force_refresh:
+        logger.info("Force refresh requested - reloading configuration from files")
+        from utils.config_cache import init_config_cache
+        fresh_config = load_config()
+        init_config_cache(fresh_config)
+        config = fresh_config
+    
     now = datetime.now().strftime("%Y%m%d%H%M%S") # datetime is now imported
     live_containers_list, cache_error = get_docker_containers_live(logger)
     
@@ -353,22 +367,35 @@ def config_page():
     logger.debug(f"Selected servers in config: {config.get('selected_servers', [])}")
     logger.debug(f"Active container names for task form: {active_container_names}")
 
-    # Format cache timestamp for display
+    # Get configured timezone first
+    timezone_str = config.get('timezone', 'Europe/Berlin')
+    
+    # Format cache timestamp for display using configured timezone
     last_cache_update = docker_cache.get('timestamp')
     formatted_timestamp = "Never"
     if last_cache_update:
-        formatted_timestamp = datetime.fromtimestamp(last_cache_update).strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            # Convert timestamp to configured timezone
+            tz = pytz.timezone(timezone_str)
+            dt = datetime.fromtimestamp(last_cache_update, tz=tz)
+            formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+        except Exception as e:
+            logger.error(f"Error formatting timestamp with timezone: {e}")
+            # Fallback to system timezone
+            formatted_timestamp = datetime.fromtimestamp(last_cache_update).strftime('%Y-%m-%d %H:%M:%S')
     
     # Try to get the timestamp from the global_timestamp field, which is used in the newer code
     if formatted_timestamp == "Never" and docker_cache.get('global_timestamp'):
         try:
-            formatted_timestamp = datetime.fromtimestamp(docker_cache['global_timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+            # Convert timestamp to configured timezone
+            tz = pytz.timezone(timezone_str)
+            dt = datetime.fromtimestamp(docker_cache['global_timestamp'], tz=tz)
+            formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S %Z')
             logger.debug(f"Using global_timestamp for container list update time: {formatted_timestamp}")
         except Exception as e:
             logger.error(f"Error formatting global_timestamp: {e}")
     
     # Load schedules for display on the main page
-    timezone_str = config.get('timezone', 'Europe/Berlin')
     tasks_list = load_tasks()
     
     # Sort by next execution time
@@ -466,6 +493,7 @@ def config_page():
 @auth.login_required
 def save_config_api():
     logger = current_app.logger
+    print("[CONFIG-DEBUG] save_config_api endpoint called")
     logger.info("save_config_api (blueprint) called...")
     result = {'success': False, 'message': 'An unexpected error occurred.'}
     
@@ -498,8 +526,49 @@ def save_config_api():
             else:
                 cleaned_form_data[key] = value
         
+        # Load current config to check for critical changes
+        current_config = load_config()
+        
         # Perform configuration processing
-        processed_data, success, message = process_config_form(cleaned_form_data, load_config())
+        processed_data, success, message = process_config_form(cleaned_form_data, current_config)
+        
+        # Check file permissions before attempting to save
+        if success:
+            from utils.config_manager import get_config_manager
+            config_manager = get_config_manager()
+            permission_results = config_manager.check_all_permissions()
+            
+            permission_errors = []
+            for file_path, (has_permission, error_msg) in permission_results.items():
+                if not has_permission:
+                    permission_errors.append(error_msg)
+            
+            if permission_errors:
+                logger.error(f"Cannot save configuration due to permission errors: {permission_errors}")
+                result = {
+                    'success': False,
+                    'message': 'Cannot save configuration: File permission errors. Check server logs for details.',
+                    'permission_errors': permission_errors
+                }
+                flash('Error: Configuration files are not writable. Please check file permissions.', 'danger')
+                return jsonify(result) if request.headers.get('X-Requested-With') == 'XMLHttpRequest' else redirect(url_for('.config_page'))
+        
+        # Check if critical settings that require cache invalidation have changed
+        critical_settings_changed = False
+        if success:
+            # Check for language change
+            old_language = current_config.get('language', 'en')
+            new_language = processed_data.get('language', 'en')
+            if old_language != new_language:
+                logger.info(f"Language changed from '{old_language}' to '{new_language}' - cache invalidation required")
+                critical_settings_changed = True
+            
+            # Check for timezone change
+            old_timezone = current_config.get('timezone', 'Europe/Berlin')
+            new_timezone = processed_data.get('timezone', 'Europe/Berlin')
+            if old_timezone != new_timezone:
+                logger.info(f"Timezone changed from '{old_timezone}' to '{new_timezone}' - cache invalidation required")
+                critical_settings_changed = True
         
         # Process server order separately for immediate effect
         if success and server_order_utils_available:
@@ -519,6 +588,44 @@ def save_config_api():
         if success:
             # Save configuration
             save_config(processed_data)
+            
+            # Invalidate caches if critical settings changed
+            if critical_settings_changed:
+                try:
+                    # Invalidate ConfigManager cache
+                    from utils.config_manager import get_config_manager
+                    config_manager = get_config_manager()
+                    config_manager.invalidate_cache()
+                    logger.info("ConfigManager cache invalidated due to critical settings change")
+                    
+                    # Invalidate config cache
+                    from utils.config_cache import get_config_cache
+                    config_cache = get_config_cache()
+                    config_cache.clear()
+                    logger.info("Config cache cleared due to critical settings change")
+                    
+                    # Force reload of configuration in config cache
+                    from utils.config_cache import init_config_cache
+                    fresh_config = load_config()
+                    init_config_cache(fresh_config)
+                    logger.info("Config cache reinitialized with fresh configuration")
+                    
+                    # Clear translation manager cache if language changed
+                    if old_language != new_language:
+                        try:
+                            from cogs.translation_manager import translation_manager
+                            # Clear the translation cache to force reload with new language
+                            if hasattr(translation_manager, '_'):
+                                translation_manager._.cache_clear()
+                            # Reset cached language to force fresh lookup
+                            if hasattr(translation_manager, '_cached_language'):
+                                delattr(translation_manager, '_cached_language')
+                            logger.info(f"Translation manager cache cleared for language change: {old_language} -> {new_language}")
+                        except Exception as e:
+                            logger.warning(f"Could not clear translation manager cache: {e}")
+                    
+                except Exception as e:
+                    logger.error(f"Error invalidating caches: {e}")
             
             # Update scheduler logging settings if they have changed
             try:
@@ -554,10 +661,16 @@ def save_config_api():
             
             logger.info(f"Configuration saved successfully via API: {message}")
             log_user_action("SAVE", "Configuration", source="Web UI Blueprint")
+            
+            # Add note about cache invalidation if critical settings changed
+            if critical_settings_changed:
+                message += " Critical settings changed - caches have been invalidated. Changes should take effect immediately."
+            
             result = {
                 'success': True, 
                 'message': message or 'Configuration saved successfully.',
-                'config_files': saved_files if config_split_enabled else []
+                'config_files': saved_files if config_split_enabled else [],
+                'critical_settings_changed': critical_settings_changed
             }
             flash(result['message'], 'success')
         else:
@@ -584,7 +697,9 @@ def save_config_api():
 # Use direct auth decorator
 @auth.login_required
 def discord_bot_setup():
-    config = load_config()
+    # Use cached config for consistency
+    from utils.config_cache import get_cached_config
+    config = get_cached_config()
     return render_template('discord_bot_setup.html', config=config)
 
 @main_bp.route('/download_monitor_script', methods=['POST'])
@@ -697,7 +812,20 @@ def refresh_containers():
         
         # Get the timestamp for the response
         timestamp = docker_cache.get('global_timestamp', time.time())
-        formatted_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Format timestamp with configured timezone
+        from utils.config_cache import get_cached_config
+        config = get_cached_config()
+        timezone_str = config.get('timezone', 'Europe/Berlin')
+        
+        try:
+            tz = pytz.timezone(timezone_str)
+            dt = datetime.fromtimestamp(timestamp, tz=tz)
+            formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+        except Exception as e:
+            logger.error(f"Error formatting timestamp with timezone: {e}")
+            # Fallback to system timezone
+            formatted_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
         
         return jsonify({
             'success': True,

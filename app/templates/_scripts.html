@@ -4,6 +4,7 @@
     let hasUnsavedChanges = false;
     let unsavedChangesAlert = null; // Will be assigned in DOMContentLoaded
     let configForm = null;          // Will be assigned in DOMContentLoaded
+    let userHasInteracted = false;  // CRITICAL: Make this global so all event listeners can access it
 
     // --- NEW: Variable and function for Restart Alert ---
     let restartRequiredAlert = null;
@@ -19,14 +20,19 @@
     // --- End Restart Alert --- 
 
     function showUnsavedChangesAlert(requiresRestart = false) {
+        console.log(`showUnsavedChangesAlert called with requiresRestart: ${requiresRestart}`);
+        
         // Ensures that the element was found
         if (!unsavedChangesAlert) unsavedChangesAlert = document.getElementById('unsaved-changes-alert');
         
         // Only display if not yet displayed and element exists
         if (unsavedChangesAlert && !hasUnsavedChanges) {
             unsavedChangesAlert.classList.remove('force-hide');
+            unsavedChangesAlert.style.display = 'flex'; // CRITICAL: Also set display style!
             hasUnsavedChanges = true;
-            console.log('Unsaved changes alert is displayed (via classList.remove)');
+            console.log('Unsaved changes alert is displayed (via classList.remove and style.display)');
+        } else {
+            console.log(`Alert not shown - unsavedChangesAlert: ${!!unsavedChangesAlert}, hasUnsavedChanges: ${hasUnsavedChanges}`);
         }
         
         // Set the restart flag if required
@@ -43,7 +49,8 @@
         if (unsavedChangesAlert) {
             // Primarily add class to hide it
             unsavedChangesAlert.classList.add('force-hide'); 
-            console.log('Unsaved changes alert is hidden (via classList.add)');
+            unsavedChangesAlert.style.display = 'none'; // Also set display style for consistency
+            console.log('Unsaved changes alert is hidden (via classList.add and style.display)');
             
             // Optional: Bootstrap close() can be used if the element
             // should be completely removed from the DOM after closing.
@@ -70,26 +77,66 @@
     // --- End Global Function Checkbox Toggle ---
 
     document.addEventListener('DOMContentLoaded', function() {
+        console.log("=== PAGE LOAD DEBUG ===");
+        
+        // Check if language and timezone fields exist
+        const languageField = document.getElementById('language');
+        const timezoneField = document.getElementById('timezone');
+        
+        console.log("Language field found:", !!languageField);
+        if (languageField) {
+            console.log("Language field value:", languageField.value);
+            console.log("Language field name:", languageField.name);
+            console.log("Language field classes:", languageField.className);
+            console.log("Language field data-immediate-effect:", languageField.getAttribute('data-immediate-effect'));
+        }
+        
+        console.log("Timezone field found:", !!timezoneField);
+        if (timezoneField) {
+            console.log("Timezone field value:", timezoneField.value);
+            console.log("Timezone field name:", timezoneField.name);
+            console.log("Timezone field classes:", timezoneField.className);
+            console.log("Timezone field data-immediate-effect:", timezoneField.getAttribute('data-immediate-effect'));
+        }
+        
+        // Check form
+        configForm = document.getElementById('config-form');
+        console.log("Config form found:", !!configForm);
+        
+        // Check unsaved changes alert
+        unsavedChangesAlert = document.getElementById('unsaved-changes-alert');
+        console.log("Unsaved changes alert found:", !!unsavedChangesAlert);
+        
+        console.log("=== END PAGE LOAD DEBUG ===");
+        
         // Tooltip initialization
         initializeTooltips(document.body); // Initializes all tooltips on the page
 
         // --- Assignment of elements for Unsaved Changes (here, as DOM is ready) ---
+        // CRITICAL: Assign to global variables, don't redeclare with const/let
         unsavedChangesAlert = document.getElementById('unsaved-changes-alert');
         restartRequiredAlert = document.getElementById('restart-required-alert'); // Assign here
         configForm = document.getElementById('config-form');
         
         // Ensure that alerts are hidden when the page loads
         if (unsavedChangesAlert) {
+            unsavedChangesAlert.classList.add('force-hide');
             unsavedChangesAlert.style.display = 'none';
             hasUnsavedChanges = false;
         }
         if (restartRequiredAlert) {
+            restartRequiredAlert.classList.add('force-hide');
             restartRequiredAlert.style.display = 'none';
             restartRequired = false;
         }
         
         // Mark that the page has been fully loaded
         document.body.setAttribute('data-page-loaded', 'true');
+        
+        // Register event for the first user click in the document
+        document.addEventListener('click', function() {
+            userHasInteracted = true;
+        }, {once: true});
         
         // Event listeners for Floating-Save and Floating-Discard buttons
         const floatingSaveButton = document.getElementById('floating-save-button');
@@ -107,29 +154,51 @@
                 }
             });
         }
+        
+        // CRITICAL FIX: Add event listener for main save button!
+        const mainSaveButton = document.getElementById('save-config-button');
+        if (mainSaveButton) {
+            console.log("Adding event listener to main save button");
+            mainSaveButton.addEventListener('click', function() {
+                console.log("Main save button clicked!");
+                saveConfigAjax();  // Call existing save function
+            });
+        } else {
+            console.error("Main save button not found!");
+        }
         // --- End Assignment ---
 
         // Event listener for changes in the form (now using global functions)
         if (configForm) {
-            // Set flag for user interaction
-            let userHasInteracted = false;
-            
-            // Register event for the first user click in the document
-            document.addEventListener('click', function() {
-                userHasInteracted = true;
-            }, {once: true});
-            
             // For the basic settings that require a restart (tokens, bot settings, etc.)
             const criticalElements = configForm.querySelectorAll('.requires-restart');
+            console.log(`Found ${criticalElements.length} elements with .requires-restart class`);
+            
             criticalElements.forEach(element => {
+                console.log(`Adding event listeners to: ${element.name || element.id} (${element.tagName})`);
+                
                 element.addEventListener('input', () => {
+                    console.log(`INPUT event on ${element.name || element.id}: ${element.value}`);
                     if (userHasInteracted && document.body.getAttribute('data-page-loaded') === 'true') {
-                        showUnsavedChangesAlert(true);
+                        // Check if this element has immediate effect
+                        const hasImmediateEffect = element.getAttribute('data-immediate-effect') === 'true';
+                        console.log(`Has immediate effect: ${hasImmediateEffect}`);
+                        showUnsavedChangesAlert(!hasImmediateEffect); // No restart required if immediate effect
+                        if (hasImmediateEffect) {
+                            console.log(`${element.name || element.id} changed - immediate effect, no restart required`);
+                        }
                     }
                 });
                 element.addEventListener('change', () => {
+                    console.log(`CHANGE event on ${element.name || element.id}: ${element.value}`);
                     if (userHasInteracted && document.body.getAttribute('data-page-loaded') === 'true') {
-                        showUnsavedChangesAlert(true);
+                        // Check if this element has immediate effect
+                        const hasImmediateEffect = element.getAttribute('data-immediate-effect') === 'true';
+                        console.log(`Has immediate effect: ${hasImmediateEffect}`);
+                        showUnsavedChangesAlert(!hasImmediateEffect); // No restart required if immediate effect
+                        if (hasImmediateEffect) {
+                            console.log(`${element.name || element.id} changed - immediate effect, no restart required`);
+                        }
                     }
                 });
             });
@@ -287,7 +356,7 @@
         // Rate-limiting variables
         let lastLogFetch = 0; // Timestamp of the last request
         let lastActionLogFetch = 0;
-        const MIN_FETCH_INTERVAL = 12000; // Minimum interval between requests in ms (12 seconds, increased from 3 seconds)
+        const MIN_FETCH_INTERVAL = 20000; // Minimum interval between requests in ms (20 seconds for safety buffer)
         let fetchInProgress = false; // Flag to prevent parallel requests
         let actionLogFetchInProgress = false;
 
@@ -402,10 +471,8 @@
                     return true;
                 } else if (response.status === 429) {
                     console.warn('Too many log requests, will retry later');
-                    // For 429, don't overwrite the cache, just show a warning in the UI
-                    if (logContentElement.innerHTML.indexOf('TOO MANY REQUESTS') === -1) {
-                        logContentElement.innerHTML += '<div class="log-warning mt-2">Rate limit reached, will retry later...</div>';
-                    }
+                    // For 429, don't overwrite the cache, just silently skip without showing a warning
+                    // The existing content remains displayed
                 } else {
                     rawLogsCache = `Error loading logs: ${response.statusText}`;
                     logContentElement.textContent = rawLogsCache; // Show error directly
@@ -449,10 +516,8 @@
                     return true;
                 } else if (response.status === 429) {
                     console.warn('Too many action log requests, will retry later');
-                    // For 429, don't overwrite, just show a warning
-                    if (actionLogContentElement.textContent.indexOf('TOO MANY REQUESTS') === -1) {
-                        actionLogContentElement.textContent += '\n\nRate limit reached, will retry later...';
-                    }
+                    // For 429, don't overwrite, just silently skip without showing a warning
+                    // The existing content remains displayed
                 } else {
                     actionLogContentElement.textContent = `Error loading action logs: ${response.statusText}`;
                 }
@@ -693,6 +758,153 @@
         }
         // --- END: Server Table Sorting ---
 
+        // --- Docker Container Refresh Button ---
+        const refreshDockerButton = document.getElementById('refresh-docker-list');
+        if (refreshDockerButton) {
+            refreshDockerButton.addEventListener('click', function() {
+                const button = this;
+                const icon = button.querySelector('i');
+                const statusText = document.getElementById('cache-status-text');
+                
+                // Show loading state
+                button.disabled = true;
+                if (icon) {
+                    icon.classList.add('bi-arrow-repeat-spin'); // Add spinning animation class
+                }
+                if (statusText) {
+                    statusText.textContent = 'Refreshing container list...';
+                    statusText.style.display = 'block';
+                }
+                
+                // Make request to refresh containers
+                fetch("{{ url_for('main_bp.refresh_containers') }}", {
+                    method: 'POST',
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Show success message briefly before reload
+                        if (statusText) {
+                            statusText.textContent = `Success! Found ${data.container_count} containers. Reloading...`;
+                        }
+                        // Reload the page after a short delay to show the success message
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1000);
+                    } else {
+                        // Show error message
+                        if (statusText) {
+                            statusText.textContent = 'Error: ' + (data.message || 'Failed to refresh container list');
+                        }
+                        // Re-enable button after error
+                        button.disabled = false;
+                        if (icon) {
+                            icon.classList.remove('bi-arrow-repeat-spin');
+                        }
+                        // Hide error message after 5 seconds
+                        setTimeout(() => {
+                            if (statusText) {
+                                statusText.style.display = 'none';
+                            }
+                        }, 5000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error refreshing containers:', error);
+                    if (statusText) {
+                        statusText.textContent = 'Error: Could not connect to server';
+                    }
+                    // Re-enable button after error
+                    button.disabled = false;
+                    if (icon) {
+                        icon.classList.remove('bi-arrow-repeat-spin');
+                    }
+                    // Hide error message after 5 seconds
+                    setTimeout(() => {
+                        if (statusText) {
+                            statusText.style.display = 'none';
+                        }
+                    }, 5000);
+                });
+            });
+        }
+        // --- END: Docker Container Refresh Button ---
+
+        // --- MANUAL FIX: Add event listeners for language and timezone fields ---
+        const languageFieldForEvents = document.getElementById('language');
+        const timezoneFieldForEvents = document.getElementById('timezone');
+        
+        if (languageFieldForEvents) {
+            console.log("Adding manual event listeners to language field");
+            
+            // Set userHasInteracted when field gets focus
+            languageFieldForEvents.addEventListener('focus', () => {
+                console.log("Language field focused - setting userHasInteracted = true");
+                userHasInteracted = true;
+            });
+            
+            // Add both input and change event listeners
+            languageFieldForEvents.addEventListener('input', () => {
+                console.log("Language field INPUT event triggered");
+                console.log("  userHasInteracted:", userHasInteracted);
+                console.log("  page loaded:", document.body.getAttribute('data-page-loaded'));
+                
+                // Always show alert for language changes
+                if (document.body.getAttribute('data-page-loaded') === 'true') {
+                    userHasInteracted = true; // Ensure it's set
+                    showUnsavedChangesAlert(false); // immediate effect, no restart required
+                }
+            });
+            
+            languageFieldForEvents.addEventListener('change', () => {
+                console.log("Language field CHANGE event triggered");
+                console.log("  userHasInteracted:", userHasInteracted);
+                console.log("  page loaded:", document.body.getAttribute('data-page-loaded'));
+                
+                // Always show alert for language changes
+                if (document.body.getAttribute('data-page-loaded') === 'true') {
+                    userHasInteracted = true; // Ensure it's set
+                    showUnsavedChangesAlert(false); // immediate effect, no restart required
+                }
+            });
+        }
+        
+        if (timezoneFieldForEvents) {
+            console.log("Adding manual event listeners to timezone field");
+            
+            // Set userHasInteracted when field gets focus
+            timezoneFieldForEvents.addEventListener('focus', () => {
+                console.log("Timezone field focused - setting userHasInteracted = true");
+                userHasInteracted = true;
+            });
+            
+            timezoneFieldForEvents.addEventListener('input', () => {
+                console.log("Timezone field INPUT event triggered");
+                console.log("  userHasInteracted:", userHasInteracted);
+                console.log("  page loaded:", document.body.getAttribute('data-page-loaded'));
+                
+                // Always show alert for timezone changes
+                if (document.body.getAttribute('data-page-loaded') === 'true') {
+                    userHasInteracted = true; // Ensure it's set
+                    showUnsavedChangesAlert(false); // immediate effect, no restart required
+                }
+            });
+            
+            timezoneFieldForEvents.addEventListener('change', () => {
+                console.log("Timezone field CHANGE event triggered");
+                console.log("  userHasInteracted:", userHasInteracted);
+                console.log("  page loaded:", document.body.getAttribute('data-page-loaded'));
+                
+                // Always show alert for timezone changes
+                if (document.body.getAttribute('data-page-loaded') === 'true') {
+                    userHasInteracted = true; // Ensure it's set
+                    showUnsavedChangesAlert(false); // immediate effect, no restart required
+                }
+            });
+        }
+        // --- END MANUAL FIX ---
+
     }); // End document.addEventListener('DOMContentLoaded', ...)
 
     // --- Helper Functions (Defined outside DOMContentLoaded) ---
@@ -845,36 +1057,88 @@
         const saveButton = document.getElementById('save-config-button');
         const notification = document.getElementById('save-notification');
         if (!form || !saveButton || !notification) {
+            console.error("Missing elements:", { form: !!form, saveButton: !!saveButton, notification: !!notification });
             return; // Cancel function
         }
         const originalButtonHtml = saveButton.innerHTML;
         
-        // Create a new FormData object directly WITHOUT loading the form
-        // as we will add the data manually
+        console.log("=== SAVE CONFIG DEBUG START ===");
+        
+        // Check language and timezone fields specifically
+        const languageField = document.getElementById('language');
+        const timezoneField = document.getElementById('timezone');
+        console.log("Language field:", languageField ? languageField.value : "NOT FOUND");
+        console.log("Timezone field:", timezoneField ? timezoneField.value : "NOT FOUND");
+        
+        // Create FormData and manually add all form elements
+        console.log("Creating FormData manually...");
         const formData = new FormData();
         
         // First add all normal form fields
         const formElements = form.querySelectorAll('input, select, textarea');
+        console.log(`Found ${formElements.length} form elements`);
+        
         formElements.forEach(element => {
             // Skip checkboxes with name="selected_servers", which we handle separately
             if (element.name === 'selected_servers') {
                 return;
             }
             
+            // Debug output for language and timezone fields
+            if (element.name === 'language' || element.name === 'timezone') {
+                console.log(`Processing ${element.name}: ${element.value}`);
+            }
+            
+            // Special debug for language field
+            if (element.id === 'language' || element.name === 'language') {
+                console.log(`LANGUAGE FIELD DEBUG:`);
+                console.log(`  ID: ${element.id}`);
+                console.log(`  Name: ${element.name}`);
+                console.log(`  Value: ${element.value}`);
+                console.log(`  Type: ${element.type}`);
+                console.log(`  TagName: ${element.tagName}`);
+            }
+            
             // For checkboxes, only set the value if they are checked
             if (element.type === 'checkbox') {
                 formData.set(element.name, element.checked ? (element.value || "1") : "0");
-            } 
+            }
+            // For radio buttons, only set if checked
+            else if (element.type === 'radio') {
+                if (element.checked) {
+                    formData.set(element.name, element.value);
+                }
+            }
             // For normal fields, simply use the value
             else if (element.name) {
                 formData.set(element.name, element.value);
+                // Extra debug for language/timezone
+                if (element.name === 'language' || element.name === 'timezone') {
+                    console.log(`ADDED TO FORMDATA: ${element.name} = ${element.value}`);
+                }
             }
         });
+        
+        console.log("=== MANUAL TEST END ===");
         
         // --- NEW: Capture server configuration --- 
         const serverTableBody = document.getElementById('docker-container-list');
         const orderedServerNames = [];
         const selectedServerNames = [];
+        
+        // MANUAL FIX: Add language and timezone fields manually if they're not in the form
+        const languageFieldReal = document.getElementById('language');
+        const timezoneFieldReal = document.getElementById('timezone');
+        
+        if (languageFieldReal) {
+            console.log(`MANUAL ADD (REAL): Adding language field: ${languageFieldReal.value}`);
+            formData.set('language', languageFieldReal.value);
+        }
+        
+        if (timezoneFieldReal) {
+            console.log(`MANUAL ADD (REAL): Adding timezone field: ${timezoneFieldReal.value}`);
+            formData.set('timezone', timezoneFieldReal.value);
+        }
         
         if (serverTableBody) {
             console.log("Server table found, processing server configuration...");
@@ -914,30 +1178,50 @@
                 
                 // Status action
                 const statusCheckbox = row.querySelector('input[name="allow_status_' + containerName + '"]');
-                if (statusCheckbox && statusCheckbox.checked) {
-                    actions.push("status");
-                    formData.append('allow_status_' + containerName, '1');
+                if (statusCheckbox) {
+                    if (statusCheckbox.checked) {
+                        actions.push("status");
+                        formData.append('allow_status_' + containerName, '1');
+                    } else {
+                        // CRITICAL: Also send '0' for unchecked boxes
+                        formData.append('allow_status_' + containerName, '0');
+                    }
                 }
                 
                 // Start action
                 const startCheckbox = row.querySelector('input[name="allow_start_' + containerName + '"]');
-                if (startCheckbox && startCheckbox.checked) {
-                    actions.push("start");
-                    formData.append('allow_start_' + containerName, '1');
+                if (startCheckbox) {
+                    if (startCheckbox.checked) {
+                        actions.push("start");
+                        formData.append('allow_start_' + containerName, '1');
+                    } else {
+                        // CRITICAL: Also send '0' for unchecked boxes
+                        formData.append('allow_start_' + containerName, '0');
+                    }
                 }
                 
                 // Stop action
                 const stopCheckbox = row.querySelector('input[name="allow_stop_' + containerName + '"]');
-                if (stopCheckbox && stopCheckbox.checked) {
-                    actions.push("stop");
-                    formData.append('allow_stop_' + containerName, '1');
+                if (stopCheckbox) {
+                    if (stopCheckbox.checked) {
+                        actions.push("stop");
+                        formData.append('allow_stop_' + containerName, '1');
+                    } else {
+                        // CRITICAL: Also send '0' for unchecked boxes
+                        formData.append('allow_stop_' + containerName, '0');
+                    }
                 }
                 
                 // Restart action
                 const restartCheckbox = row.querySelector('input[name="allow_restart_' + containerName + '"]');
-                if (restartCheckbox && restartCheckbox.checked) {
-                    actions.push("restart");
-                    formData.append('allow_restart_' + containerName, '1');
+                if (restartCheckbox) {
+                    if (restartCheckbox.checked) {
+                        actions.push("restart");
+                        formData.append('allow_restart_' + containerName, '1');
+                    } else {
+                        // CRITICAL: Also send '0' for unchecked boxes
+                        formData.append('allow_restart_' + containerName, '0');
+                    }
                 }
                 
                 console.log(`Container '${containerName}' allowed actions: ${actions.join(', ')}`);
@@ -1033,16 +1317,6 @@
             console.log("Channel permissions table not found");
         }
         
-        // Finally process the form commands from checkboxes & radio buttons manually
-        form.querySelectorAll('input[type="checkbox"], input[type="radio"]').forEach(checkbox => {
-            const name = checkbox.name;
-            // Skip selected_servers, which we have already handled manually
-            if (name && name !== 'selected_servers') {
-                // Explicitly set the value to '0' if not checked, or to '1' (or value) if checked
-                formData.set(name, checkbox.checked ? (checkbox.value || "1") : "0");
-            }
-        });
-
         // Add information about split configuration files
         formData.append('config_split_enabled', '1');
 
@@ -1085,6 +1359,14 @@
                  notification.style.display = 'block';
                  hideUnsavedChangesAlert();
                  hasUnsavedChanges = false; // Reset flag
+                 
+                 // Show special message if critical settings changed
+                 if (data.critical_settings_changed) {
+                     const criticalMessage = document.createElement('div');
+                     criticalMessage.className = 'small mt-2 text-success';
+                     criticalMessage.innerHTML = '<i class="bi bi-check-circle"></i> <strong>Critical settings updated:</strong> Language/timezone changes are now active without restart!';
+                     notification.appendChild(criticalMessage);
+                 }
                  
                  // Show restart message only if necessary and if changes 
                  // were actually made to critical elements
@@ -1300,4 +1582,296 @@
         });
     }
     
+    // Test function that can be called manually from browser console
+    window.testLanguageSave = function() {
+        console.log("=== MANUAL TEST START ===");
+        
+        const form = document.getElementById('config-form');
+        const languageField = document.getElementById('language');
+        const timezoneField = document.getElementById('timezone');
+        
+        console.log("Form found:", !!form);
+        console.log("Language field found:", !!languageField);
+        console.log("Timezone field found:", !!timezoneField);
+        
+        // Extended debug: Check if language field is inside the form
+        if (languageField && form) {
+            console.log("Language field is inside form:", form.contains(languageField));
+            console.log("Language field parent form:", languageField.form === form);
+        }
+        
+        if (languageField) {
+            console.log("Current language value:", languageField.value);
+            console.log("Setting language to 'de'...");
+            languageField.value = 'de';
+            console.log("New language value:", languageField.value);
+            
+            // Trigger change event
+            languageField.dispatchEvent(new Event('change', { bubbles: true }));
+            console.log("Change event dispatched");
+        }
+        
+        // Test form data collection using the SAME logic as saveConfigAjax
+        if (form) {
+            console.log("Creating FormData manually (same as saveConfigAjax)...");
+            const formData = new FormData();
+            
+            // First add all normal form fields (EXACT same logic as saveConfigAjax)
+            const formElements = form.querySelectorAll('input, select, textarea');
+            console.log(`Found ${formElements.length} form elements`);
+            
+            // Count elements by type
+            let inputCount = 0, selectCount = 0, textareaCount = 0;
+            let languageFound = false, timezoneFound = false;
+            
+            formElements.forEach(element => {
+                if (element.tagName === 'INPUT') inputCount++;
+                if (element.tagName === 'SELECT') selectCount++;
+                if (element.tagName === 'TEXTAREA') textareaCount++;
+                
+                if (element.name === 'language') languageFound = true;
+                if (element.name === 'timezone') timezoneFound = true;
+                
+                // Skip checkboxes with name="selected_servers", which we handle separately
+                if (element.name === 'selected_servers') {
+                    return;
+                }
+                
+                // Debug output for language and timezone fields
+                if (element.name === 'language' || element.name === 'timezone') {
+                    console.log(`Processing ${element.name}: ${element.value}`);
+                }
+                
+                // Special debug for language field
+                if (element.id === 'language' || element.name === 'language') {
+                    console.log(`LANGUAGE FIELD DEBUG:`);
+                    console.log(`  ID: ${element.id}`);
+                    console.log(`  Name: ${element.name}`);
+                    console.log(`  Value: ${element.value}`);
+                    console.log(`  Type: ${element.type}`);
+                    console.log(`  TagName: ${element.tagName}`);
+                }
+                
+                // For checkboxes, only set the value if they are checked
+                if (element.type === 'checkbox') {
+                    formData.set(element.name, element.checked ? (element.value || "1") : "0");
+                }
+                // For radio buttons, only set if checked
+                else if (element.type === 'radio') {
+                    if (element.checked) {
+                        formData.set(element.name, element.value);
+                    }
+                }
+                // For normal fields, simply use the value
+                else if (element.name) {
+                    formData.set(element.name, element.value);
+                    // Extra debug for language/timezone
+                    if (element.name === 'language' || element.name === 'timezone') {
+                        console.log(`ADDED TO FORMDATA: ${element.name} = ${element.value}`);
+                    }
+                }
+            });
+            
+            console.log(`Element counts: INPUT=${inputCount}, SELECT=${selectCount}, TEXTAREA=${textareaCount}`);
+            console.log(`Language found in form: ${languageFound}`);
+            console.log(`Timezone found in form: ${timezoneFound}`);
+            
+            // MANUAL FIX: Add language and timezone fields manually if they're not in the form
+            const languageField = document.getElementById('language');
+            const timezoneField = document.getElementById('timezone');
+            
+            if (languageField && !languageFound) {
+                console.log(`MANUAL ADD: Adding language field manually: ${languageField.value}`);
+                formData.set('language', languageField.value);
+            }
+            
+            if (timezoneField && !timezoneFound) {
+                console.log(`MANUAL ADD: Adding timezone field manually: ${timezoneField.value}`);
+                formData.set('timezone', timezoneField.value);
+            }
+            
+            console.log("FormData entries:");
+            let entryCount = 0;
+            for (let [key, value] of formData.entries()) {
+                if (key === 'language' || key === 'timezone' || entryCount < 10) {
+                    console.log(`${key}: ${value}`);
+                }
+                entryCount++;
+            }
+            console.log(`Total entries: ${entryCount}`);
+        }
+        
+        console.log("=== MANUAL TEST END ===");
+    };
+    
+    // Direct save test function
+    window.testDirectSave = function() {
+        console.log("=== DIRECT SAVE TEST ===");
+        
+        // Set language to German first
+        const languageField = document.getElementById('language');
+        if (languageField) {
+            console.log("Setting language to 'de'...");
+            languageField.value = 'de';
+        }
+        
+        // Call saveConfigAjax directly
+        console.log("Calling saveConfigAjax()...");
+        saveConfigAjax();
+    };
+
+    // Test event listeners
+    window.testEventListeners = function() {
+        console.log("=== EVENT LISTENER TEST ===");
+        
+        const languageField = document.getElementById('language');
+        if (!languageField) {
+            console.error("Language field not found!");
+            return;
+        }
+        
+        console.log("Language field found");
+        console.log("Classes:", languageField.className);
+        console.log("Has requires-restart class:", languageField.classList.contains('requires-restart'));
+        console.log("data-immediate-effect:", languageField.getAttribute('data-immediate-effect'));
+        
+        // Check if event listeners are attached
+        console.log("Triggering change event...");
+        const oldValue = languageField.value;
+        languageField.value = oldValue === 'en' ? 'de' : 'en';
+        
+        // Trigger both input and change events
+        languageField.dispatchEvent(new Event('input', { bubbles: true }));
+        languageField.dispatchEvent(new Event('change', { bubbles: true }));
+        
+        console.log("Events triggered. Check if unsaved changes alert appeared.");
+        
+        // Check alert state
+        const unsavedAlert = document.getElementById('unsaved-changes-alert');
+        if (unsavedAlert) {
+            console.log("Unsaved changes alert exists");
+            console.log("Alert visible:", !unsavedAlert.classList.contains('force-hide'));
+            console.log("Alert display style:", unsavedAlert.style.display);
+        } else {
+            console.error("Unsaved changes alert element not found!");
+        }
+        
+        console.log("=== END EVENT LISTENER TEST ===");
+    };
+
+    // Test save button functionality
+    window.testSaveButton = function() {
+        console.log("=== SAVE BUTTON TEST ===");
+        
+        const saveButton = document.getElementById('save-config-button');
+        const floatingSaveButton = document.getElementById('floating-save-button');
+        
+        console.log("Main save button found:", !!saveButton);
+        console.log("Floating save button found:", !!floatingSaveButton);
+        
+        if (saveButton) {
+            console.log("Main save button:");
+            console.log("  ID:", saveButton.id);
+            console.log("  Type:", saveButton.type);
+            console.log("  Disabled:", saveButton.disabled);
+            console.log("  OnClick:", saveButton.onclick);
+            
+            // Check for event listeners
+            const listeners = getEventListeners ? getEventListeners(saveButton) : "getEventListeners not available";
+            console.log("  Event listeners:", listeners);
+            
+            // Try clicking it
+            console.log("Clicking main save button...");
+            saveButton.click();
+        } else {
+            console.error("Main save button not found!");
+        }
+        
+        console.log("=== END SAVE BUTTON TEST ===");
+    };
+
+    // Comprehensive save button debug
+    window.debugSaveButtons = function() {
+        console.log("=== COMPREHENSIVE SAVE BUTTON DEBUG ===");
+        
+        // Find all save-related buttons
+        const mainSaveButton = document.getElementById('save-config-button');
+        const floatingSaveButton = document.getElementById('floating-save-button');
+        const allButtons = document.querySelectorAll('button');
+        
+        console.log("Main save button:", mainSaveButton);
+        console.log("Floating save button:", floatingSaveButton);
+        console.log("Total buttons on page:", allButtons.length);
+        
+        // Check for buttons with save-related text
+        allButtons.forEach(btn => {
+            if (btn.textContent.toLowerCase().includes('save')) {
+                console.log("Found save-related button:", {
+                    id: btn.id,
+                    text: btn.textContent,
+                    type: btn.type,
+                    disabled: btn.disabled,
+                    onclick: btn.onclick,
+                    parent: btn.parentElement?.tagName
+                });
+            }
+        });
+        
+        // Check if saveConfigAjax function exists
+        console.log("saveConfigAjax function exists:", typeof saveConfigAjax === 'function');
+        
+        // Try to directly call saveConfigAjax
+        if (typeof saveConfigAjax === 'function') {
+            console.log("Calling saveConfigAjax directly...");
+            try {
+                saveConfigAjax();
+            } catch (e) {
+                console.error("Error calling saveConfigAjax:", e);
+            }
+        }
+        
+        console.log("=== END DEBUG ===");
+    };
+
+    // Test language/timezone event listeners
+    window.testLanguageEvents = function() {
+        console.log("=== TESTING LANGUAGE/TIMEZONE EVENTS ===");
+        
+        const languageField = document.getElementById('language');
+        const timezoneField = document.getElementById('timezone');
+        const pageLoaded = document.body.getAttribute('data-page-loaded');
+        
+        console.log("Language field found:", !!languageField);
+        console.log("Timezone field found:", !!timezoneField);
+        console.log("userHasInteracted (global):", userHasInteracted);
+        console.log("pageLoaded:", pageLoaded);
+        
+        // Force user interaction
+        console.log("Forcing userHasInteracted = true");
+        userHasInteracted = true;
+        
+        // Check if listeners are attached using browser dev tools
+        if (languageField) {
+            // Try to trigger events manually
+            console.log("Triggering manual change on language field...");
+            const oldValue = languageField.value;
+            languageField.value = oldValue === 'en' ? 'de' : 'en';
+            
+            // Dispatch events
+            languageField.dispatchEvent(new Event('input', { bubbles: true }));
+            languageField.dispatchEvent(new Event('change', { bubbles: true }));
+            
+            // Check alert
+            setTimeout(() => {
+                const alert = document.getElementById('unsaved-changes-alert');
+                console.log("Alert visible after language change:", alert && !alert.classList.contains('force-hide'));
+                console.log("Alert display style:", alert ? alert.style.display : "alert not found");
+                
+                // Restore original value
+                languageField.value = oldValue;
+            }, 100);
+        }
+        
+        console.log("=== END TEST ===");
+    };
 </script> 

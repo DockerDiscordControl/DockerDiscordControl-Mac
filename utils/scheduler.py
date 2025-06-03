@@ -24,6 +24,8 @@ from utils.action_logger import log_user_action, user_action_logger
 
 # Central datetime imports
 datetime, timedelta, timezone, time = get_datetime_imports()
+# Import time class from datetime module as datetime_time to avoid conflict
+from datetime import time as datetime_time
 import pytz
 
 # Performance optimizations with central utilities
@@ -530,13 +532,23 @@ class ScheduledTask:
                          logger.debug(f"Task {self.task_id} - WEEKLY - Weekday from weekday_val: {target_weekday}")
                 else: return None
                 
-                days_ahead = target_weekday - now.weekday()
-                if days_ahead < 0 : days_ahead += 7 # Target is this week, but already passed
-                elif days_ahead == 0 and now.time() >= time(task_hour, task_minute): days_ahead +=7 # Today, but time already passed
-                
-                next_run_dt = now.replace(hour=task_hour, minute=task_minute, second=0, microsecond=0) + timedelta(days=days_ahead)
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Task {self.task_id} - WEEKLY - Calculated time: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S %Z')} (Days ahead: {days_ahead})")
+                # CRITICAL FIX: If we have a last_run_ts, calculate from there instead of now
+                # This prevents the task from being scheduled for "today" again after execution
+                if self.last_run_ts:
+                    # Task was executed, calculate next run from last execution + 7 days
+                    last_run_dt = datetime.fromtimestamp(self.last_run_ts, tz)
+                    next_run_dt = last_run_dt.replace(hour=task_hour, minute=task_minute, second=0, microsecond=0) + timedelta(days=7)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"Task {self.task_id} - WEEKLY - Calculated from last run: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+                else:
+                    # First time calculation or manual calculation
+                    days_ahead = target_weekday - now.weekday()
+                    if days_ahead < 0 : days_ahead += 7 # Target is this week, but already passed
+                    elif days_ahead == 0 and now.time() >= datetime_time(task_hour, task_minute): days_ahead +=7 # Today, but time already passed
+                    
+                    next_run_dt = now.replace(hour=task_hour, minute=task_minute, second=0, microsecond=0) + timedelta(days=days_ahead)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"Task {self.task_id} - WEEKLY - Calculated time: {next_run_dt.strftime('%Y-%m-%d %H:%M:%S %Z')} (Days ahead: {days_ahead})")
 
             elif self.cycle == CYCLE_MONTHLY:
                 if not self.day_val: return None

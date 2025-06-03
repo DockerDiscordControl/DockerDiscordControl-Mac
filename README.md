@@ -324,6 +324,41 @@ This is the easiest method for Unraid users.
 6.  **Configure:** Follow the instructions in the Web UI. **Change the password if you used the default.**
 7.  **Restart Container:** After saving the initial configuration, restart the container from the Unraid Docker tab.
 
+## Common Issues and Troubleshooting
+
+### File Permission Issues
+
+One of the most common problems is configuration files not being writable. DDC Version 2.5 includes automatic permission detection and logging.
+
+**Symptoms:**
+- Configuration changes not saving
+- Container permissions showing as empty `[]`
+- Error messages about file permissions in logs
+
+**Solution:**
+
+1. **Check for permission errors:**
+   ```bash
+   docker logs ddc | grep -i "permission"
+   ```
+
+2. **Fix permissions automatically:**
+   ```bash
+   # Run the included fix script
+   docker exec ddc /app/scripts/fix_permissions.sh
+   
+   # Or fix manually on the host
+   chmod 644 /path/to/dockerdiscordcontrol/config/*.json
+   chown nobody:users /path/to/dockerdiscordcontrol/config/*.json  # For Unraid
+   ```
+
+3. **Platform-specific fixes:**
+   - **Unraid**: Use `nobody:users` ownership
+   - **Synology**: Check your specific user/group with `ls -la`
+   - **Standard Linux**: Often uses `1000:1000` or match your PUID/PGID
+
+For more detailed troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
 ## Configuration
 
 Configuration is primarily done via the **secured** Web UI accessible at `http://<your-server-ip>:8374`. Login with username `admin` and the password you set (default: `admin`).
@@ -485,6 +520,12 @@ python -c "from utils.performance_monitor import get_performance_monitor; monito
 python -c "from utils.scheduler import load_tasks; from utils.common_helpers import format_uptime; print('Utilities working correctly')"
 ```
 
+## Support
+
+- Open an issue on GitHub for bug reports or feature requests
+- Check [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and solutions
+- Join our Discord server for community support
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -508,3 +549,7 @@ Special thanks to all contributors and users who have provided feedback and sugg
 ---
 
 **Version 2.5.0** - The most performant and optimized release of DockerDiscordControl yet! 🚀
+
+## Docker Deployment
+
+### Using Docker Compose (Recommended)

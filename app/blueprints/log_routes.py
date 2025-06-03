@@ -12,7 +12,7 @@ log_bp = Blueprint('log_bp', __name__)
 
 # Simple rate limiting for log requests
 _last_log_request = {}  # IP -> timestamp
-_min_request_interval = 10.0  # Minimum interval in seconds (increased from 2.0 to 10.0)
+_min_request_interval = 60.0  # Increased to 60 seconds to match client-side auto-refresh interval
 
 def rate_limit(f):
     @wraps(f)

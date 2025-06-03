@@ -188,6 +188,8 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
     """
     # This function remains in config_loader since it contains a lot of form-specific logic
     # that doesn't make sense to move to the core ConfigManager
+    print(f"[CONFIG-DEBUG] process_config_form called with {len(form_data)} form fields")
+    print(f"[CONFIG-DEBUG] Form data keys: {list(form_data.keys())[:20]}...")  # First 20 keys
     try:
         new_config = current_config.copy()
         
@@ -251,6 +253,13 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
         new_server_list = []
         final_server_order = ordered_docker_names if ordered_docker_names else selected_servers_form
 
+        # DEBUG: Show all allow_* keys in form_data
+        allow_keys = [key for key in form_data.keys() if key.startswith('allow_')]
+        print(f"[CONFIG-DEBUG] All allow_* keys in form_data: {allow_keys}")
+        logger.info(f"[CONFIG] All allow_* keys in form_data: {allow_keys}")
+        print(f"[CONFIG-DEBUG] Processing servers in order: {final_server_order}")
+        logger.info(f"[CONFIG] Processing servers in order: {final_server_order}")
+
         for idx, docker_name in enumerate(final_server_order):
             if docker_name in selected_docker_names_set:
                 display_name_val = form_data.get(f'display_name_{docker_name}', docker_name)
@@ -259,9 +268,38 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
                 
                 allowed_actions = []
                 for act in ['status', 'start', 'stop', 'restart']:
+                    # CRITICAL FIX: The template uses container.name (which is docker_name) for checkbox names
+                    # but the form data key needs to match what the template generates
                     action_flag = form_data.get(f'allow_{act}_{docker_name}')
+                    
+                    # If not found, try with spaces replaced by underscores
+                    if action_flag is None and ' ' in docker_name:
+                        alternative_name = docker_name.replace(' ', '_')
+                        action_flag = form_data.get(f'allow_{act}_{alternative_name}')
+                        if action_flag is not None:
+                            logger.info(f"[CONFIG] Found checkbox with alternative name: allow_{act}_{alternative_name}")
+                    
+                    # If still not found, try to find any matching key (case-insensitive)
+                    if action_flag is None:
+                        # Look for any key that matches the pattern (case-insensitive)
+                        for key in form_data.keys():
+                            if key.lower() == f'allow_{act}_{docker_name}'.lower():
+                                action_flag = form_data.get(key)
+                                logger.info(f"[CONFIG] Found checkbox with case-insensitive match: {key}")
+                                break
+                    
+                    # DEBUG: Log what we're looking for and what we found
+                    print(f"[CONFIG-DEBUG] Looking for checkbox: allow_{act}_{docker_name}")
+                    logger.info(f"[CONFIG] Looking for checkbox: allow_{act}_{docker_name}")
+                    print(f"[CONFIG-DEBUG] Found value: {action_flag}")
+                    logger.info(f"[CONFIG] Found value: {action_flag}")
+                    
                     if action_flag in ['1', 'on', 'true', True, 'True']:
                         allowed_actions.append(act)
+                
+                # DEBUG: Log the final allowed_actions
+                print(f"[CONFIG-DEBUG] Container '{docker_name}' allowed_actions: {allowed_actions}")
+                logger.info(f"[CONFIG] Container '{docker_name}' allowed_actions: {allowed_actions}")
                 
                 server_entry = {
                     "name": display_name, 

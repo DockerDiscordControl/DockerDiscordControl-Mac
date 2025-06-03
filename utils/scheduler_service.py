@@ -11,7 +11,8 @@ from utils.scheduler import (
     load_tasks, 
     update_task, 
     execute_task, 
-    ScheduledTask
+    ScheduledTask,
+    find_task_by_id
 )
 from utils.logging_utils import setup_logger
 
@@ -101,6 +102,9 @@ class SchedulerService:
             logger.debug(f"Checking {len(tasks)} scheduled tasks")
             current_time = time.time()
             
+            # Track executed tasks in this cycle to prevent re-execution
+            executed_task_ids = set()
+            
             # First collect all tasks to be executed
             pending_tasks = []
             for task in tasks:
@@ -112,10 +116,16 @@ class SchedulerService:
                     # Task has no next execution time (e.g., expired)
                     continue
                 
+                # Check if we already executed this task in this cycle
+                if task.task_id in executed_task_ids:
+                    logger.debug(f"Skipping task {task.task_id} - already executed in this cycle")
+                    continue
+                
                 if current_time >= task.next_run_ts:
                     # Task is due and should be executed
                     logger.info(f"Task {task.task_id} ({task.container_name} {task.action}) marked for execution")
                     pending_tasks.append(task)
+                    executed_task_ids.add(task.task_id)
             
             # Sort tasks by container and action for more efficient grouping
             if pending_tasks:
@@ -143,6 +153,10 @@ class SchedulerService:
                         
                         if success:
                             logger.info(f"Task {task.task_id} executed successfully")
+                            # CRITICAL: Reload the task to get the updated next_run_ts
+                            updated_task = find_task_by_id(task.task_id)
+                            if updated_task:
+                                logger.debug(f"Task {task.task_id} next run updated from {task.next_run_ts} to {updated_task.next_run_ts}")
                         else:
                             logger.error(f"Task {task.task_id} could not be executed")
                         

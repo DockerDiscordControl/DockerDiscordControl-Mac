@@ -661,7 +661,14 @@ class TranslationManager:
 
     def get_current_language(self):
         """Returns the current language from the configuration"""
-        config = load_config()
+        # Try to get language from cached config first for better performance
+        try:
+            from utils.config_cache import get_cached_config
+            config = get_cached_config()
+        except ImportError:
+            # Fallback to direct config loading if cache is not available
+            config = load_config()
+        
         # Ensure the default is 'en'
         lang_from_config = config.get('language', 'en') 
         self._current_language = lang_from_config
@@ -673,7 +680,14 @@ class TranslationManager:
     @lru_cache(maxsize=128)
     def _(self, text):
         """Translates the text into the current language with caching"""
-        language = self.get_current_language()
+        # Clear cache if language has changed to ensure fresh translations
+        current_lang = self.get_current_language()
+        if hasattr(self, '_cached_language') and self._cached_language != current_lang:
+            # Language changed, clear the translation cache
+            self._.cache_clear()
+        self._cached_language = current_lang
+        
+        language = current_lang
 
         # Try the specific language
         if language in self._translations:

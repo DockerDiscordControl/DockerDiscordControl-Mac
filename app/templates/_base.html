@@ -146,6 +146,16 @@ Licensed under the MIT License
             border-right: 2px solid var(--bs-info) !important;
         }
     </style>
+    {# Animation for spinning refresh button #}
+    <style>
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .bi-arrow-repeat-spin {
+            animation: spin 1s linear infinite;
+        }
+    </style>
     {% block styles %}{% endblock %}
     {% block head_extra %}{% endblock %}
 </head>

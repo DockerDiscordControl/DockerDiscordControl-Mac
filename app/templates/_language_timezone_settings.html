@@ -5,21 +5,21 @@
     <div class="row">
         <div class="col-md-6 mb-3">
             <label for="language" class="form-label">Bot Language</label>
-            <select class="form-select requires-restart" id="language" name="language">
+            <select class="form-select requires-restart" id="language" name="language" data-immediate-effect="true">
                 <option value="en" {% if config.language == 'en' %}selected{% endif %}>English</option>
                 <option value="de" {% if config.language == 'de' %}selected{% endif %}>Deutsch</option>
                 <option value="fr" {% if config.language == 'fr' %}selected{% endif %}>Français</option>
             </select>
-            <div class="form-text">Language used by the bot in Discord.</div>
+            <div class="form-text">Language used by the bot in Discord. <strong>Changes take effect immediately!</strong></div>
         </div>
         <div class="col-md-6 mb-3">
             <label for="timezone" class="form-label">Timezone</label>
-            <select class="form-select requires-restart" id="timezone" name="timezone">
+            <select class="form-select requires-restart" id="timezone" name="timezone" data-immediate-effect="true">
                 {% for tz in common_timezones %}
                     <option value="{{ tz }}" {% if config.timezone == tz %}selected{% endif %}>{{ tz }}</option>
                 {% endfor %}
             </select>
-            <div class="form-text">Timezone for the entire container (affects logs, scheduled tasks, and all time-related functionality).</div>
+            <div class="form-text">Timezone for the entire container (affects logs, scheduled tasks, and all time-related functionality). <strong>Changes take effect immediately!</strong></div>
         </div>
     </div>
 </div> 

@@ -92,8 +92,15 @@ RUN find /app -name "*.py" -not -path "*/app/*" -delete && \
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Create configuration and logs directories with correct permissions
-RUN mkdir -p /app/config /app/logs /app/app/logs && \
+RUN mkdir -p /app/config /app/logs /app/app/logs /app/scripts /app/heartbeat_monitor && \
     chmod 777 /app/config /app/logs /app/app/logs
+
+# Copy scripts
+COPY scripts/fix_permissions.sh /app/scripts/
+RUN chmod +x /app/scripts/fix_permissions.sh
+
+# Copy heartbeat monitor
+COPY heartbeat_monitor/ddc_heartbeat_monitor.py /app/heartbeat_monitor/
 
 # Expose port for Web UI
 EXPOSE 9374
