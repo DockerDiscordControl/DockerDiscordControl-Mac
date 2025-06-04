@@ -406,4 +406,4 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
         return new_config, True, "Configuration processed successfully."
     except Exception as e:
         print(f"PROCESS_CONFIG_FORM: Error processing form data: {e}")
-        return current_config, False, f"Error processing configuration: {e}"
+        return current_config, False, "An error occurred while processing the configuration."

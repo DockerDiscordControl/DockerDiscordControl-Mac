@@ -531,6 +531,9 @@ def save_config_api():
         
         # Perform configuration processing
         processed_data, success, message = process_config_form(cleaned_form_data, current_config)
+        if not success:
+            logger.warning(f"Configuration processing failed: {message}")
+            message = "An error occurred while processing the configuration."
         
         # Check file permissions before attempting to save
         if success:
@@ -680,7 +683,7 @@ def save_config_api():
 
     except Exception as e:
         logger.error(f"Unexpected error saving configuration via API (blueprint): {str(e)}", exc_info=True)
-        result['message'] = "Error: Unable to save configuration. Please check the logs for details."
+        result['message'] = "An error occurred while saving the configuration. Please check the logs for details."
         flash("Error saving configuration. Please check the logs for details.", 'danger')
     
     # Check if it's an AJAX request (has the X-Requested-With header)
