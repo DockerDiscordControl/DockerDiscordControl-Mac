@@ -263,7 +263,7 @@ docker run -d \
 
 1. **Access Web UI**
    - Open browser to `http://your-server-ip:8374`
-   - Login with username `admin` and configured password
+   - Login with username `admin` and password `admin` (default)
 
 2. **Initial Configuration**
    - Change default password (if using default)
