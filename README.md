@@ -23,7 +23,7 @@ Control your Docker containers directly from Discord! This application provides 
 
 ### Prerequisites
 
-1. **Create Discord Bot**: [📖 Bot Setup Guide](../../wiki/Discord-Bot-Setup)
+1. **Create Discord Bot**: [📖 Bot Setup Guide](../../wiki/Discord‐Bot‐Setup)
 2. **Docker**: [Install Docker](https://docs.docker.com/engine/install/) + [Docker Compose](https://docs.docker.com/compose/install/)
 
 ### Installation
@@ -48,7 +48,7 @@ docker compose up --build -d
 **Method 2: Unraid**
 - Install via Community Applications
 - Search for "DockerDiscordControl"
-- [📖 Detailed Unraid Setup](../../wiki/Installation-Guide#unraid)
+- [📖 Detailed Unraid Setup](../../wiki/Installation‐Guide#unraid)
 
 ### Configuration
 
@@ -61,10 +61,10 @@ docker compose up --build -d
 
 | Topic | Description |
 |-------|-------------|
-| [📖 Installation Guide](../../wiki/Installation-Guide) | Detailed setup for all platforms |
+| [📖 Installation Guide](../../wiki/Installation‐Guide) | Detailed setup for all platforms |
 | [⚙️ Configuration](../../wiki/Configuration) | Web UI, permissions, channels |
-| [📅 Task System](../../wiki/Task-System) | Automated scheduling system |
-| [🚀 Performance](../../wiki/Performance-and-Architecture) | V3.0 optimizations & monitoring |
+| [📅 Task System](../../wiki/Task‐System) | Automated scheduling system |
+| [🚀 Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
 | [🔧 Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
 | [👩‍💻 Development](../../wiki/Development) | Contributing & development setup |
 | [🔒 Security](../../wiki/Security) | Best practices & considerations |
