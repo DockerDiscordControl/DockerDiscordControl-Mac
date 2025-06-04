@@ -11,7 +11,7 @@ The following versions of DockerDiscordControl (DDC) are currently supported wit
 | 4.x.x   | :x:                | End of life             |
 | < 4.0   | :x:                | No longer supported     |
 
-**Note:** We strongly recommend always using the latest stable version for the best security and feature support.
+**Note:** DDC is developed and maintained by a single person as a passion project. While we strive to provide timely security updates, please understand that response times may vary based on real-life commitments. We strongly recommend always using the latest stable version for the best security and feature support.
 
 ## Reporting a Vulnerability
 
@@ -29,9 +29,15 @@ We take security vulnerabilities seriously and appreciate responsible disclosure
 
 ### 📋 **What to Expect**
 
-- **Initial Response:** Within 48 hours
-- **Regular Updates:** Every 5-7 business days until resolved
-- **Fix Timeline:** Critical vulnerabilities will be prioritized for immediate patches
+**Please note:** DDC is maintained by a single developer alongside a full-time job, family, and other commitments. Response times reflect this reality:
+
+- **Initial Response:** Within 1-2 weeks (depending on availability)
+- **Regular Updates:** When significant progress is made
+- **Fix Timeline:** 
+  - **Critical vulnerabilities:** Best effort to address quickly, but may take several weeks
+  - **Non-critical issues:** Will be addressed in regular development cycles
+
+**Important:** If you discover a critical security vulnerability that poses immediate risk, please clearly mark it as "CRITICAL" in your report. While I cannot guarantee immediate patches, critical issues will be prioritized above feature development.
 
 ### ✅ **If Your Report is Accepted**
 
@@ -68,9 +74,9 @@ DDC includes several built-in security features:
 
 ## Hall of Fame
 
-We acknowledge security researchers who have responsibly disclosed vulnerabilities:
+I appreciate security researchers who responsibly disclose vulnerabilities and help make DDC safer for everyone:
 
-*No vulnerabilities have been reported yet. Be the first!*
+*No vulnerabilities have been responsibly disclosed yet.*
 
 ---
 
