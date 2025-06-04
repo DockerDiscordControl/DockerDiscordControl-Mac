@@ -4,7 +4,7 @@
 
 Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage specified Docker containers (start, stop, restart, view status) and view container logs.
 
-[![Version](https://img.shields.io/badge/version-2.5.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
+[![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE)
 
 ## Features
@@ -48,9 +48,9 @@ DDC includes a powerful task system to automate container management:
 
 **Note on Day Selection:** Due to Discord's 25-option limit for autocomplete, the day selection in task commands shows a strategic subset of days (1-5, 7, 9, 10, 12-15, 17, 18, 20-22, 24-28, 30, 31). You can still type any valid day manually.
 
-### Ultra-Performance Optimizations (Version 2.5)
+### Ultra-Performance Optimizations (Version 3.0)
 
-DDC Version 2.5 introduces revolutionary performance optimizations that deliver exceptional speed and efficiency:
+DDC Version 3.0 introduces revolutionary performance optimizations that deliver exceptional speed and efficiency:
 
 #### 🚀 **Core Performance Improvements**
 * **Toggle Operations**: **90% latency reduction** (50-100ms vs 500-2000ms)
@@ -102,8 +102,27 @@ DDC Version 2.5 introduces revolutionary performance optimizations that deliver 
 
 These optimizations ensure DDC remains lightning-fast and highly responsive, even in demanding environments with multiple containers and high user activity.
 
-## What's New in Version 2.5.0
+## What's New in Version 3.0.0
+### 🔒 **Major Security Improvements**
 
+* **🛡️ Complete Security Vulnerability Remediation**: All GitHub security alerts resolved
+  * Fixed XSS vulnerabilities in task management interface
+  * Eliminated information exposure through exception handling
+  * Sanitized all user inputs to prevent code injection attacks
+  * Replaced unsafe innerHTML usage with secure text content handling
+
+* **📦 Critical Dependency Updates**: All security-critical libraries updated
+  * Flask: 2.2.5 → 3.1.1 (fixes session signing vulnerabilities)
+  * Werkzeug: 2.3.7 → 3.1.0 (patches remote code execution flaws)
+  * Gunicorn: 21.2.0 → 23.0.0 (resolves HTTP request smuggling)
+  * Cryptography: 41.0.5 → 45.0.3 (addresses multiple CVEs)
+  * Requests: 2.31.0 → 2.32.3 (fixes HTTPS certificate validation bypass)
+
+* **🔐 Enhanced Security Framework**: Comprehensive security policy implementation
+  * Professional security policy with responsible disclosure guidelines
+  * Realistic response timelines for single-developer maintenance
+  * Clear vulnerability reporting process with privacy protection
+  * Security best practices documentation for deployment 
 ### Revolutionary Performance Overhaul
 
 * **🚀 Ultra-Fast Toggle Operations**: 90% performance improvement for expand/collapse buttons
@@ -173,7 +192,7 @@ These optimizations ensure DDC remains lightning-fast and highly responsive, eve
   * Channel permissions and settings
   * Heartbeat monitoring configuration
 
-These improvements make DDC Version 2.5 the most performant and maintainable release yet, delivering exceptional speed while maintaining the reliability and features users expect.
+These improvements make DDC Version 3.0 the most performant and maintainable release yet, delivering exceptional speed while maintaining the reliability and features users expect.
 
 *   **Web Interface:**
     *   Configure bot token, server ID, language, timezone, and update intervals.
@@ -250,7 +269,7 @@ This is the recommended method for most users running Docker on Linux, macOS, or
         # Optional - Web UI configuration
         # DDC_ADMIN_PASSWORD=your_secure_admin_password
 
-        # Optional - Performance tuning (Version 2.5 optimized defaults)
+        # Optional - Performance tuning (Version 3.0 optimized defaults)
         # DDC_DOCKER_CACHE_DURATION=75
         # DDC_BACKGROUND_REFRESH_INTERVAL=30
         # DDC_TOGGLE_CACHE_DURATION=150
@@ -328,7 +347,7 @@ This is the easiest method for Unraid users.
 
 ### File Permission Issues
 
-One of the most common problems is configuration files not being writable. DDC Version 2.5 includes automatic permission detection and logging.
+One of the most common problems is configuration files not being writable. DDC Version 3.0 includes automatic permission detection and logging.
 
 **Symptoms:**
 - Configuration changes not saving
@@ -373,7 +392,7 @@ Key settings include:
 *   **Server Selection:** Choose which Docker containers the bot can see and manage.
 *   **Permissions:** Define allowed actions (status, start, stop, restart) per container.
 *   **Channel Permissions:** Configure which Discord channels can use which commands (`/serverstatus`, `/command`, `/control`).
-*   **Performance Settings:** Monitor and configure advanced performance optimizations (Version 2.5).
+*   **Performance Settings:** Monitor and configure advanced performance optimizations (Version 3.0).
 
 ### Channel-Based Permission System
 
@@ -402,11 +421,11 @@ All permissions are easily configured through the web interface, with no coding 
 
 *   **Container Log:** View the last 200 lines in the Web UI (with level filtering) or access the full logs via `docker logs ddc` (or `docker compose logs -f`). These logs are managed by Docker's logging driver (json-file by default) and are subject to rotation.
 *   **User Action Log:** Viewable and downloadable in the Web UI. This log tracks actions initiated by users (e.g., Start/Stop via Discord, Save Config via Web UI, Clear Action Log). It's stored persistently in the `/app/logs` volume (if mounted) and is *not* automatically rotated. It can be cleared manually via the Web UI.
-*   **Performance Logs:** Version 2.5 includes detailed performance monitoring with automatic optimization recommendations.
+*   **Performance Logs:** Version 3.0 includes detailed performance monitoring with automatic optimization recommendations.
 
-## Ultra-Optimized Container Management (Version 2.5)
+## Ultra-Optimized Container Management (Version 3.0)
 
-DockerDiscordControl Version 2.5 features a revolutionary container management system with unprecedented performance optimizations:
+DockerDiscordControl Version 3.0 features a revolutionary container management system with unprecedented performance optimizations:
 
 ### 🚀 **Lightning-Fast Cache System**
 *   **Multi-Layer Caching Architecture:**
@@ -509,7 +528,7 @@ Run the test suite:
 pytest
 ```
 
-### Performance Testing (Version 2.5)
+### Performance Testing (Version 3.0)
 
 Test the new performance optimizations:
 ```bash
@@ -548,7 +567,7 @@ Special thanks to all contributors and users who have provided feedback and sugg
 
 ---
 
-**Version 2.5.0** - The most performant and optimized release of DockerDiscordControl yet! 🚀
+**Version 3.0.0** - The most performant and optimized release of DockerDiscordControl yet! 🚀
 
 ## Docker Deployment
 
