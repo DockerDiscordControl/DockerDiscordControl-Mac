@@ -2,13 +2,13 @@
 py-cord==2.4.1
 
 # --- Web UI and Translations ---
-Flask==2.2.5
+Flask==3.1.0
 Flask-HTTPAuth==4.8.0
 gunicorn==23.0.0
 gevent==23.9.1
-docker==6.1.3  # For Docker API access
-Werkzeug==2.3.7  # Required by Flask
-requests==2.31.0 # Pin requests version
+docker==7.1.0  # For Docker API access - Updated from 6.1.3 for latest features and security
+Werkzeug==3.1.0  # Required by Flask - Security fix for RCE vulnerability, updated for Flask 3.1.0 compatibility
+requests==2.32.3  # Pin requests version - Updated from 2.31.0 for security fixes
 urllib3<2.0 # Pin urllib3 to versions before 2.0 to avoid compatibility issues with docker-py
 
 # --- Background Jobs and Utilities ---
@@ -17,7 +17,7 @@ pytz==2023.3.post1  # Timezone support for the timezone setting
 python-dotenv==1.0.0
 PyYAML==6.0.1      
 python-json-logger==2.0.7
-cryptography==41.0.5  # For token encryption
+cryptography==45.0.3  # For token encryption - Updated from 41.0.5 for security fixes
 
 # --- Performance Optimizations ---
 ujson==5.8.0  # Faster JSON processing
