@@ -78,9 +78,9 @@ def get_logs():
                 logs = result.stdout
             except (subprocess.SubprocessError, FileNotFoundError) as e:
                 logger.error(f"Failed to run docker command: {str(e)}")
-                logs = f"Could not retrieve container logs. Error: {str(e)}"
+                logs = "Could not retrieve container logs. Please check the logs for details."
     except Exception as e:
-        logs = f"Error accessing container logs: {str(e)}"
+        logs = "Error accessing container logs. Please check the logs for details."
         logger.error(f"Error accessing container logs: {str(e)}", exc_info=True)
     
     return Response(logs, mimetype='text/plain')
