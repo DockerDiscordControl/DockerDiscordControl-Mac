@@ -1179,49 +1179,69 @@
                 // Status action
                 const statusCheckbox = row.querySelector('input[name="allow_status_' + containerName + '"]');
                 if (statusCheckbox) {
+                    console.log(`[DEBUG] ${containerName} Status checkbox found: checked=${statusCheckbox.checked}`);
                     if (statusCheckbox.checked) {
                         actions.push("status");
                         formData.append('allow_status_' + containerName, '1');
+                        console.log(`[DEBUG] ${containerName} Status: ALLOWED (sending '1')`);
                     } else {
                         // CRITICAL: Also send '0' for unchecked boxes
                         formData.append('allow_status_' + containerName, '0');
+                        console.log(`[DEBUG] ${containerName} Status: DENIED (sending '0')`);
                     }
+                } else {
+                    console.log(`[DEBUG] ${containerName} Status checkbox NOT FOUND`);
                 }
                 
                 // Start action
                 const startCheckbox = row.querySelector('input[name="allow_start_' + containerName + '"]');
                 if (startCheckbox) {
+                    console.log(`[DEBUG] ${containerName} Start checkbox found: checked=${startCheckbox.checked}`);
                     if (startCheckbox.checked) {
                         actions.push("start");
                         formData.append('allow_start_' + containerName, '1');
+                        console.log(`[DEBUG] ${containerName} Start: ALLOWED (sending '1')`);
                     } else {
                         // CRITICAL: Also send '0' for unchecked boxes
                         formData.append('allow_start_' + containerName, '0');
+                        console.log(`[DEBUG] ${containerName} Start: DENIED (sending '0')`);
                     }
+                } else {
+                    console.log(`[DEBUG] ${containerName} Start checkbox NOT FOUND`);
                 }
                 
                 // Stop action
                 const stopCheckbox = row.querySelector('input[name="allow_stop_' + containerName + '"]');
                 if (stopCheckbox) {
+                    console.log(`[DEBUG] ${containerName} Stop checkbox found: checked=${stopCheckbox.checked}`);
                     if (stopCheckbox.checked) {
                         actions.push("stop");
                         formData.append('allow_stop_' + containerName, '1');
+                        console.log(`[DEBUG] ${containerName} Stop: ALLOWED (sending '1')`);
                     } else {
                         // CRITICAL: Also send '0' for unchecked boxes
                         formData.append('allow_stop_' + containerName, '0');
+                        console.log(`[DEBUG] ${containerName} Stop: DENIED (sending '0')`);
                     }
+                } else {
+                    console.log(`[DEBUG] ${containerName} Stop checkbox NOT FOUND`);
                 }
                 
                 // Restart action
                 const restartCheckbox = row.querySelector('input[name="allow_restart_' + containerName + '"]');
                 if (restartCheckbox) {
+                    console.log(`[DEBUG] ${containerName} Restart checkbox found: checked=${restartCheckbox.checked}`);
                     if (restartCheckbox.checked) {
                         actions.push("restart");
                         formData.append('allow_restart_' + containerName, '1');
+                        console.log(`[DEBUG] ${containerName} Restart: ALLOWED (sending '1')`);
                     } else {
                         // CRITICAL: Also send '0' for unchecked boxes
                         formData.append('allow_restart_' + containerName, '0');
+                        console.log(`[DEBUG] ${containerName} Restart: DENIED (sending '0')`);
                     }
+                } else {
+                    console.log(`[DEBUG] ${containerName} Restart checkbox NOT FOUND`);
                 }
                 
                 console.log(`Container '${containerName}' allowed actions: ${actions.join(', ')}`);

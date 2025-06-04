@@ -272,7 +272,7 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
                     # but the form data key needs to match what the template generates
                     action_flag = form_data.get(f'allow_{act}_{docker_name}')
                     
-                    # If not found, try with spaces replaced by underscores
+                    # IMPROVED: Try multiple fallback strategies for finding the checkbox
                     if action_flag is None and ' ' in docker_name:
                         alternative_name = docker_name.replace(' ', '_')
                         action_flag = form_data.get(f'allow_{act}_{alternative_name}')
@@ -288,18 +288,47 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
                                 logger.info(f"[CONFIG] Found checkbox with case-insensitive match: {key}")
                                 break
                     
-                    # DEBUG: Log what we're looking for and what we found
+                    # IMPROVED: Try with all special characters replaced with underscores
+                    if action_flag is None:
+                        sanitized_name = ''.join(c if c.isalnum() else '_' for c in docker_name)
+                        sanitized_key = f'allow_{act}_{sanitized_name}'
+                        action_flag = form_data.get(sanitized_key)
+                        if action_flag is not None:
+                            logger.info(f"[CONFIG] Found checkbox with sanitized name: {sanitized_key}")
+                    
+                    # ENHANCED DEBUG: Log what we're looking for and what we found
                     print(f"[CONFIG-DEBUG] Looking for checkbox: allow_{act}_{docker_name}")
                     logger.info(f"[CONFIG] Looking for checkbox: allow_{act}_{docker_name}")
-                    print(f"[CONFIG-DEBUG] Found value: {action_flag}")
-                    logger.info(f"[CONFIG] Found value: {action_flag}")
+                    print(f"[CONFIG-DEBUG] Found value: {action_flag} (type: {type(action_flag)})")
+                    logger.info(f"[CONFIG] Found value: {action_flag} (type: {type(action_flag)})")
                     
-                    if action_flag in ['1', 'on', 'true', True, 'True']:
-                        allowed_actions.append(act)
+                    # IMPROVED: Handle different value types more robustly
+                    if action_flag is not None:
+                        # Handle list values (from FormData)
+                        if isinstance(action_flag, list):
+                            action_flag = action_flag[0] if action_flag else None
+                        
+                        # Convert to string for comparison
+                        action_flag_str = str(action_flag).lower() if action_flag is not None else None
+                        
+                        # Check if action is allowed
+                        if action_flag_str in ['1', 'on', 'true', 'yes']:
+                            allowed_actions.append(act)
+                            print(f"[CONFIG-DEBUG] Action '{act}' ALLOWED for '{docker_name}' (value: {action_flag})")
+                            logger.info(f"[CONFIG] Action '{act}' ALLOWED for '{docker_name}' (value: {action_flag})")
+                        elif action_flag_str in ['0', 'off', 'false', 'no']:
+                            print(f"[CONFIG-DEBUG] Action '{act}' DENIED for '{docker_name}' (value: {action_flag})")
+                            logger.info(f"[CONFIG] Action '{act}' DENIED for '{docker_name}' (value: {action_flag})")
+                        else:
+                            print(f"[CONFIG-DEBUG] Action '{act}' UNKNOWN VALUE for '{docker_name}' (value: {action_flag})")
+                            logger.warning(f"[CONFIG] Action '{act}' UNKNOWN VALUE for '{docker_name}' (value: {action_flag})")
+                    else:
+                        print(f"[CONFIG-DEBUG] Action '{act}' NOT FOUND for '{docker_name}'")
+                        logger.warning(f"[CONFIG] Action '{act}' NOT FOUND for '{docker_name}'")
                 
                 # DEBUG: Log the final allowed_actions
-                print(f"[CONFIG-DEBUG] Container '{docker_name}' allowed_actions: {allowed_actions}")
-                logger.info(f"[CONFIG] Container '{docker_name}' allowed_actions: {allowed_actions}")
+                print(f"[CONFIG-DEBUG] Container '{docker_name}' final allowed_actions: {allowed_actions}")
+                logger.info(f"[CONFIG] Container '{docker_name}' final allowed_actions: {allowed_actions}")
                 
                 server_entry = {
                     "name": display_name, 
