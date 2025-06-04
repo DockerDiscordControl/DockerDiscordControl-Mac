@@ -6,16 +6,16 @@ The following versions of DockerDiscordControl (DDC) are currently supported wit
 
 | Version | Supported          | Notes                    |
 | ------- | ------------------ | ------------------------ |
-| 5.1.x   | :white_check_mark: | Latest stable release    |
-| 5.0.x   | :white_check_mark: | LTS support until 2025  |
-| 4.x.x   | :x:                | End of life             |
-| < 4.0   | :x:                | No longer supported     |
+| 3.0.x   | :white_check_mark: | Latest stable release    |
+| 2.5.x   | :white_check_mark: | Previous version         |
+| 2.0.x   | :x:                | End of life             |
+| 1.0.x   | :x:                | No longer supported     |
 
-**Note:** DDC is developed and maintained by a single person as a passion project. While we strive to provide timely security updates, please understand that response times may vary based on real-life commitments. We strongly recommend always using the latest stable version for the best security and feature support.
+**Note:** DDC is developed and maintained by a single person as a passion project. While I strive to provide timely security updates, please understand that response times may vary based on real-life commitments. I strongly recommend always using the latest stable version for the best security and feature support.
 
 ## Reporting a Vulnerability
 
-We take security vulnerabilities seriously and appreciate responsible disclosure. If you discover a security vulnerability in DDC, please follow these steps:
+I take security vulnerabilities seriously and appreciate responsible disclosure. If you discover a security vulnerability in DDC, please follow these steps:
 
 ### 🔒 **Private Disclosure (Recommended)**
 
@@ -41,16 +41,16 @@ We take security vulnerabilities seriously and appreciate responsible disclosure
 
 ### ✅ **If Your Report is Accepted**
 
-- We will work with you to understand and reproduce the issue
+- I will work with you to understand and reproduce the issue
 - A fix will be developed and tested
 - Security advisory will be published after the fix is released
-- You will be credited in our security acknowledgments (unless you prefer to remain anonymous)
+- You will be credited in my security acknowledgments (unless you prefer to remain anonymous)
 
 ### ❌ **If Your Report is Declined**
 
-- We will provide a detailed explanation of why the issue is not considered a vulnerability
-- We may suggest alternative reporting channels if appropriate
-- We appreciate all reports, even if they don't qualify as security vulnerabilities
+- I will provide a detailed explanation of why the issue is not considered a vulnerability
+- I may suggest alternative reporting channels if appropriate
+- I appreciate all reports, even if they don't qualify as security vulnerabilities
 
 ## Security Best Practices
 
