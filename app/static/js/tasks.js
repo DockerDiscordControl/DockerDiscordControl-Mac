@@ -10,6 +10,17 @@ class TaskManager {
         this.init();
     }
 
+    // Security: HTML escape function to prevent XSS attacks
+    escapeHtml(unsafe) {
+        if (unsafe === null || unsafe === undefined) return '';
+        return String(unsafe)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    }
+
     init() {
         this.bindEventListeners();
         this.initializeModal();
@@ -61,10 +72,12 @@ class TaskManager {
             this.cachedTasks = data;
             this.renderTaskList(data);
         } catch (error) {
-            console.error('Error fetching tasks:', error);
-            tbody.innerHTML = '<tr><td colspan="11" class="text-center task-empty"><div class="empty-icon">⚠️</div><div class="empty-title">Error Loading Tasks</div><div class="empty-description">' + error.message + '</div></td></tr>';
-            errorDiv.textContent = 'Error loading task list: ' + error.message;
-            errorDiv.style.display = 'block';
+            console.error('Failed to fetch tasks:', error);
+            
+            const tbody = document.getElementById('taskListBody');
+            if (tbody) {
+                tbody.innerHTML = '<tr><td colspan="11" class="text-center task-empty"><div class="empty-icon">⚠️</div><div class="empty-title">Error Loading Tasks</div><div class="empty-description">' + this.escapeHtml(error.message) + '</div></td></tr>';
+            }
         }
     }
 
@@ -85,7 +98,7 @@ class TaskManager {
         const filteredTasks = this.filterTasks(tasks, statusFilter);
         
         if (filteredTasks.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="11" class="text-center task-empty"><div class="empty-icon">🔍</div><div class="empty-title">No Matching Tasks</div><div class="empty-description">No tasks match the selected filter "${statusFilter}".</div></td></tr>`;
+            tbody.innerHTML = '<tr><td colspan="11" class="text-center task-empty"><div class="empty-icon">🔍</div><div class="empty-title">No Matching Tasks</div><div class="empty-description">No tasks match the selected filter "' + this.escapeHtml(statusFilter) + '".</div></td></tr>';
             return;
         }
 
@@ -120,31 +133,42 @@ class TaskManager {
         // Determine status styling
         const statusInfo = this.getTaskStatusInfo(task);
         
+        // Escape all dynamic content
+        const escapedData = {
+            id: this.escapeHtml(task.id),
+            container: this.escapeHtml(task.container || 'N/A'),
+            action: this.escapeHtml(task.action || 'N/A'),
+            cycle: this.escapeHtml(task.cycle || 'N/A'),
+            nextRunLocal: this.escapeHtml(task.next_run_local || 'N/A'),
+            statusText: this.escapeHtml(statusInfo.text),
+            createdAtLocal: this.escapeHtml(task.created_at_local)
+        };
+        
         row.innerHTML = `
-            <td class="task-id">${task.id}</td>
-            <td><code class="text-info container-name">${task.container || 'N/A'}</code></td>
-            <td><span class="badge bg-secondary">${task.action || 'N/A'}</span></td>
-            <td><span class="badge bg-info">${task.cycle || 'N/A'}</span></td>
+            <td class="task-id">${escapedData.id}</td>
+            <td><code class="text-info container-name">${escapedData.container}</code></td>
+            <td><span class="badge bg-secondary">${escapedData.action}</span></td>
+            <td><span class="badge bg-info">${escapedData.cycle}</span></td>
             <td><div class="schedule-details">${this.formatScheduleDetails(task.schedule_details)}</div></td>
-            <td><small class="text-muted">${task.next_run_local || 'N/A'}</small></td>
-            <td><span class="badge status-badge status-${statusInfo.class}">${statusInfo.text}</span></td>
+            <td><small class="text-muted">${escapedData.nextRunLocal}</small></td>
+            <td><span class="badge status-badge status-${statusInfo.class}">${escapedData.statusText}</span></td>
             <td>
                 <div class="form-check">
                     <input class="form-check-input toggle-active task-checkbox" type="checkbox" 
-                           id="active-${task.id}" data-task-id="${task.id}" 
+                           id="active-${escapedData.id}" data-task-id="${escapedData.id}" 
                            ${task.is_active ? 'checked' : ''} 
                            ${!statusInfo.canBeActivated ? 'disabled' : ''}>
-                    <label class="form-check-label visually-hidden" for="active-${task.id}">Active</label>
+                    <label class="form-check-label visually-hidden" for="active-${escapedData.id}">Active</label>
                 </div>
             </td>
             <td>${this.formatLastRunResult(task)}</td>
-            <td><small class="text-muted">${this.formatDate(task.created_at, task.created_at_local)}</small></td>
+            <td><small class="text-muted">${this.formatDate(task.created_at, escapedData.createdAtLocal)}</small></td>
             <td class="text-center task-actions">
                 <div class="btn-group btn-group-sm" role="group">
-                    <button class="btn btn-primary editTaskBtn" data-task-id="${task.id}" title="Edit Task" data-bs-toggle="tooltip">
+                    <button class="btn btn-primary editTaskBtn" data-task-id="${escapedData.id}" title="Edit Task" data-bs-toggle="tooltip">
                         <i class="bi bi-pencil"></i>
                     </button>
-                    <button class="btn btn-danger deleteTaskBtn" data-task-id="${task.id}" title="Delete Task" data-bs-toggle="tooltip">
+                    <button class="btn btn-danger deleteTaskBtn" data-task-id="${escapedData.id}" title="Delete Task" data-bs-toggle="tooltip">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
@@ -171,14 +195,14 @@ class TaskManager {
         if (!details) return 'N/A';
         
         if (details.cron_string) {
-            return `Cron: <code>${details.cron_string}</code>`;
+            return `Cron: <code>${this.escapeHtml(details.cron_string)}</code>`;
         }
         
         const parts = [];
-        if (details.time) parts.push(`Time: ${details.time}`);
-        if (details.day) parts.push(`Day: ${details.day}`);
-        if (details.month) parts.push(`Month: ${details.month}`);
-        if (details.year) parts.push(`Year: ${details.year}`);
+        if (details.time) parts.push(`Time: ${this.escapeHtml(details.time)}`);
+        if (details.day) parts.push(`Day: ${this.escapeHtml(details.day)}`);
+        if (details.month) parts.push(`Month: ${this.escapeHtml(details.month)}`);
+        if (details.year) parts.push(`Year: ${this.escapeHtml(details.year)}`);
         
         return parts.join(', ') || 'No details';
     }
@@ -187,7 +211,8 @@ class TaskManager {
         if (task.last_run_success === true) {
             return '<span class="badge bg-success" title="Task was executed successfully">Success</span>';
         } else if (task.last_run_success === false) {
-            return `<span class="badge bg-danger" title="${task.last_run_error || 'Task execution failed'}">Failed</span>`;
+            const escapedError = this.escapeHtml(task.last_run_error || 'Task execution failed');
+            return `<span class="badge bg-danger" title="${escapedError}">Failed</span>`;
         }
         return '<span class="text-muted">Not run yet</span>';
     }
@@ -477,7 +502,9 @@ class TaskManager {
     }
 
     async deleteTask(taskId) {
-        if (!confirm(`Are you sure you want to delete task #${taskId}?\n\nThis action cannot be undone.`)) {
+        const escapedTaskId = this.escapeHtml(taskId);
+        
+        if (!confirm(`Are you sure you want to delete task #${escapedTaskId}?\n\nThis action cannot be undone.`)) {
             return;
         }
 
