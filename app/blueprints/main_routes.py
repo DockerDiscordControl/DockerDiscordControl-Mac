@@ -804,7 +804,7 @@ def refresh_containers():
             logger.warning(f"Error during manual container refresh: {error}")
             return jsonify({
                 'success': False,
-                'message': f"Error refreshing containers: {error}"
+                'message': "Error refreshing containers. Please check the logs for details."
             })
         
         # Log the success
