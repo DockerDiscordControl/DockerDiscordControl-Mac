@@ -680,8 +680,8 @@ def save_config_api():
 
     except Exception as e:
         logger.error(f"Unexpected error saving configuration via API (blueprint): {str(e)}", exc_info=True)
-        result['message'] = f"Error: {str(e)}"
-        flash(f"Error saving configuration: {str(e)}", 'danger')
+        result['message'] = "Error: Unable to save configuration. Please check the logs for details."
+        flash("Error saving configuration. Please check the logs for details.", 'danger')
     
     # Check if it's an AJAX request (has the X-Requested-With header)
     is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
@@ -783,7 +783,7 @@ def download_monitor_script():
         )
     except Exception as e:
         logger.error(f"Error generating monitor script: {e}", exc_info=True)
-        flash(f"Error generating monitor script: {str(e)}", "danger")
+        flash("Error generating monitor script. Please check the logs for details.", "danger")
         return redirect(url_for('.config_page'))
 
 @main_bp.route('/refresh_containers', methods=['POST'])
@@ -838,7 +838,7 @@ def refresh_containers():
         logger.error(f"Unexpected error refreshing containers: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': f"Unexpected error: {str(e)}"
+            'message': "Unexpected error refreshing containers. Please check the logs for details."
         })
 
 @main_bp.route('/enable_temp_debug', methods=['POST'])
@@ -891,7 +891,7 @@ def enable_temp_debug():
         logger.error(f"Error enabling temporary debug mode: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': f"Error: {str(e)}"
+            'message': "Error enabling temporary debug mode. Please check the logs for details."
         })
 
 @main_bp.route('/disable_temp_debug', methods=['POST'])
@@ -925,7 +925,7 @@ def disable_temp_debug():
         logger.error(f"Error disabling temporary debug mode: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': f"Error: {str(e)}"
+            'message': "Error disabling temporary debug mode. Please check the logs for details."
         })
 
 @main_bp.route('/temp_debug_status', methods=['GET'])
@@ -960,6 +960,6 @@ def temp_debug_status():
         current_app.logger.error(f"Error getting temporary debug status: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': f"Error: {str(e)}",
+            'message': "Error getting temporary debug status. Please check the logs for details.",
             'is_enabled': False
         })

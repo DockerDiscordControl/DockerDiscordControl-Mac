@@ -154,7 +154,7 @@ def add_task():
 
         except Exception as e:
             current_app.logger.error(f"Error creating ScheduledTask instance: {e}", exc_info=True)
-            return jsonify({"error": f"Internal error creating task object: {e}"}), 500
+            return jsonify({"error": "Internal error creating task object. Please check the logs for details."}), 500
 
         # Import add_task from utils.scheduler to avoid name conflicts
         from utils.scheduler import add_task as scheduler_add_task
@@ -180,7 +180,7 @@ def add_task():
 
     except Exception as e:
         current_app.logger.error(f"Error handling add_task request: {e}", exc_info=True)
-        return jsonify({"error": f"Internal error handling add_task request: {e}"}), 500
+        return jsonify({"error": "Internal error handling add_task request. Please check the logs for details."}), 500
 
 @tasks_bp.route('/list', methods=['GET'])
 def list_tasks():
@@ -556,4 +556,4 @@ def edit_task_route(task_id):
                 
         except Exception as e:
             current_app.logger.error(f"Error updating task {task_id}: {e}", exc_info=True)
-            return jsonify({"success": False, "error": f"Internal error updating task: {e}"}), 500 
+            return jsonify({"success": False, "error": "Internal error updating task. Please check the logs for details."}), 500 

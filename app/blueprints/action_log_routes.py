@@ -60,7 +60,7 @@ def get_action_log():
         log_content = "Action log file not found."
         logger.error(f"Action log file ({ACTION_LOG_FILE}) not found for /action-log endpoint.")
     except Exception as e:
-        log_content = f"Error reading action log: {str(e)}"
+        log_content = "Error reading action log. Please check the logs for details."
         logger.error(f"Error reading action log ({ACTION_LOG_FILE}): {str(e)}", exc_info=True)
     return Response(log_content, mimetype='text/plain')
 
@@ -89,5 +89,5 @@ def clear_action_log():
         return jsonify({'success': True, 'message': 'Action log cleared successfully.'})
     except Exception as e:
         logger.error(f"Error clearing action log: {str(e)}", exc_info=True)
-        flash(f'Error clearing action log: {str(e)}', 'error')
-        return jsonify({'success': False, 'message': f'Error clearing action log: {str(e)}'}) 
+        flash('Error clearing action log. Please check the logs for details.', 'error')
+        return jsonify({'success': False, 'message': 'Error clearing action log. Please check the logs for details.'}) 
