@@ -98,13 +98,13 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             logger.info(f"[Cog Init] Saved default server order: {self.ordered_server_names}")
         self.translations = get_translations()
 
-        # PERFORMANCE OPTIMIZATION: Initialisiere Embed-Cache für StatusHandlersMixin
+        # PERFORMANCE OPTIMIZATION: Initialize embed cache for StatusHandlersMixin
         self._embed_cache = {
             'translated_terms': {},
             'box_elements': {},
             'last_cache_clear': datetime.now(timezone.utc)
         }
-        self._EMBED_CACHE_TTL = 300  # 5 Minuten Cache für Embed-Elemente
+        self._EMBED_CACHE_TTL = 300  # 5 minutes cache for embed elements
 
         logger.info("Ensuring other potential loops (if any residues from old structure) are cancelled.")
         if hasattr(self, 'heartbeat_send_loop') and self.heartbeat_send_loop.is_running(): self.heartbeat_send_loop.cancel()
@@ -216,10 +216,10 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         if tasks_to_run:
             logger.info(f"Direct Cog Periodic Edit Loop: Attempting to run {len(tasks_to_run)} message edit tasks.")
             
-            # PERFORMANCE OPTIMIZATION: Batch-Processing mit Prioritäten
-            # Teile Tasks in kleinere Batches auf, um Discord Rate Limits zu vermeiden
-            BATCH_SIZE = 5  # Maximal 5 gleichzeitige Message-Updates
-            BATCH_DELAY = 0.2  # 200ms Pause zwischen Batches
+            # PERFORMANCE OPTIMIZATION: Batch processing with priorities
+            # Split tasks into smaller batches to avoid Discord rate limits
+            BATCH_SIZE = 5  # Maximum 5 simultaneous message updates
+            BATCH_DELAY = 0.2  # 200ms pause between batches
             
             total_tasks = len(tasks_to_run)
             success_count = 0
@@ -227,7 +227,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             error_count = 0
             none_results_count = 0
             
-            # Verarbeite Tasks in Batches
+            # Process tasks in batches
             for i in range(0, total_tasks, BATCH_SIZE):
                 batch = tasks_to_run[i:i + BATCH_SIZE]
                 batch_num = (i // BATCH_SIZE) + 1
@@ -238,7 +238,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 try:
                     batch_results = await asyncio.gather(*batch, return_exceptions=True)
                     
-                    # Sammle Ergebnisse
+                    # Collect results
                     for result in batch_results:
                         if result is True:
                             success_count += 1
@@ -249,7 +249,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                         else:
                             none_results_count += 1
                     
-                    # Kurze Pause zwischen Batches (außer beim letzten)
+                    # Short pause between batches (except for the last one)
                     if i + BATCH_SIZE < total_tasks:
                         await asyncio.sleep(BATCH_DELAY)
                         
@@ -874,30 +874,18 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             if not display_name or not docker_name:
                 continue
                 
-            # Get status from cache or fetch if necessary
+            # ULTRA-FAST OPTIMIZATION: Use ONLY cached data
+            # No more Docker queries - Background loop (every 30s) provides current data
             cached_entry = self.status_cache.get(display_name)
             status_result = None
             
-            if cached_entry:
-                cache_age = (now_utc - cached_entry['timestamp']).total_seconds()
-                if cache_age < self.cache_ttl_seconds:
-                    status_result = cached_entry['data']
-                else:
-                    # Stale cache, fetch new data
-                    try:
-                        status_result = await self.get_status(server_conf)
-                        if not isinstance(status_result, Exception):
-                            self.status_cache[display_name] = {'data': status_result, 'timestamp': now_utc}
-                    except Exception as e:
-                        logger.error(f"Error getting status for {display_name}: {e}")
+            if cached_entry and cached_entry.get('data'):
+                # ✅ Cache available - use cached data
+                status_result = cached_entry['data']
             else:
-                # No cache, fetch new data
-                try:
-                    status_result = await self.get_status(server_conf)
-                    if not isinstance(status_result, Exception):
-                        self.status_cache[display_name] = {'data': status_result, 'timestamp': now_utc}
-                except Exception as e:
-                    logger.error(f"Error getting status for {display_name}: {e}")
+                # ⚠️ NO cache available - show "Loading" status
+                logger.debug(f"[/serverstatus] No cache entry for '{display_name}' - Background loop will update")
+                status_result = None
             
             # Process status result
             if status_result and isinstance(status_result, tuple) and len(status_result) == 6:
@@ -926,8 +914,10 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 line = f"│ {status_emoji} {status_text:8} {display_name}"
                 content_lines.append(line)
             else:
-                # Error or no data
-                line = f"│ ⚠️ {'Error':8} {display_name}"
+                # No cache data available - show loading status
+                status_emoji = "🔄"
+                status_text = translate("Loading")
+                line = f"│ {status_emoji} {status_text:8} {display_name}"
                 content_lines.append(line)
 
         # Add footer line
@@ -1057,18 +1047,18 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 logger.debug("No servers configured, status cache update skipped")
                 return
             
-            # PERFORMANCE OPTIMIZATION: Parallele Verarbeitung mit Batch-Größe
-            BATCH_SIZE = 3  # Maximal 3 gleichzeitige Docker-Abfragen
+            # PERFORMANCE OPTIMIZATION: Parallel processing with batch size
+            BATCH_SIZE = 3  # Maximum 3 simultaneous Docker queries
             now = datetime.now(timezone.utc)
             
             update_count = 0
             error_count = 0
             
-            # Verarbeite Server in Batches für bessere Performance
+            # Process servers in batches for better performance
             for i in range(0, len(servers), BATCH_SIZE):
                 batch = servers[i:i + BATCH_SIZE]
                 
-                # Erstelle Tasks für diesen Batch
+                # Create tasks for this batch
                 async def process_server(server_conf):
                     try:
                         status_data = await self.get_status(server_conf)
@@ -1089,18 +1079,18 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                         logger.exception(f"Exception during status update for {server_conf.get('name', server_conf.get('docker_name'))}: {e}")
                         return False
                 
-                # Führe Batch parallel aus
+                # Execute batch in parallel
                 batch_tasks = [process_server(server_conf) for server_conf in batch]
                 batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
                 
-                # Sammle Ergebnisse
+                # Collect results
                 for result in batch_results:
                     if result is True:
                         update_count += 1
                     else:
                         error_count += 1
                 
-                # Kurze Pause zwischen Batches
+                # Short pause between batches
                 if i + BATCH_SIZE < len(servers):
                     await asyncio.sleep(0.1)
             

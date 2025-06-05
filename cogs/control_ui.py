@@ -222,101 +222,104 @@ class ToggleButton(Button):
         super().__init__(style=style, label=None, custom_id=f"toggle_{self.docker_name}", row=row, emoji=emoji, disabled=not is_running)
 
     async def callback(self, interaction: discord.Interaction):
-        """Optimierte Toggle-Funktion - schnellere Umschaltung mit weniger API-Anfragen."""
-        # Sofort Interaktion bestätigen, um UI-Reaktionszeit zu verbessern
+        """Optimized toggle function - cache-based only, no Docker queries."""
+        # Immediately acknowledge interaction to improve UI response time
         await interaction.response.defer()
         
-        # Statusänderung im Cog-State
+        # Status change in Cog state
         start_time = time.time()
         self.is_expanded = not self.is_expanded
         self.cog.expanded_states[self.display_name] = self.is_expanded
         
-        logger.debug(f"[TOGGLE_BTN] Toggle für '{self.display_name}' von {interaction.user}. Neuer Status: {self.is_expanded}")
+        logger.debug(f"[TOGGLE_BTN] Toggle for '{self.display_name}' by {interaction.user}. New status: {self.is_expanded}")
 
-        # Server-Konfiguration effizient abrufen (nur einmal pro Button-Interaktion)
+        # Efficiently retrieve server configuration (only once per button interaction)
         channel_id = interaction.channel.id if interaction.channel else None
         
         try:
-            # Direkt die Nachricht aus der Interaktion verwenden (keine API-Abfrage nötig)
+            # Use the message directly from the interaction (no API query needed)
             message = interaction.message
             if not message or not channel_id:
-                logger.error(f"[TOGGLE_BTN] Nachricht oder Kanal fehlt für '{self.display_name}'")
+                logger.error(f"[TOGGLE_BTN] Message or channel missing for '{self.display_name}'")
                 return
             
-            # PERFORMANCE OPTIMIZATION: Verwende gecachte Config statt self.cog.config
+            # PERFORMANCE OPTIMIZATION: Use cached config instead of self.cog.config
             current_config = get_cached_config()
             
-            # PERFORMANCE OPTIMIZATION: Prüfe ob Container im Pending-Status ist
-            # Wenn ja, zeige Pending-Embed ohne Docker-Abfrage
+            # PERFORMANCE OPTIMIZATION: Check if container is in pending status
+            # If yes, show pending embed without Docker query
             if self.display_name in self.cog.pending_actions:
-                logger.debug(f"[TOGGLE_BTN] '{self.display_name}' ist im Pending-Status, zeige Pending-Embed")
+                logger.debug(f"[TOGGLE_BTN] '{self.display_name}' is in pending status, show pending embed")
                 pending_embed = _get_pending_embed(self.display_name)
                 if pending_embed:
                     await message.edit(embed=pending_embed, view=None)
                     elapsed_time = (time.time() - start_time) * 1000
-                    logger.debug(f"[TOGGLE_BTN] Pending-Nachricht für '{self.display_name}' aktualisiert in {elapsed_time:.1f}ms")
+                    logger.debug(f"[TOGGLE_BTN] Pending message for '{self.display_name}' updated in {elapsed_time:.1f}ms")
                 return
             
-            # PERFORMANCE OPTIMIZATION: Verwende nur gecachte Daten für Toggle-Operationen
-            # Toggle sollte keine neuen Docker-Abfragen auslösen
+            # ULTRA-FAST OPTIMIZATION: Use ONLY cached data
+            # No more Docker queries - Background loop (every 30s) provides current data
             cached_entry = self.cog.status_cache.get(self.display_name)
+            
             if cached_entry and cached_entry.get('data'):
-                # Verwende gecachte Daten für schnelle Toggle-Operation
+                # Use cached data for lightning-fast toggle operation
                 status_result = cached_entry['data']
                 
-                # Schnelle Embed-Generierung nur mit gecachten Daten
+                # Fast embed generation only with cached data
                 embed, view = await self._generate_fast_toggle_embed_and_view(
                     channel_id=channel_id,
                     status_result=status_result,
-                    current_config=current_config
+                    current_config=current_config,
+                    cached_entry=cached_entry  # BUGFIX: Pass cached_entry for correct timestamp
                 )
                 
                 if embed and view:
                     await message.edit(embed=embed, view=view)
                     elapsed_time = (time.time() - start_time) * 1000
-                    logger.debug(f"[TOGGLE_BTN] Schnelle Toggle-Nachricht für '{self.display_name}' aktualisiert in {elapsed_time:.1f}ms")
+                    logger.debug(f"[TOGGLE_BTN] Ultra-fast toggle message for '{self.display_name}' updated in {elapsed_time:.1f}ms")
                 else:
-                    logger.warning(f"[TOGGLE_BTN] Schnelle Toggle-Generierung fehlgeschlagen für '{self.display_name}'")
+                    logger.warning(f"[TOGGLE_BTN] Fast toggle generation failed for '{self.display_name}'")
             else:
-                # Fallback: Wenn kein Cache verfügbar, verwende die normale Methode
-                logger.warning(f"[TOGGLE_BTN] Kein Cache-Eintrag für '{self.display_name}', verwende normale Generierung")
-                embed, view, _ = await self.cog._generate_status_embed_and_view(
-                    channel_id=channel_id,
-                    display_name=self.display_name,
-                    server_conf=self.server_config,
-                    current_config=current_config,
-                    allow_toggle=True,
-                    force_collapse=False
-                )
+                # NO FALLBACK ANYMORE: If no cache available, show hint and wait for background update
+                logger.info(f"[TOGGLE_BTN] No cache entry for '{self.display_name}' - Background loop will update in ~30s")
                 
-                if message and embed:
-                    await message.edit(embed=embed, view=view)
-                    elapsed_time = (time.time() - start_time) * 1000
-                    logger.debug(f"[TOGGLE_BTN] Fallback-Nachricht für '{self.display_name}' aktualisiert in {elapsed_time:.1f}ms")
+                # Show temporary "loading" status
+                temp_embed = discord.Embed(
+                    description="```\n┌── Loading Status ───────────\n│ 🔄 Refreshing container data...\n│ ⏱️ Please wait a moment\n└─────────────────────────────\n```",
+                    color=0x3498db
+                )
+                temp_embed.set_footer(text="Background update in progress • https://ddc.bot")
+                
+                # Simple view without buttons during loading
+                temp_view = discord.ui.View(timeout=None)
+                
+                await message.edit(embed=temp_embed, view=temp_view)
+                elapsed_time = (time.time() - start_time) * 1000
+                logger.debug(f"[TOGGLE_BTN] Loading message for '{self.display_name}' shown in {elapsed_time:.1f}ms")
             
         except Exception as e:
-            logger.error(f"[TOGGLE_BTN] Fehler beim Umschalten von '{self.display_name}': {e}", exc_info=True)
+            logger.error(f"[TOGGLE_BTN] Error toggling '{self.display_name}': {e}", exc_info=True)
         
-        # Aktualisiere den Zeitstempel der letzten Kanalaktivität
+        # Update timestamp of last channel activity
         if interaction.channel:
             self.cog.last_channel_activity[interaction.channel.id] = datetime.now(timezone.utc)
 
-    async def _generate_fast_toggle_embed_and_view(self, channel_id: int, status_result: tuple, current_config: dict) -> tuple[Optional[discord.Embed], Optional[discord.ui.View]]:
+    async def _generate_fast_toggle_embed_and_view(self, channel_id: int, status_result: tuple, current_config: dict, cached_entry: dict) -> tuple[Optional[discord.Embed], Optional[discord.ui.View]]:
         """
-        Schnelle Embed/View-Generierung nur für Toggle-Operationen.
-        Verwendet nur gecachte Daten ohne Docker-Abfragen.
+        Fast embed/view generation only for toggle operations.
+        Uses only cached data without Docker queries.
         """
         try:
             if not isinstance(status_result, tuple) or len(status_result) != 6:
-                logger.warning(f"[FAST_TOGGLE] Ungültiges status_result Format für '{self.display_name}'")
+                logger.warning(f"[FAST_TOGGLE] Invalid status_result format for '{self.display_name}'")
                 return None, None
             
             display_name_from_status, running, cpu, ram, uptime, details_allowed = status_result
             
-            # Verwende die gleiche Embed-Generierung wie in status_handlers.py, aber optimiert
+            # Use the same embed generation as in status_handlers.py, but optimized
             status_color = 0x00b300 if running else 0xe74c3c
             
-            # PERFORMANCE OPTIMIZATION: Verwende gecachte Übersetzungen falls verfügbar
+            # PERFORMANCE OPTIMIZATION: Use cached translations if available
             lang = current_config.get('language', 'de')
             if hasattr(self.cog, '_get_cached_translations'):
                 cached_translations = self.cog._get_cached_translations(lang)
@@ -328,7 +331,7 @@ class ToggleButton(Button):
                 detail_denied_text = cached_translations['detail_denied_text']
                 last_update_text = cached_translations['last_update_text']
             else:
-                # Fallback zu direkten Übersetzungen
+                # Fallback to direct translations
                 online_text = _("**Online**")
                 offline_text = _("**Offline**")
                 cpu_text = _("CPU")
@@ -340,17 +343,17 @@ class ToggleButton(Button):
             status_text = online_text if running else offline_text
             current_emoji = "🟢" if running else "🔴"
             
-            # Prüfe Expanded-Status
+            # Check expanded status
             is_expanded = self.is_expanded
             
-            # PERFORMANCE OPTIMIZATION: Verwende gecachte Box-Elemente falls verfügbar
+            # PERFORMANCE OPTIMIZATION: Use cached box elements if available
             BOX_WIDTH = 28
             if hasattr(self.cog, '_get_cached_box_elements'):
                 cached_box = self.cog._get_cached_box_elements(self.display_name, BOX_WIDTH)
                 header_line = cached_box['header_line']
                 footer_line = cached_box['footer_line']
             else:
-                # Fallback zu direkter Box-Generierung
+                # Fallback to direct box generation
                 header_text = f"── {self.display_name} "
                 max_name_len = BOX_WIDTH - 4
                 if len(header_text) > max_name_len:
@@ -359,14 +362,14 @@ class ToggleButton(Button):
                 header_line = f"┌{header_text}{'─' * padding_width}"
                 footer_line = f"└{'─' * (BOX_WIDTH - 1)}"
             
-            # Beschreibung zusammenbauen
+            # Build description
             description_parts = [
                 "```\n",
                 header_line,
                 f"\n│ {current_emoji} {status_text}"
             ]
             
-            # Details basierend auf Status und Expanded-State
+            # Details based on status and expanded state
             if running:
                 if details_allowed and is_expanded:
                     description_parts.extend([
@@ -389,22 +392,22 @@ class ToggleButton(Button):
             description_parts.append("\n```")
             description = "".join(description_parts)
             
-            # Zeitstempel hinzufügen
+            # Add timestamp
             timezone_str = current_config.get('timezone')
-            current_time = format_datetime_with_timezone(datetime.now(timezone.utc), timezone_str, fmt="%H:%M:%S")
+            current_time = format_datetime_with_timezone(cached_entry['timestamp'], timezone_str, fmt="%H:%M:%S")
             timestamp_line = f"{last_update_text}: {current_time}"
             
             embed = discord.Embed(description=f"{timestamp_line}\n{description}", color=status_color)
             embed.set_footer(text="https://ddc.bot")
             
-            # View generieren
+            # Generate view
             channel_has_control = _channel_has_permission(channel_id, 'control', current_config)
             view = ControlView(self.cog, self.server_config, running, channel_has_control_permission=channel_has_control, allow_toggle=True)
             
             return embed, view
             
         except Exception as e:
-            logger.error(f"[FAST_TOGGLE] Fehler bei schneller Toggle-Generierung für '{self.display_name}': {e}", exc_info=True)
+            logger.error(f"[FAST_TOGGLE] Error in fast toggle generation for '{self.display_name}': {e}", exc_info=True)
             return None, None
 
     # --- Add: Method to create a new view with allow_toggle=True (for ToggleButton) --- #
@@ -423,13 +426,12 @@ class ControlView(View):
         self.cog = cog_instance
         self.allow_toggle = allow_toggle
 
-        # <<< DEBUG LOG HINZUGEFÜGT >>>
+        # DEBUG LOG ADDED
         display_name_log = server_config.get('name', server_config.get('docker_name', 'N/A')) if server_config else 'N/A'
         logger.debug(f"[ControlView.__init__] Initializing for '{display_name_log}'. is_running={is_running}, channel_has_control={channel_has_control_permission}, received allow_toggle={allow_toggle}")
-        # <<< ENDE DEBUG LOG >>>
+        # END DEBUG LOG
 
-        # --- START: Add specific logging for flags ---
-        # display_name_log = server_config.get('name', server_config.get('docker_name', 'N/A')) if server_config else 'N/A' # Bereits oben definiert
+        # START: Add specific logging for flags
         if not allow_toggle:
              logger.debug(f"[ControlView.__init__] '{display_name_log}': allow_toggle=False received. ToggleButton will NOT be added.")
 
@@ -437,7 +439,7 @@ class ControlView(View):
         if not self.cog or not server_config:
             return
 
-        # --- Existing logic --- #
+        # Existing logic
         docker_name = server_config.get('docker_name')
         display_name = server_config.get('name', docker_name)
 
@@ -452,7 +454,7 @@ class ControlView(View):
 
         # Determine which buttons to add based on state and permissions (only if not pending)
         if is_running:
-            # Toggle Button (+/-) ist immer auf Reihe 0, wenn erlaubt
+            # Toggle Button (+/-) is always on row 0, when allowed
             if details_allowed and self.allow_toggle:
                  self.add_item(ToggleButton(cog_instance, server_config, is_running=True, row=0))
 
@@ -465,7 +467,7 @@ class ControlView(View):
                     self.add_item(ActionButton(cog_instance, server_config, "restart", discord.ButtonStyle.secondary, None, "🔄", row=button_row))
 
         else: # Server is not running
-            # Nur Start-Button anzeigen, kein Toggle-Button für offline Server
+            # Only show start button, no toggle button for offline servers
             if channel_has_control_permission and "start" in allowed_actions:
                  self.add_item(ActionButton(cog_instance, server_config, "start", discord.ButtonStyle.secondary, None, "▶️", row=0))
 
