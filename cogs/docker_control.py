@@ -124,6 +124,9 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         # Start inactivity check loop (1 minute interval)
         self.bot.loop.create_task(self._start_loop_safely(self.inactivity_check_loop, "Inactivity Check Loop"))
         
+        # PERFORMANCE OPTIMIZATION: Start cache clear loop (5 minute interval)
+        self.bot.loop.create_task(self._start_loop_safely(self.performance_cache_clear_loop, "Performance Cache Clear Loop"))
+        
         # Start heartbeat loop if enabled (1 minute interval, configurable)
         heartbeat_config = self.config.get('heartbeat', {})
         if heartbeat_config.get('enabled', False):
@@ -1236,6 +1239,38 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         """Wait until the bot is ready before starting the loop."""
         await self.bot.wait_until_ready()
 
+    # --- Performance Cache Clear Loop ---
+    @tasks.loop(minutes=5)
+    async def performance_cache_clear_loop(self):
+        """Clears performance caches every 5 minutes to prevent memory buildup."""
+        try:
+            logger.debug("Running performance cache clear loop")
+            
+            # Import and clear the control UI performance caches
+            from .control_ui import _clear_caches
+            _clear_caches()
+            
+            # Clear any other performance-critical caches
+            if hasattr(self, '_embed_cache'):
+                # Clear embed cache if it's getting too large (>100 entries)
+                if len(self._embed_cache.get('translated_terms', {})) > 100:
+                    self._embed_cache['translated_terms'].clear()
+                    logger.debug("Cleared embed translation cache due to size")
+                
+                if len(self._embed_cache.get('box_elements', {})) > 100:
+                    self._embed_cache['box_elements'].clear()
+                    logger.debug("Cleared embed box elements cache due to size")
+            
+            logger.debug("Performance cache clear completed")
+            
+        except Exception as e:
+            logger.error(f"Error in performance_cache_clear_loop: {e}", exc_info=True)
+
+    @performance_cache_clear_loop.before_loop
+    async def before_performance_cache_clear_loop(self):
+        """Wait until the bot is ready before starting the loop."""
+        await self.bot.wait_until_ready()
+
     # --- Final Control Command ---
     @commands.slash_command(name="control", description=_("Displays the control panel in the control channel"), guild_ids=get_guild_id())
     async def control_command(self, ctx: discord.ApplicationContext):
@@ -1486,7 +1521,16 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         if hasattr(self, 'status_update_loop') and self.status_update_loop.is_running(): self.status_update_loop.cancel()
         if hasattr(self, 'periodic_message_edit_loop') and self.periodic_message_edit_loop.is_running(): self.periodic_message_edit_loop.cancel()
         if hasattr(self, 'inactivity_check_loop') and self.inactivity_check_loop.is_running(): self.inactivity_check_loop.cancel()
+        if hasattr(self, 'performance_cache_clear_loop') and self.performance_cache_clear_loop.is_running(): self.performance_cache_clear_loop.cancel()
         logger.info("All direct Cog loops cancellation attempted.")
+
+        # PERFORMANCE OPTIMIZATION: Clear all caches on unload
+        try:
+            from .control_ui import _clear_caches
+            _clear_caches()
+            logger.info("Performance caches cleared on cog unload")
+        except Exception as e:
+            logger.error(f"Error clearing performance caches on unload: {e}")
 
     # Method to update global docker status cache from instance cache
     def update_global_status_cache(self):
