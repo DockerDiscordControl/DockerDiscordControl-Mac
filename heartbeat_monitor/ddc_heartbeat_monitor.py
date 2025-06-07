@@ -154,8 +154,10 @@ class HeartbeatMonitor(discord.Client):
     
     def __init__(self, config: Dict):
         # Setup intents
-        intents = discord.Intents.default()
-        intents.message_content = True
+        # RAM-OPTIMIZED: Minimal intents for heartbeat monitor
+        intents = discord.Intents.none()
+        intents.guilds = True            # Required for guild access
+        intents.message_content = True   # Required for message content
         super().__init__(intents=intents)
         
         # Store configuration

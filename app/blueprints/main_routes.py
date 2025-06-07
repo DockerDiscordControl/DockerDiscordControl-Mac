@@ -117,8 +117,10 @@ logger = logging.getLogger('ddc_monitor')
 
 class HeartbeatMonitor(discord.Client):
     def __init__(self, *args, **kwargs):
-        intents = discord.Intents.default()
-        intents.message_content = True  # Needed to read message content
+        # RAM-OPTIMIZED: Minimal intents for Web UI bot
+        intents = discord.Intents.none()
+        intents.guilds = True            # Required for guild access
+        intents.message_content = True   # Required for message content
         super().__init__(intents=intents, *args, **kwargs)
         
         # State tracking

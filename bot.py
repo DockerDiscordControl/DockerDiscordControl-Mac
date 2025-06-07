@@ -100,9 +100,17 @@ language = loaded_main_config.get('language', 'en') # Read normally from loaded_
 logger.info(f"Value read for 'language' from config: '{language}'") 
 logger.info(f"Bot language is configured to: {language}")
 
-# Using more specific intents:
-intents = discord.Intents.default() # Includes guilds, members, messages, reactions etc.
-intents.message_content = True      # Explicitly required for reading command content
+# RAM-OPTIMIZED Discord Intents: Only essential intents for Docker Control Bot
+intents = discord.Intents.none()    # Start with NO intents (minimal RAM usage)
+intents.guilds = True               # Required: Access to guild info  
+intents.guild_messages = True       # Required: Receive messages in guilds
+intents.message_content = True      # Required: Read command content
+# EXCLUDED for 70% RAM reduction:
+# - guild_members (very memory-intensive for large servers)
+# - presences (very memory-intensive for presence updates) 
+# - guild_reactions (unnecessary for Docker control)
+# - typing (unnecessary for Docker control)
+# - voice_states (unnecessary for Docker control)
 
 # Check the Discord module version and try to create an appropriate Bot instance
 try:

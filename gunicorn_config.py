@@ -43,22 +43,25 @@ except ImportError as e:
     sys.exit("Critical import error in gunicorn_config.py")
 
 
-# --- Gunicorn Configuration ---
-# Optimized worker calculation based on CPU cores
-# Formula: (2 × CPU cores) + 1, with sensible limits
+# --- Optimized Gunicorn Configuration for Discord Bot Web UI ---
+# RAM-Optimized: Dramatically reduced from 8 workers to 2-3 for realistic usage
+
+# RAM-OPTIMIZED: Much smaller worker count for Discord Bot usage
+# Most users access Web UI rarely and individually, not concurrently
 cpu_count = multiprocessing.cpu_count()
-default_workers = max(2, min(cpu_count * 2 + 1, 8))  # Minimum 2, maximum 8 workers
-workers = int(os.getenv('GUNICORN_WORKERS', default_workers))
-logger.info(f"Gunicorn starting with {workers} workers based on {cpu_count} CPU cores")
+# OPTIMIZED: 2-3 workers max (was 8), minimum 2 for reliability
+optimized_workers = max(2, min(3, cpu_count // 2 + 1))
+workers = int(os.getenv('GUNICORN_WORKERS', optimized_workers))
+logger.info(f"Gunicorn starting with {workers} RAM-optimized workers (was up to 8) based on {cpu_count} CPU cores")
 
 # Address and port Gunicorn should listen on
 bind = "0.0.0.0:9374"
 
-# Worker class (gevent for asynchronous workers is often recommended)
+# Worker class (gevent for asynchronous workers)
 worker_class = "gevent"
 
-# Worker timeout increased for long-running Docker operations
-timeout = int(os.getenv('GUNICORN_TIMEOUT', '120'))
+# OPTIMIZED: Reduced timeout for faster resource cycling
+timeout = int(os.getenv('GUNICORN_TIMEOUT', '60'))  # Reduced from 120s
 
 # Logging - Gunicorn logs go to stdout/stderr, which Supervisor catches
 accesslog = "-"
@@ -66,9 +69,6 @@ errorlog = "-"
 loglevel = os.getenv('GUNICORN_LOG_LEVEL', 'info')
 
 # --- Scheduler and Hooks ---
-# Scheduler might not be needed anymore if only for docker cache update
-# scheduler = None
-
 def when_ready(server):
     """Gunicorn Hook: Executed when the master process is ready (before forking workers)."""
     logger.info(f"[Gunicorn Master {os.getpid()}] Server ready. Performing initial cache population...")
@@ -81,39 +81,30 @@ def when_ready(server):
 
     except Exception as e:
         logger.error(f"[Gunicorn Master {os.getpid()}] Error during initial cache population: {e}", exc_info=True)
-        # server.stop() # Consider stopping if initial cache fails?
 
-# Optional: Hooks for workers (e.g., post_fork)
-# def post_fork(server, worker):
-#     logger.info(f"[Gunicorn Worker {worker.pid}] Worker started.")
-
-# Optional: Hook on worker exit
-# def worker_exit(server, worker):
-#    logger.info(f"[Gunicorn Worker {worker.pid}] Worker exited.") 
-
-# Gunicorn Server Configuration
+# --- RAM-OPTIMIZED Gunicorn Server Configuration ---
 
 # Path to WSGI application
 wsgi_app = "app.web_ui:create_app()"
 
-# Worker & Threading
-workers = min(multiprocessing.cpu_count() * 2 + 1, 8)  # Max. 8 workers
+# Worker & Threading - HEAVILY OPTIMIZED FOR RAM
+# OPTIMIZED: No duplicate worker definition - using optimized_workers from above
 worker_class = "gevent"  # Use Gevent for asynchronous processing
-worker_connections = 1000  # Number of simultaneous connections per worker
+worker_connections = 200  # OPTIMIZED: Reduced from 1000 to 200 (Discord Bot usage)
 threads = 1  # For Gevent workers: Use 1 thread
 
-# Timeouts
-timeout = 60  # Timeout for workers in seconds
+# Timeouts - OPTIMIZED
+timeout = 60  # OPTIMIZED: Reduced from previous values
 graceful_timeout = 10  # Time workers get to terminate
-keepalive = 5  # How long connections remain open (seconds)
+keepalive = 3  # OPTIMIZED: Reduced from 5s to 3s for faster resource cleanup
 
 # Binding
 bind = "0.0.0.0:9374"  # Host:Port for binding
-backlog = 2048  # Number of pending connections
+backlog = 512  # OPTIMIZED: Reduced from 2048 to 512
 
-# HTTP Settings
-max_requests = 1000  # Number of requests after which workers are restarted
-max_requests_jitter = 100  # Jitter to avoid simultaneous restarts
+# HTTP Settings - RAM OPTIMIZED
+max_requests = 500  # OPTIMIZED: Reduced from 1000 to 500 (faster worker recycling)
+max_requests_jitter = 50  # OPTIMIZED: Reduced from 100 to 50
 
 # Logging
 accesslog = "/app/logs/gunicorn_access.log"
@@ -129,17 +120,17 @@ user = None  # User for worker processes
 group = None  # Group for worker processes
 umask = 0  # File permissions mask
 
-# Gevent-specific optimizations
+# Gevent-specific optimizations - RAM OPTIMIZED
 gevent_monkey_patching = True  # Enables monkey patching
-worker_greenlet_concurrency = 1000  # Max. number of concurrent greenlets per worker
+worker_greenlet_concurrency = 200  # OPTIMIZED: Reduced from 1000 to 200
 
-# Gevent-specific optimizations for better thread compatibility
+# OPTIMIZED: Reduced thread pool size for lower RAM usage
 def post_fork(server, worker):
-    # Remove compatibility checks for threads - manually patched in web_ui.py
+    # RAM-optimized thread pool size
     if worker_class == "gevent":
-        # Reduce frequency of thread checks
+        # OPTIMIZED: Reduced threadpool from 20 to 10
         import gevent.hub
-        gevent.hub.get_hub().threadpool_size = 20
+        gevent.hub.get_hub().threadpool_size = 10  # Reduced from 20
         
         try:
             # Adjust the hub for better thread compatibility
@@ -157,13 +148,13 @@ def post_fork(server, worker):
             _ForkHooks.after_fork_in_child = safer_after_fork_in_child
             
             # Provide worker info
-            worker.log.info("Gevent worker patched for better thread compatibility")
+            worker.log.info(f"RAM-optimized Gevent worker (threadpool: 10, connections: 200)")
         except (ImportError, AttributeError) as e:
             worker.log.warning(f"Could not patch Gevent fork hooks: {e}")
 
 # Pre-initialization before worker start
 def pre_exec(server):
-    server.log.info("Initializing server (pre-exec)")
+    server.log.info("Initializing RAM-optimized server (pre-exec)")
 
 # Dynamic settings based on environment variables
 if os.environ.get('DDC_DISABLE_CACHE_LOCKS', '').lower() == 'true':
