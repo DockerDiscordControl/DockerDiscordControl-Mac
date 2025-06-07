@@ -237,51 +237,57 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             
             logger.info(f"Direct Cog Periodic Edit Loop: Attempting to run {len(tasks_to_run)} message edit tasks.")
             
-            # PERFORMANCE OPTIMIZATION: Batch processing with priorities
-            # Split tasks into smaller batches to avoid Discord rate limits
-            BATCH_SIZE = 8  # Increased from 5 to 8 since cache is pre-loaded
-            BATCH_DELAY = 0.1  # Reduced from 0.2s to 0.1s for better throughput
-            
+            # ULTRA-PERFORMANCE: Complete parallelization for message edits
+            start_batch_time = datetime.now(timezone.utc)
             total_tasks = len(tasks_to_run)
             success_count = 0
             not_found_count = 0
             error_count = 0
             none_results_count = 0
             
-            # Process tasks in batches
-            for i in range(0, total_tasks, BATCH_SIZE):
-                batch = tasks_to_run[i:i + BATCH_SIZE]
-                batch_num = (i // BATCH_SIZE) + 1
-                total_batches = (total_tasks + BATCH_SIZE - 1) // BATCH_SIZE
+            try:
+                # Run ALL message edits completely in parallel
+                logger.info(f"Direct Cog Periodic Edit Loop: Running {total_tasks} message edits in FULL PARALLEL mode")
                 
-                logger.debug(f"Processing batch {batch_num}/{total_batches} with {len(batch)} tasks")
+                batch_results = await asyncio.gather(*tasks_to_run, return_exceptions=True)
                 
-                try:
-                    batch_results = await asyncio.gather(*batch, return_exceptions=True)
-                    
-                    # Collect results
-                    for result in batch_results:
-                        if result is True:
-                            success_count += 1
-                        elif result is False:
-                            not_found_count += 1
-                        elif isinstance(result, Exception):
-                            error_count += 1
-                        else:
-                            none_results_count += 1
-                    
-                    # Short pause between batches (except for the last one)
-                    if i + BATCH_SIZE < total_tasks:
-                        await asyncio.sleep(BATCH_DELAY)
-                        
-                except Exception as e:
-                    logger.error(f"Error processing batch {batch_num}: {e}", exc_info=True)
-                    error_count += len(batch)
+                # Collect and analyze results
+                for i, result in enumerate(batch_results):
+                    if result is True:
+                        success_count += 1
+                    elif result is False:
+                        not_found_count += 1
+                    elif isinstance(result, Exception):
+                        error_count += 1
+                        logger.debug(f"Message edit {i+1}/{total_tasks} failed with exception: {type(result).__name__}")
+                    else:
+                        none_results_count += 1
+                        logger.debug(f"Message edit {i+1}/{total_tasks} returned unexpected result: {type(result)}")
+                
+                # Performance analysis
+                batch_time = (datetime.now(timezone.utc) - start_batch_time).total_seconds() * 1000
+                
+                if batch_time < 1000:  # Under 1 second - excellent
+                    logger.info(f"Direct Cog Periodic Edit Loop: ULTRA-FAST parallel processing completed in {batch_time:.1f}ms")
+                elif batch_time < 3000:  # Under 3 seconds - good
+                    logger.info(f"Direct Cog Periodic Edit Loop: FAST parallel processing completed in {batch_time:.1f}ms")
+                elif batch_time < 5000:  # Under 5 seconds - acceptable
+                    logger.warning(f"Direct Cog Periodic Edit Loop: SLOW parallel processing completed in {batch_time:.1f}ms")
+                else:  # Over 5 seconds - needs investigation
+                    logger.error(f"Direct Cog Periodic Edit Loop: CRITICAL SLOW parallel processing took {batch_time:.1f}ms")
+                
+            except Exception as e:
+                logger.error(f"Critical error during parallel message edit processing: {e}", exc_info=True)
+                error_count = total_tasks  # Assume all failed
 
             logger.info(f"Direct Cog Periodic message update finished. Total tasks: {total_tasks}. Success: {success_count}, NotFound: {not_found_count}, Errors: {error_count}, NoEmbed: {none_results_count}")
             
             if error_count > 0:
-                logger.warning(f"Encountered {error_count} errors during batch processing")
+                logger.warning(f"Encountered {error_count} errors during parallel processing")
+            
+            # Performance summary
+            avg_time_per_edit = (datetime.now(timezone.utc) - start_batch_time).total_seconds() * 1000 / total_tasks if total_tasks > 0 else 0
+            logger.info(f"Direct Cog Periodic Edit Loop: Average time per message edit: {avg_time_per_edit:.1f}ms")
         else:
             logger.info("Direct Cog Periodic message update check: No messages were due for update in any channel.")
 
