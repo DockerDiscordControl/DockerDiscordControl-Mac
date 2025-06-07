@@ -12,12 +12,13 @@ These are implemented as a mixin class to be used with the main DockerControlCog
 """
 import logging
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple, Union
 import discord
 
 # Import necessary utilities
-from utils.logging_utils import setup_logger
+from utils.logging_utils import setup_logger, get_module_logger
 from utils.docker_utils import get_docker_info, get_docker_stats
 from utils.time_utils import format_datetime_with_timezone
 
@@ -29,7 +30,7 @@ from .control_ui import ControlView
 from .translation_manager import _
 
 # Configure logger for this module
-logger = setup_logger('ddc.status_handlers', level=logging.DEBUG)
+logger = get_module_logger('status_handlers')
 
 class StatusHandlersMixin:
     """
@@ -82,6 +83,168 @@ class StatusHandlersMixin:
         
         return self._embed_cache['box_elements'][cache_key]
     
+    async def bulk_fetch_container_status(self, container_names: List[str]) -> Dict[str, Tuple]:
+        """
+        Fetches status for multiple containers in parallel for ultra-fast performance.
+        Returns a dictionary mapping container names to status tuples.
+        
+        Args:
+            container_names: List of Docker container names to fetch
+            
+        Returns:
+            Dict mapping container_name -> (display_name, is_running, cpu, ram, uptime, details_allowed)
+        """
+        if not container_names:
+            return {}
+        
+        start_time = time.time()
+        logger.info(f"[BULK_FETCH] Starting bulk status fetch for {len(container_names)} containers")
+        
+        # Create tasks for parallel execution
+        async def fetch_single_container_info(docker_name: str):
+            """Fetches info and stats for a single container in parallel."""
+            try:
+                # Run info and stats fetch in parallel
+                info_task = asyncio.create_task(get_docker_info(docker_name))
+                stats_task = asyncio.create_task(get_docker_stats(docker_name))
+                
+                info, stats = await asyncio.gather(info_task, stats_task, return_exceptions=True)
+                
+                return docker_name, info, stats
+            except Exception as e:
+                logger.error(f"[BULK_FETCH] Error fetching {docker_name}: {e}")
+                return docker_name, None, None
+        
+        # Launch all container fetches in parallel
+        fetch_tasks = [fetch_single_container_info(name) for name in container_names]
+        results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        
+        # Process results into status tuples
+        status_results = {}
+        
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"[BULK_FETCH] Exception in bulk fetch: {result}")
+                continue
+                
+            docker_name, info, stats = result
+            
+            # Find server config for this container
+            servers = self.config.get('servers', [])
+            server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
+            
+            if not server_config:
+                logger.warning(f"[BULK_FETCH] No server config found for {docker_name}")
+                continue
+            
+            # Process the fetched data
+            display_name = server_config.get('name', docker_name)
+            details_allowed = server_config.get('allow_detailed_status', True)
+            
+            if isinstance(info, Exception) or info is None:
+                # Container offline or error
+                logger.debug(f"[BULK_FETCH] {docker_name} appears offline or error: {info}")
+                status_results[docker_name] = (display_name, False, 'N/A', 'N/A', 'N/A', details_allowed)
+                continue
+            
+            # Process container info
+            is_running = info.get('State', {}).get('Running', False)
+            uptime = "N/A"
+            cpu = "N/A"
+            ram = "N/A"
+            
+            if is_running:
+                # Calculate uptime
+                started_at_str = info.get('State', {}).get('StartedAt')
+                if started_at_str:
+                    try:
+                        started_at = datetime.fromisoformat(started_at_str.replace('Z', '+00:00'))
+                        now = datetime.now(timezone.utc)
+                        delta = now - started_at
+                        
+                        days = delta.days
+                        hours, remainder = divmod(delta.seconds, 3600)
+                        minutes, _ = divmod(remainder, 60)
+                        uptime_parts = []
+                        if days > 0:
+                            uptime_parts.append(f"{days}d")
+                        if hours > 0:
+                            uptime_parts.append(f"{hours}h")
+                        if minutes > 0 or (days == 0 and hours == 0):
+                            uptime_parts.append(f"{minutes}m")
+                        uptime = " ".join(uptime_parts) if uptime_parts else "< 1m"
+                    except ValueError as e:
+                        logger.error(f"[BULK_FETCH] Could not parse StartedAt for {docker_name}: {e}")
+                        uptime = "Error"
+                
+                # Process stats if allowed and available
+                if details_allowed and not isinstance(stats, Exception) and stats:
+                    cpu_stat, ram_stat = stats
+                    cpu = cpu_stat if cpu_stat is not None else 'N/A'
+                    ram = ram_stat if ram_stat is not None else 'N/A'
+                elif not details_allowed:
+                    cpu = _("Hidden")
+                    ram = _("Hidden")
+            
+            status_results[docker_name] = (display_name, is_running, cpu, ram, uptime, details_allowed)
+        
+        elapsed_time = (time.time() - start_time) * 1000
+        logger.info(f"[BULK_FETCH] Completed bulk fetch for {len(status_results)}/{len(container_names)} containers in {elapsed_time:.1f}ms")
+        
+        return status_results
+
+    async def bulk_update_status_cache(self, container_names: List[str]):
+        """
+        Updates the status cache for multiple containers using bulk fetching.
+        This is much faster than individual get_status calls.
+        """
+        if not container_names:
+            return
+        
+        # Determine which containers actually need cache updates
+        now = datetime.now(timezone.utc)
+        containers_needing_update = []
+        
+        for docker_name in container_names:
+            # Find display name
+            servers = self.config.get('servers', [])
+            server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
+            if not server_config:
+                continue
+                
+            display_name = server_config.get('name', docker_name)
+            cached_entry = self.status_cache.get(display_name)
+            
+            # Check if cache is stale or missing
+            if not cached_entry:
+                containers_needing_update.append(docker_name)
+            else:
+                cache_age = (now - cached_entry['timestamp']).total_seconds()
+                if cache_age > self.cache_ttl_seconds:
+                    containers_needing_update.append(docker_name)
+        
+        if not containers_needing_update:
+            logger.debug(f"[BULK_UPDATE] All {len(container_names)} containers have fresh cache")
+            return
+        
+        logger.info(f"[BULK_UPDATE] Updating cache for {len(containers_needing_update)}/{len(container_names)} containers")
+        
+        # Bulk fetch the containers that need updates
+        bulk_results = await self.bulk_fetch_container_status(containers_needing_update)
+        
+        # Update cache with results
+        for docker_name, status_tuple in bulk_results.items():
+            # Find display name
+            servers = self.config.get('servers', [])
+            server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
+            if server_config:
+                display_name = server_config.get('name', docker_name)
+                self.status_cache[display_name] = {
+                    'data': status_tuple,
+                    'timestamp': now
+                }
+                logger.debug(f"[BULK_UPDATE] Updated cache for {display_name}")
+
     async def get_status(self, server_config: Dict[str, Any]) -> Union[Tuple[str, bool, str, str, str, bool], Exception]:
         """
         Gets the status of a server.
@@ -238,8 +401,8 @@ class StatusHandlersMixin:
         # --- Determine status_result (from cache or live) ---
         if cached_entry:
             cache_age = (now - cached_entry['timestamp']).total_seconds()
-            # PERFORMANCE OPTIMIZATION: Für Toggle-Operationen verwende längere Cache-TTL
-            effective_ttl = self.cache_ttl_seconds * 2 if allow_toggle else self.cache_ttl_seconds
+            # PERFORMANCE OPTIMIZATION: Für Message Edits verwende längere Cache-TTL
+            effective_ttl = self.cache_ttl_seconds * 3 if not allow_toggle else self.cache_ttl_seconds
             if cache_age < effective_ttl:
                 logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s, TTL: {effective_ttl}s)")
             else:
@@ -433,8 +596,8 @@ class StatusHandlersMixin:
                         
                         # Update last edit time
                         if channel.id not in self.last_message_update_time:
-                            self.last_message_update_time[channel.id] = {}
-                        self.last_message_update_time[channel.id][display_name] = datetime.now(timezone.utc)
+                            self.last_message_update_time[channel_id] = {}
+                        self.last_message_update_time[channel_id][display_name] = datetime.now(timezone.utc)
                         
                         if is_pending_check: logger.debug(f"[SEND_STATUS_PENDING_CHECK] Successfully edited pending message for '{display_name}'.")
                     except discord.NotFound:
@@ -482,10 +645,14 @@ class StatusHandlersMixin:
             logger.debug(f"Updated last_message_update_time for '{display_name}' in {channel_id} to {now}")
         return result
 
-    # Helper function for editing a single message (must accept allow_toggle)
+    # =============================================================================
+    # ULTRA-PERFORMANCE MESSAGE EDITING WITH BULK CACHE PRELOADING
+    # =============================================================================
+
     async def _edit_single_message(self, channel_id: int, display_name: str, message_id: int, current_config: dict) -> Union[bool, Exception, None]:
-        """Edits a single status message based on cache and Pending-Status."""
-        logger.debug(f"Attempting to edit message {message_id} for '{display_name}' in channel {channel_id}")
+        """Edits a single status message based on cache and Pending-Status with performance optimizations."""
+        start_time = time.time()
+        
         server_conf = next((s for s in current_config.get('servers', []) if s.get('name', s.get('docker_name')) == display_name), None)
         if not server_conf:
             logger.warning(f"[_EDIT_SINGLE] Config for '{display_name}' not found during edit.")
@@ -516,8 +683,18 @@ class StatusHandlersMixin:
             message_to_edit = await channel.fetch_message(message_id)
 
             await message_to_edit.edit(embed=embed, view=view if view and view.children else None)
-            logger.info(f"_edit_single_message: Successfully edited message {message_id} for '{display_name}'")
-            await asyncio.sleep(0.1) # Add a small delay to yield control
+            
+            elapsed_time = (time.time() - start_time) * 1000
+            
+            # Smart performance logging
+            if elapsed_time > 1000:  # Over 1 second - critical
+                logger.error(f"_edit_single_message: CRITICAL SLOW edit for '{display_name}' took {elapsed_time:.1f}ms")
+            elif elapsed_time > 500:  # Over 500ms - warning
+                logger.warning(f"_edit_single_message: SLOW edit for '{display_name}' took {elapsed_time:.1f}ms")
+            elif elapsed_time < 100:  # Under 100ms - excellent
+                logger.info(f"_edit_single_message: FAST edit for '{display_name}' in {elapsed_time:.1f}ms")
+            
+            await asyncio.sleep(0.05) # Reduced delay for better throughput
             return True # Success
 
         except discord.NotFound:
@@ -529,5 +706,6 @@ class StatusHandlersMixin:
             logger.error(f"_edit_single_message: Missing permissions to fetch/edit message {message_id} in channel {channel_id}.")
             return discord.Forbidden(f"Permissions error for {message_id}")
         except Exception as e:
-            logger.error(f"_edit_single_message: Failed to edit message {message_id} for '{display_name}': {e}", exc_info=True)
+            elapsed_time = (time.time() - start_time) * 1000
+            logger.error(f"_edit_single_message: Failed to edit message {message_id} for '{display_name}' after {elapsed_time:.1f}ms: {e}", exc_info=True)
             return e 

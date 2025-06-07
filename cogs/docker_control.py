@@ -150,6 +150,9 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
              return
 
         logger.info(f"Direct Cog Periodic Edit Loop: Checking {len(self.channel_server_message_ids)} channels with tracked messages.")
+        
+        # ULTRA-PERFORMANCE: Collect all containers that might need updates for bulk fetching
+        all_container_names = set()
         tasks_to_run = []
         now_utc = datetime.now(timezone.utc)
         
@@ -213,16 +216,31 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                     if display_name == "overview":
                         tasks_to_run.append(self._update_overview_message(channel_id, message_id))
                     else:
+                        # ULTRA-PERFORMANCE: Collect container names for bulk fetching
+                        current_server_conf = next((s for s in self.config.get('servers', []) if s.get('name', s.get('docker_name')) == display_name), None)
+                        if current_server_conf:
+                            docker_name = current_server_conf.get('docker_name')
+                            if docker_name:
+                                all_container_names.add(docker_name)
+                        
                         # Regular server message
                         tasks_to_run.append(self._edit_single_message_wrapper(channel_id, display_name, message_id, self.config, allow_toggle_for_channel))
             
         if tasks_to_run:
+            # ULTRA-PERFORMANCE: Bulk update status cache before processing tasks
+            if all_container_names:
+                start_bulk_time = datetime.now(timezone.utc)
+                logger.info(f"Direct Cog Periodic Edit Loop: Pre-loading cache for {len(all_container_names)} containers before {len(tasks_to_run)} message edits")
+                await self.bulk_update_status_cache(list(all_container_names))
+                bulk_time = (datetime.now(timezone.utc) - start_bulk_time).total_seconds() * 1000
+                logger.info(f"Direct Cog Periodic Edit Loop: Bulk cache update completed in {bulk_time:.1f}ms")
+            
             logger.info(f"Direct Cog Periodic Edit Loop: Attempting to run {len(tasks_to_run)} message edit tasks.")
             
             # PERFORMANCE OPTIMIZATION: Batch processing with priorities
             # Split tasks into smaller batches to avoid Discord rate limits
-            BATCH_SIZE = 5  # Maximum 5 simultaneous message updates
-            BATCH_DELAY = 0.2  # 200ms pause between batches
+            BATCH_SIZE = 8  # Increased from 5 to 8 since cache is pre-loaded
+            BATCH_DELAY = 0.1  # Reduced from 0.2s to 0.1s for better throughput
             
             total_tasks = len(tasks_to_run)
             success_count = 0
