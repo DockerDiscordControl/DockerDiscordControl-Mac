@@ -356,7 +356,7 @@
         // Rate-limiting variables
         let lastLogFetch = 0; // Timestamp of the last request
         let lastActionLogFetch = 0;
-        const MIN_FETCH_INTERVAL = 20000; // Minimum interval between requests in ms (20 seconds for safety buffer)
+        const MIN_FETCH_INTERVAL = 15000; // Minimum interval between requests in ms (15 seconds - optimized for better UX)
         let fetchInProgress = false; // Flag to prevent parallel requests
         let actionLogFetchInProgress = false;
 
@@ -492,7 +492,7 @@
             return false;
         }
 
-        // Action log retrieval function
+        // OPTIMIZED Action log retrieval with better error handling
         async function fetchActionLogs() {
             if (!actionLogContentElement) return false;
             
@@ -506,18 +506,32 @@
             actionLogFetchInProgress = true;
             lastActionLogFetch = now;
             
+            // TIMEOUT PROTECTION: If loading takes too long, show a better message
+            const timeoutId = setTimeout(() => {
+                if (actionLogContentElement.textContent === 'Loading action log...') {
+                    actionLogContentElement.textContent = 'Action log is taking longer than expected to load...';
+                }
+            }, 10000); // 10 second timeout
+            
             if (refreshActionLogBtn) refreshActionLogBtn.disabled = true;
             
             try {
                 const response = await fetch("{{ url_for('action_log_bp.get_action_log') }}");
                 if (response.ok) {
+                    clearTimeout(timeoutId); // Clear timeout on success
                     const logs = await response.text();
                     actionLogContentElement.textContent = logs;
                     return true;
                 } else if (response.status === 429) {
-                    console.warn('Too many action log requests, will retry later');
-                    // For 429, don't overwrite, just silently skip without showing a warning
-                    // The existing content remains displayed
+                    console.warn('Rate limit hit for action logs - will retry in 30 seconds');
+                    // SMART RETRY: Schedule retry after 30 seconds instead of showing permanent error
+                    if (actionLogContentElement.textContent === '[Loading action log...]') {
+                        actionLogContentElement.textContent = 'Rate limit reached. Retrying in 30 seconds...';
+                    }
+                    setTimeout(() => {
+                        console.log('Retrying action log fetch after rate limit cooldown');
+                        fetchActionLogs();
+                    }, 30000); // Retry after 30 seconds
                 } else {
                     actionLogContentElement.textContent = `Error loading action logs: ${response.statusText}`;
                 }
@@ -525,6 +539,7 @@
                 console.error("Error fetching action logs:", error);
                 actionLogContentElement.textContent = `Error loading action logs: ${error.message}`;
             } finally {
+                clearTimeout(timeoutId); // Always clear timeout in finally block
                 actionLogFetchInProgress = false;
                 if (refreshActionLogBtn) {
                     setTimeout(() => {
@@ -535,15 +550,20 @@
             return false;
         }
 
-        // Combined function that retrieves both logs
+        // OPTIMIZED: Staggered log fetching to prevent rate limits
         async function fetchAllLogs() {
-            const containerLogPromise = fetchContainerLogs();
-            const actionLogPromise = fetchActionLogs();
+            console.log('Starting staggered log fetch to avoid rate limits');
             
-            // Execute both retrievals in parallel, but handle them independently
-            await Promise.allSettled([containerLogPromise, actionLogPromise]);
+            // Fetch container logs first
+            const containerLogResult = await fetchContainerLogs();
             
-            console.log('Logs updated');
+            // Wait 2 seconds before fetching action logs to prevent rate limiting
+            setTimeout(async () => {
+                await fetchActionLogs();
+                console.log('Staggered logs update completed');
+            }, 2000); // 2 second delay between requests
+            
+            console.log('Container logs fetched, action logs queued');
         }
 
         // --- Log Level Button Listeners ---
@@ -636,12 +656,13 @@
              });
          }
 
-        // Initial loading of both logs
-        fetchAllLogs();
+        // OPTIMIZED: Load action logs immediately, then start staggered auto-refresh
+        fetchActionLogs(); // Load action logs first to clear "Loading..." quickly
+        setTimeout(fetchContainerLogs, 1000); // Load container logs after 1 second
         
         // A common interval for both logs
         if (logIntervalId) clearInterval(logIntervalId);
-        logIntervalId = setInterval(fetchAllLogs, 60000); // Updates both logs every 60 seconds (increased from 30 seconds)
+        logIntervalId = setInterval(fetchAllLogs, 120000); // RATE-LIMIT OPTIMIZED: Updates logs every 2 minutes with staggered fetching
         // --- END: Log Update ---
 
         // --- Temporary Debug Mode Setup ---
