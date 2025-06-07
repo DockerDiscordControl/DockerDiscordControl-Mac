@@ -54,7 +54,7 @@ def _clear_caches():
     _container_static_data.clear()
     _embed_pool.clear()
     _view_template_cache.clear()
-    logger.debug("All performance caches cleared")
+    logger.info("All performance caches cleared")
 
 # =============================================================================
 # OPTIMIZATION 1: ULTRA-FAST TIMESTAMP CACHING
@@ -322,7 +322,7 @@ class ToggleButton(Button):
         self.is_expanded = not self.is_expanded
         self.cog.expanded_states[self.display_name] = self.is_expanded
         
-        logger.debug(f"[TOGGLE_BTN] Ultra-fast toggle for '{self.display_name}' by {interaction.user}. New status: {self.is_expanded}")
+        # Removed debug log to reduce log spam - only log on errors
 
         channel_id = interaction.channel.id if interaction.channel else None
         
@@ -341,7 +341,9 @@ class ToggleButton(Button):
                 if pending_embed:
                     await message.edit(embed=pending_embed, view=None)
                     elapsed_time = (time.time() - start_time) * 1000
-                    logger.debug(f"[TOGGLE_BTN] Pending message for '{self.display_name}' updated in {elapsed_time:.1f}ms")
+                    # Only log if operation takes unusually long (>100ms)
+                    if elapsed_time > 100:
+                        logger.warning(f"[TOGGLE_BTN] Pending message for '{self.display_name}' updated in {elapsed_time:.1f}ms (slow)")
                 return
             
             # Use cached data for ultra-fast operation
@@ -360,7 +362,11 @@ class ToggleButton(Button):
                 if embed and view:
                     await message.edit(embed=embed, view=view)
                     elapsed_time = (time.time() - start_time) * 1000
-                    logger.debug(f"[TOGGLE_BTN] ULTRA-FAST toggle message for '{self.display_name}' updated in {elapsed_time:.1f}ms")
+                    # Only log if operation is slow (>50ms) or very fast (<5ms for verification)
+                    if elapsed_time > 50:
+                        logger.warning(f"[TOGGLE_BTN] Toggle for '{self.display_name}' took {elapsed_time:.1f}ms (slow)")
+                    elif elapsed_time < 5:
+                        logger.info(f"[TOGGLE_BTN] Ultra-fast toggle for '{self.display_name}' in {elapsed_time:.1f}ms")
                 else:
                     logger.warning(f"[TOGGLE_BTN] Ultra-fast toggle generation failed for '{self.display_name}'")
             else:
@@ -376,7 +382,9 @@ class ToggleButton(Button):
                 temp_view = discord.ui.View(timeout=None)
                 await message.edit(embed=temp_embed, view=temp_view)
                 elapsed_time = (time.time() - start_time) * 1000
-                logger.debug(f"[TOGGLE_BTN] Loading message for '{self.display_name}' shown in {elapsed_time:.1f}ms")
+                # Only log if loading message is slow
+                if elapsed_time > 100:
+                    logger.warning(f"[TOGGLE_BTN] Loading message for '{self.display_name}' took {elapsed_time:.1f}ms (slow)")
             
         except Exception as e:
             logger.error(f"[TOGGLE_BTN] Error toggling '{self.display_name}': {e}", exc_info=True)

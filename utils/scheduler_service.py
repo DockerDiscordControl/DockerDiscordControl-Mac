@@ -20,7 +20,7 @@ from utils.logging_utils import setup_logger
 logger = setup_logger('ddc.scheduler_service', level=logging.DEBUG)
 
 # Check interval in seconds
-CHECK_INTERVAL = 15  # Checks every 15 seconds
+CHECK_INTERVAL = 60  # Checks every 60 seconds (much more reasonable for task scheduling)
 
 class SchedulerService:
     """Service for managing and executing scheduled tasks."""

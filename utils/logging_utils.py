@@ -52,8 +52,10 @@ def is_debug_mode_enabled() -> bool:
         _debug_mode_enabled = config.get('scheduler_debug_mode', False)
         
         # Only output debug message when loaded for the first time or when the value changes
-        if previous_value != _debug_mode_enabled or (_last_debug_status_log is None) or (current_time - _last_debug_status_log > 60):
-            print(f"Debug status loaded from configuration: {_debug_mode_enabled}")
+        if previous_value != _debug_mode_enabled or (_last_debug_status_log is None) or (current_time - _last_debug_status_log > 300):
+            # Only log if debug mode actually changed or it's the first time loading
+            if previous_value != _debug_mode_enabled or _last_debug_status_log is None:
+                print(f"Debug status loaded from configuration: {_debug_mode_enabled}")
             _last_debug_status_log = current_time
     except Exception as e:
         # Fallback on errors
