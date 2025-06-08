@@ -13,12 +13,12 @@ fi
 # Exits the script immediately if a command fails (except those with || true)
 set -e
 
-echo ">>> Stopping container ddc..."
-docker stop ddc || true # || true prevents errors if the container is not running
+echo ">>> Stopping container ddc-debian..."
+docker stop ddc-debian || true # || true prevents errors if the container is not running
 sleep 1
 
-echo ">>> Removing container ddc..."
-docker rm ddc || true # || true prevents errors if the container does not exist
+echo ">>> Removing container ddc-debian..."
+docker rm ddc-debian || true # || true prevents errors if the container does not exist
 sleep 1
 
 # <<< NEW: Delete pycache >>>
@@ -27,8 +27,8 @@ find . -type d -name "__pycache__" -exec rm -rf {} +
 sleep 1
 # <<< End of pycache deletion >>>
 
-echo ">>> Rebuilding Alpine image dockerdiscordcontrol (without cache)..."
-docker build --no-cache -t dockerdiscordcontrol .
+echo ">>> Rebuilding Debian image dockerdiscordcontrol:debian (without cache)..."
+docker build --no-cache -f Dockerfile.debian -t dockerdiscordcontrol:debian .
 # If the build fails, the script stops here thanks to 'set -e'
 
 sleep 1
@@ -62,11 +62,11 @@ if [ -z "$FLASK_SECRET_KEY" ]; then
     FLASK_SECRET_KEY="temporary-dev-key-$(date +%s)"
 fi
 
-# Start normal container with optimized environment
-echo ">>> Starting new container ddc..."
+# Start Debian container with optimized environment
+echo ">>> Starting new Debian container ddc-debian..."
 docker run -d \
-  --name ddc \
-  -p 8374:9374 \
+  --name ddc-debian \
+  -p 8376:9374 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v ./config:/app/config \
   -v ./logs:/app/logs \
@@ -85,7 +85,8 @@ docker run -d \
   --cpus 2.0 \
   --memory 512M \
   --memory-reservation 128M \
-  dockerdiscordcontrol
+  dockerdiscordcontrol:debian
 
 sleep 1
-echo ">>> Script finished. Check the logs with 'docker logs ddc -f'"
+echo ">>> Script finished. Check the logs with 'docker logs ddc-debian -f'"
+echo ">>> Debian container running on port 8376"
