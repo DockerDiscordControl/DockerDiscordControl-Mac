@@ -1,5 +1,5 @@
 # --- Main package for Discord Bot ---
-py-cord==2.4.1
+py-cord==2.6.1
 
 # --- Web UI and Translations ---
 Flask==3.1.1
