@@ -2,10 +2,14 @@
 
 **Homepage:** [https://ddc.bot](https://ddc.bot) | **📖 [Complete Documentation](../../wiki)**
 
-Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with ultra-fast performance optimizations.
+Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with ultra-fast performance optimizations. Built on Alpine Linux for enhanced security and minimal resource usage.
 
 [![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE)
+[![Alpine Linux](https://img.shields.io/badge/Alpine_Linux-327MB-0D597F.svg?logo=alpine-linux)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol)
+[![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol.svg)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol)
+[![Memory Optimized](https://img.shields.io/badge/RAM-<200MB-green.svg)](../../wiki/Memory‐Optimization)
+[![Unraid](https://img.shields.io/badge/Unraid-Community_Apps-orange.svg)](UNRAID.md)
 [![Wiki](https://img.shields.io/badge/documentation-wiki-blue.svg)](../../wiki)
 
 ## ✨ Features
@@ -16,8 +20,13 @@ Control your Docker containers directly from Discord! This application provides 
 - **📅 Task System**: Schedule automated container actions (daily, weekly, monthly, one-time)
 - **🛡️ Security**: Channel-based permissions, rate limiting, comprehensive security framework
 - **🌍 Multi-Language**: English, German, French support
+- **🏔️ Alpine Linux**: 327MB image, 94% fewer vulnerabilities than Debian-based containers
+- **💾 Memory Optimized**: <200MB RAM usage with intelligent garbage collection
+- **📊 Production Ready**: Supports 50 containers across 15 Discord channels
 
 **New in v3.0:** Revolutionary performance optimizations, complete security vulnerability remediation, 36% code reduction, 100% English documentation.
+
+**Latest Updates:** Alpine Linux migration, aggressive memory optimization, Unraid Community Applications support.
 
 ## 🚀 Quick Start
 
@@ -45,10 +54,25 @@ echo "FLASK_SECRET_KEY=$(openssl rand -hex 32)" > .env
 docker compose up --build -d
 ```
 
-**Method 2: Unraid**
-- Install via Community Applications
+**Method 2: Docker Hub (Direct)**
+
+```bash
+# Pull and run latest Alpine-optimized image
+docker run -d --name ddc \
+  -p 9374:9374 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v ./config:/app/config \
+  -v ./logs:/app/logs \
+  -e FLASK_SECRET_KEY="$(openssl rand -hex 32)" \
+  --restart unless-stopped \
+  dockerdiscordcontrol/dockerdiscordcontrol:latest
+```
+
+**Method 3: Unraid (Recommended for Unraid users)**
+- Install via **Community Applications**
 - Search for "DockerDiscordControl"
-- [📖 Detailed Unraid Setup](../../wiki/Installation‐Guide#unraid)
+- **One-click install** with pre-configured paths
+- [📖 Detailed Unraid Setup](UNRAID.md)
 
 ### Configuration
 
@@ -56,6 +80,26 @@ docker compose up --build -d
 2. **Login**: Username `admin`, Password `admin` (change immediately!)
 3. **Configure**: Bot token, Guild ID, container permissions
 4. **Restart**: `docker compose restart` after initial setup
+
+## 📊 System Requirements
+
+### **Minimum Requirements**
+- **CPU**: 1 core (1.5 cores recommended)
+- **RAM**: 150MB (200MB limit, <200MB typical usage)
+- **Storage**: 100MB for application + config/logs space
+- **Docker**: Docker Engine 20.10+ and Docker Compose 2.0+
+
+### **Production Limits**
+- **Maximum Containers**: 50 Docker containers
+- **Maximum Channels**: 15 Discord channels  
+- **Concurrent Operations**: 10 pending Docker actions
+- **Cache Size**: 50 status entries with intelligent cleanup
+
+### **Platform Support**
+- ✅ **Unraid**: Native Community Applications support
+- ✅ **Linux**: x86_64, ARM64 (Apple Silicon, Raspberry Pi)
+- ✅ **Docker**: Swarm, Compose, Standalone
+- ✅ **NAS**: Synology, QNAP, TrueNAS
 
 ## 📚 Documentation
 
@@ -65,6 +109,9 @@ docker compose up --build -d
 | [⚙️ Configuration](../../wiki/Configuration) | Web UI, permissions, channels |
 | [📅 Task System](../../wiki/Task‐System) | Automated scheduling system |
 | [🚀 Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
+| [🏔️ Alpine Migration](../../wiki/Alpine‐Linux‐Migration) | Benefits, security, optimization |
+| [💾 Memory Optimization](../../wiki/Memory‐Optimization) | Resource management, limits |
+| [🖥️ Unraid Setup](UNRAID.md) | Community Applications guide |
 | [🔧 Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
 | [👩‍💻 Development](../../wiki/Development) | Contributing & development setup |
 | [🔒 Security](../../wiki/Security) | Best practices & considerations |
