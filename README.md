@@ -141,4 +141,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**⭐ Like DDC? Star the repository!** | **🐛 Found a bug?** [Report it](../../issues) | **💡 Feature idea?** [Suggest it](../../discussions) 
+**⭐ Like DDC? Star the repository!** | **🐛 Found a bug?** [Report it](../../issues) | **💡 Feature idea?** [Suggest it](../../discussions)
+
+## 💖 Support DDC Development
+
+Help keep DockerDiscordControl growing and improving:
+
+- ☕ **[Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support
+- 💙 **[PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution  
+- 🌟 **[GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing support (coming soon)
+
+Your support helps maintain DDC, develop new features, and keep it zero-vulnerability secure! 🛡️ 

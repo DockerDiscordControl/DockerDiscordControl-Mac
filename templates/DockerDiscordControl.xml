@@ -18,8 +18,8 @@
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
-  <DonateText/>
-  <DonateLink/>
+  <DonateText>Support DDC Development ☕</DonateText>
+  <DonateLink>https://buymeacoffee.com/dockerdiscordcontrol</DonateLink>
   <Requires>Docker socket access for container management</Requires>
   <Config Name="WebUI Port" Target="9374" Default="9374" Mode="tcp" Description="Port for the DDC Web Interface" Type="Port" Display="always" Required="true" Mask="false">9374</Config>
   <Config Name="Docker Socket" Target="/var/run/docker.sock" Default="/var/run/docker.sock" Mode="rw" Description="Docker socket for container management - REQUIRED" Type="Path" Display="always" Required="true" Mask="false">/var/run/docker.sock</Config>

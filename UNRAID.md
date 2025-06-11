@@ -191,6 +191,16 @@ docker pull dockerdiscordcontrol/dockerdiscordcontrol:latest
 - ✅ Community Applications ready
 - ✅ Auto-restart capabilities
 
+## 💖 Support DDC Development
+
+Love using DDC on Unraid? Help keep it growing and secure:
+
+- ☕ **[Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support
+- 💙 **[PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution
+- 🌟 **[GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing support (coming soon)
+
+Your support helps maintain DDC, develop new features, and keep it zero-vulnerability secure! 🛡️
+
 ---
 
 **Happy container management!** 🐳✨ 
