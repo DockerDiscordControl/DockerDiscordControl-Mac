@@ -38,20 +38,24 @@ class StatusHandlersMixin:
     Handles retrieving, processing, and displaying Docker container statuses.
     """
     
+    def _ensure_conditional_cache(self):
+        """Ensure conditional update cache is initialized."""
+        if not hasattr(self, 'last_sent_content'):
+            self.last_sent_content = {}  # Track last sent embed content for conditional updates
+            logger.debug("Initialized conditional update cache")
+        if not hasattr(self, 'update_stats'):
+            self.update_stats = {'skipped': 0, 'sent': 0, 'last_reset': datetime.now(timezone.utc)}
+            logger.debug("Initialized update statistics")
+    
     def _get_cached_translations(self, lang: str) -> dict:
         """Cached translations für bessere Performance."""
+        if not hasattr(self, 'cached_translations'):
+            self.cached_translations = {}
+        
         cache_key = f"translations_{lang}"
-        now = datetime.now(timezone.utc)
         
-        # Cache-Invalidierung alle 5 Minuten
-        if (now - self._embed_cache['last_cache_clear']).total_seconds() > self._EMBED_CACHE_TTL:
-            self._embed_cache['translated_terms'].clear()
-            self._embed_cache['box_elements'].clear()
-            self._embed_cache['last_cache_clear'] = now
-            logger.debug("Cleared embed element cache due to TTL expiration")
-        
-        if cache_key not in self._embed_cache['translated_terms']:
-            self._embed_cache['translated_terms'][cache_key] = {
+        if cache_key not in self.cached_translations:
+            self.cached_translations[cache_key] = {
                 'online_text': _("**Online**"),
                 'offline_text': _("**Offline**"),
                 'cpu_text': _("CPU"),
@@ -62,26 +66,29 @@ class StatusHandlersMixin:
             }
             logger.debug(f"Cached translations for language: {lang}")
         
-        return self._embed_cache['translated_terms'][cache_key]
+        return self.cached_translations[cache_key]
     
     def _get_cached_box_elements(self, display_name: str, BOX_WIDTH: int = 28) -> dict:
         """Cached box elements für bessere Performance."""
+        if not hasattr(self, 'cached_box_elements'):
+            self.cached_box_elements = {}
+            
         cache_key = f"box_{display_name}_{BOX_WIDTH}"
         
-        if cache_key not in self._embed_cache['box_elements']:
+        if cache_key not in self.cached_box_elements:
             header_text = f"── {display_name} "
             max_name_len = BOX_WIDTH - 4
             if len(header_text) > max_name_len:
                 header_text = header_text[:max_name_len-1] + "… "
             padding_width = max(1, BOX_WIDTH - 1 - len(header_text))
             
-            self._embed_cache['box_elements'][cache_key] = {
+            self.cached_box_elements[cache_key] = {
                 'header_line': f"┌{header_text}{'─' * padding_width}",
                 'footer_line': f"└{'─' * (BOX_WIDTH - 1)}"
             }
             logger.debug(f"Cached box elements for: {display_name}")
         
-        return self._embed_cache['box_elements'][cache_key]
+        return self.cached_box_elements[cache_key]
     
     async def bulk_fetch_container_status(self, container_names: List[str]) -> Dict[str, Tuple]:
         """
@@ -650,8 +657,11 @@ class StatusHandlersMixin:
     # =============================================================================
 
     async def _edit_single_message(self, channel_id: int, display_name: str, message_id: int, current_config: dict) -> Union[bool, Exception, None]:
-        """Edits a single status message based on cache and Pending-Status with performance optimizations."""
+        """Edits a single status message based on cache and Pending-Status with conditional updates."""
         start_time = time.time()
+        
+        # Initialize conditional cache
+        self._ensure_conditional_cache()
         
         server_conf = next((s for s in current_config.get('servers', []) if s.get('name', s.get('docker_name')) == display_name), None)
         if not server_conf:
@@ -673,6 +683,34 @@ class StatusHandlersMixin:
                 logger.warning(f"_edit_single_message: No embed generated for '{display_name}', cannot edit.")
                 return None
 
+            # ✨ CONDITIONAL UPDATE CHECK - Only edit if content changed
+            cache_key = f"{channel_id}:{display_name}"
+            
+            # Create a comparable content hash from embed + view
+            current_content = {
+                'description': embed.description,
+                'color': embed.color.value if embed.color else None,
+                'footer': embed.footer.text if embed.footer else None,
+                'view_children_count': len(view.children) if view else 0
+            }
+            
+            # Check if content actually changed
+            last_content = self.last_sent_content.get(cache_key)
+            if last_content and last_content == current_content:
+                # Content unchanged - skip Discord API call
+                self.update_stats['skipped'] += 1
+                elapsed_time = (time.time() - start_time) * 1000
+                logger.debug(f"_edit_single_message: SKIPPED edit for '{display_name}' - content unchanged ({elapsed_time:.1f}ms)")
+                
+                # Log performance stats every 50 skipped updates
+                if self.update_stats['skipped'] % 50 == 0:
+                    total_operations = self.update_stats['skipped'] + self.update_stats['sent']
+                    skip_percentage = (self.update_stats['skipped'] / total_operations * 100) if total_operations > 0 else 0
+                    logger.info(f"UPDATE_STATS: Skipped {self.update_stats['skipped']} / Sent {self.update_stats['sent']} ({skip_percentage:.1f}% saved)")
+                
+                return True  # Return success without actual edit
+            
+            # Content changed or first time - proceed with edit
             channel = await self.bot.fetch_channel(channel_id)
             if not isinstance(channel, discord.TextChannel):
                 logger.warning(f"_edit_single_message: Channel {channel_id} is not a text channel.")
@@ -684,6 +722,18 @@ class StatusHandlersMixin:
 
             await message_to_edit.edit(embed=embed, view=view if view and view.children else None)
             
+            # Store the new content for future comparison
+            self.last_sent_content[cache_key] = current_content
+            self.update_stats['sent'] += 1
+            
+            # Prevent cache from growing too large (cleanup every 100 operations)
+            total_ops = self.update_stats['skipped'] + self.update_stats['sent']
+            if total_ops % 100 == 0 and len(self.last_sent_content) > 50:
+                # Keep only the most recent 25 entries
+                sorted_items = list(self.last_sent_content.items())[-25:]
+                self.last_sent_content = dict(sorted_items)
+                logger.debug(f"Cleaned conditional update cache: kept {len(self.last_sent_content)} entries")
+            
             elapsed_time = (time.time() - start_time) * 1000
             
             # Smart performance logging
@@ -693,8 +743,10 @@ class StatusHandlersMixin:
                 logger.warning(f"_edit_single_message: SLOW edit for '{display_name}' took {elapsed_time:.1f}ms")
             elif elapsed_time < 100:  # Under 100ms - excellent
                 logger.info(f"_edit_single_message: FAST edit for '{display_name}' in {elapsed_time:.1f}ms")
+            else:
+                logger.info(f"_edit_single_message: Updated '{display_name}' in {elapsed_time:.1f}ms")
             
-            await asyncio.sleep(0.05) # Reduced delay for better throughput
+            await asyncio.sleep(0.2) # Increased delay to reduce Discord API pressure and improve stability
             return True # Success
 
         except discord.NotFound:

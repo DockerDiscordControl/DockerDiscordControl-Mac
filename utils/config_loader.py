@@ -69,7 +69,7 @@ DEFAULT_CHANNELS_CONFIG = {
             "schedule": False
         },
         "post_initial": False,
-        "update_interval_minutes": 5,
+        "update_interval_minutes": 10,
         "inactivity_timeout_minutes": 10,
         "enable_auto_refresh": True,
         "recreate_messages_on_inactivity": True
@@ -396,7 +396,7 @@ def process_config_form(form_data, current_config: Dict[str, Any]) -> Tuple[Dict
                 'name': channel_name, 
                 'commands': commands, 
                 'post_initial': get_bool_form_val('post_initial', False),
-                'update_interval_minutes': get_int_form_val('update_interval_minutes', 5),
+                'update_interval_minutes': get_int_form_val('update_interval_minutes', 10),
                 'inactivity_timeout_minutes': get_int_form_val('inactivity_timeout_minutes', 10, min_val=0),
                 'enable_auto_refresh': get_bool_form_val('enable_auto_refresh', True),
                 'recreate_messages_on_inactivity': get_bool_form_val('recreate_messages_on_inactivity', True)
