@@ -1603,9 +1603,10 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 logger.warning(f"Channel {channel_id} is not a text channel, cannot update overview.")
                 return False
                 
-            # Get message
+            # Get message using partial message for better performance
             try:
-                message = await channel.fetch_message(message_id)
+                # PERFORMANCE OPTIMIZATION: Use partial message instead of fetch
+                message = channel.get_partial_message(message_id)  # No API call
             except discord.NotFound:
                 logger.warning(f"Overview message {message_id} in channel {channel_id} not found. Removing from tracking.")
                 if channel_id in self.channel_server_message_ids and "overview" in self.channel_server_message_ids[channel_id]:

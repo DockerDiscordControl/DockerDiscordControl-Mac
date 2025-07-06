@@ -596,7 +596,8 @@ class StatusHandlersMixin:
 
                 if should_edit:
                     try:
-                        existing_message = await channel.fetch_message(existing_msg_id)
+                        # PERFORMANCE OPTIMIZATION: Use partial message instead of fetch
+                        existing_message = channel.get_partial_message(existing_msg_id)  # No API call
                         await existing_message.edit(embed=embed, view=view if view and view.children else None)
                         msg = existing_message
                         logger.debug(f"[SEND_STATUS] Edited message {existing_msg_id} for '{display_name}' in channel {channel.id}")
@@ -711,14 +712,22 @@ class StatusHandlersMixin:
                 return True  # Return success without actual edit
             
             # Content changed or first time - proceed with edit
-            channel = await self.bot.fetch_channel(channel_id)
+            # PERFORMANCE OPTIMIZATION: Use cached channel object instead of fetch
+            channel = self.bot.get_channel(channel_id)  # Uses bot's internal cache, no API call
+            if not channel:
+                # Fallback to fetch if not in cache (rare case)
+                logger.debug(f"_edit_single_message: Channel {channel_id} not in cache, fetching...")
+                channel = await self.bot.fetch_channel(channel_id)
+            
             if not isinstance(channel, discord.TextChannel):
                 logger.warning(f"_edit_single_message: Channel {channel_id} is not a text channel.")
                 if channel_id in self.channel_server_message_ids and display_name in self.channel_server_message_ids[channel_id]:
                      del self.channel_server_message_ids[channel_id][display_name]
                 return TypeError(f"Channel {channel_id} not text channel")
 
-            message_to_edit = await channel.fetch_message(message_id)
+            # PERFORMANCE OPTIMIZATION: Use partial message instead of fetch
+            # This creates a message object without API call - edit() works on partial messages
+            message_to_edit = channel.get_partial_message(message_id)  # No API call
 
             await message_to_edit.edit(embed=embed, view=view if view and view.children else None)
             
