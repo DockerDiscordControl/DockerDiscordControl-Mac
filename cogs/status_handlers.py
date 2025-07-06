@@ -603,8 +603,8 @@ class StatusHandlersMixin:
                         
                         # Update last edit time
                         if channel.id not in self.last_message_update_time:
-                            self.last_message_update_time[channel_id] = {}
-                        self.last_message_update_time[channel_id][display_name] = datetime.now(timezone.utc)
+                            self.last_message_update_time[channel.id] = {}
+                        self.last_message_update_time[channel.id][display_name] = datetime.now(timezone.utc)
                         
                         if is_pending_check: logger.debug(f"[SEND_STATUS_PENDING_CHECK] Successfully edited pending message for '{display_name}'.")
                     except discord.NotFound:
@@ -746,7 +746,8 @@ class StatusHandlersMixin:
             else:
                 logger.info(f"_edit_single_message: Updated '{display_name}' in {elapsed_time:.1f}ms")
             
-            await asyncio.sleep(0.2) # Increased delay to reduce Discord API pressure and improve stability
+            # REMOVED: await asyncio.sleep(0.2) - This was blocking true parallelization
+            # Discord API rate limiting is handled by py-cord internally
             return True # Success
 
         except discord.NotFound:
