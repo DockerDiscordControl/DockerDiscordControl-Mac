@@ -203,12 +203,13 @@ class StatusHandlersMixin:
     async def bulk_update_status_cache(self, container_names: List[str]):
         """
         Updates the status cache for multiple containers using bulk fetching.
-        This is much faster than individual get_status calls.
+        Optimized to work with 30-second background status_update_loop.
         """
         if not container_names:
             return
         
-        # Determine which containers actually need cache updates
+        # PERFORMANCE OPTIMIZATION: Only update completely missing cache entries
+        # The 30-second status_update_loop handles regular cache updates
         now = datetime.now(timezone.utc)
         containers_needing_update = []
         
@@ -222,21 +223,23 @@ class StatusHandlersMixin:
             display_name = server_config.get('name', docker_name)
             cached_entry = self.status_cache.get(display_name)
             
-            # Check if cache is stale or missing
+            # ONLY update if cache is completely missing (not just stale)
+            # Background loop handles regular updates every 30s
             if not cached_entry:
                 containers_needing_update.append(docker_name)
+                logger.debug(f"[BULK_UPDATE] {display_name} has no cache entry, scheduling update")
             else:
+                # Cache exists - let background loop handle updates
                 cache_age = (now - cached_entry['timestamp']).total_seconds()
-                if cache_age > self.cache_ttl_seconds:
-                    containers_needing_update.append(docker_name)
+                logger.debug(f"[BULK_UPDATE] {display_name} has cache (age: {cache_age:.1f}s), background loop handles updates")
         
         if not containers_needing_update:
-            logger.debug(f"[BULK_UPDATE] All {len(container_names)} containers have fresh cache")
+            logger.debug(f"[BULK_UPDATE] All {len(container_names)} containers have cache entries - background loop provides updates")
             return
         
-        logger.info(f"[BULK_UPDATE] Updating cache for {len(containers_needing_update)}/{len(container_names)} containers")
+        logger.info(f"[BULK_UPDATE] Updating cache for {len(containers_needing_update)}/{len(container_names)} containers with missing cache")
         
-        # Bulk fetch the containers that need updates
+        # Bulk fetch only the containers with no cache
         bulk_results = await self.bulk_fetch_container_status(containers_needing_update)
         
         # Update cache with results
@@ -250,7 +253,7 @@ class StatusHandlersMixin:
                     'data': status_tuple,
                     'timestamp': now
                 }
-                logger.debug(f"[BULK_UPDATE] Updated cache for {display_name}")
+                logger.debug(f"[BULK_UPDATE] Updated missing cache for {display_name}")
 
     async def get_status(self, server_config: Dict[str, Any]) -> Union[Tuple[str, bool, str, str, str, bool], Exception]:
         """
@@ -408,26 +411,28 @@ class StatusHandlersMixin:
         # --- Determine status_result (from cache or live) ---
         if cached_entry:
             cache_age = (now - cached_entry['timestamp']).total_seconds()
-            # PERFORMANCE OPTIMIZATION: Für Message Edits verwende längere Cache-TTL
-            effective_ttl = self.cache_ttl_seconds * 3 if not allow_toggle else self.cache_ttl_seconds
-            if cache_age < effective_ttl:
-                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s, TTL: {effective_ttl}s)")
+            # PERFORMANCE OPTIMIZATION: ALWAYS use cache if available for message edits
+            # The 30-second status_update_loop keeps cache fresh, so even "stale" cache is better than direct Docker calls
+            if cache_age < self.cache_ttl_seconds:
+                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s, TTL: {self.cache_ttl_seconds}s)")
             else:
-                logger.debug(f"[_GEN_EMBED] Using STALE cached status for '{display_name}' (age: {cache_age:.1f}s > TTL: {effective_ttl}s)")
+                logger.debug(f"[_GEN_EMBED] Using cached status for '{display_name}' (age: {cache_age:.1f}s) - 30s background loop provides updates")
             status_result = cached_entry['data']
         else:
-            logger.debug(f"[_GEN_EMBED] No cache entry for '{display_name}'. Fetching status directly...")
+            # ONLY fetch directly if absolutely no cache exists (rare case during startup)
+            logger.info(f"[_GEN_EMBED] No cache entry for '{display_name}'. This should be rare - checking if background loop is running...")
             current_server_conf_for_fetch = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), None)
             if current_server_conf_for_fetch:
+                # LAST RESORT: Direct fetch only when no cache exists at all
                 status_result = await self.get_status(current_server_conf_for_fetch)
                 if not isinstance(status_result, Exception):
                     self.status_cache[display_name] = {'data': status_result, 'timestamp': now}
-                    logger.debug(f"[_GEN_EMBED] Successfully fetched and cached status for '{display_name}'.")
+                    logger.info(f"[_GEN_EMBED] Emergency direct fetch completed for '{display_name}' - background loop should prevent this")
                 else:
-                    logger.warning(f"[_GEN_EMBED] Error fetching live status for '{display_name}', exception stored as status_result: {status_result}")
+                    logger.warning(f"[_GEN_EMBED] Emergency direct fetch failed for '{display_name}': {status_result}")
             else:
-                logger.warning(f"[_GEN_EMBED] No server configuration found for '{display_name}' during cache miss direct fetch. status_result remains None.")
-                status_result = None # Explicitly None if server config not found for fetch
+                logger.warning(f"[_GEN_EMBED] No server configuration found for '{display_name}' during emergency fetch. status_result remains None.")
+                status_result = None
 
         # --- Process status_result and generate embed ---
         if status_result is None:
