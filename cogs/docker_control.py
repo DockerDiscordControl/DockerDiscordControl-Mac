@@ -1086,60 +1086,86 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 logger.debug("No servers configured, status cache update skipped")
                 return
             
-            # PERFORMANCE OPTIMIZATION: Parallel processing with batch size
-            BATCH_SIZE = 3  # Maximum 3 simultaneous Docker queries
+            # PERFORMANCE OPTIMIZATION: Use bulk fetching instead of individual calls
+            start_time = time.time()
             now = datetime.now(timezone.utc)
             
+            # Extract all container names for bulk fetching
+            container_names = []
+            for server_conf in servers:
+                docker_name = server_conf.get('docker_name')
+                if docker_name:
+                    container_names.append(docker_name)
+            
+            if not container_names:
+                logger.debug("No valid container names found in server configurations")
+                return
+            
+            logger.info(f"[STATUS_LOOP] Bulk updating cache for {len(container_names)} containers")
+            
+            # Use the optimized bulk fetch function
+            bulk_results = await self.bulk_fetch_container_status(container_names)
+            
+            # Update cache with bulk results
             update_count = 0
             error_count = 0
             
-            # Process servers in batches for better performance
-            for i in range(0, len(servers), BATCH_SIZE):
-                batch = servers[i:i + BATCH_SIZE]
-                
-                # Create tasks for this batch
-                async def process_server(server_conf):
-                    try:
-                        status_data = await self.get_status(server_conf)
-                        
-                        if not isinstance(status_data, Exception):
-                            display_name = status_data[0] if isinstance(status_data, tuple) and len(status_data) > 0 else server_conf.get('name', server_conf.get('docker_name'))
-                            
-                            # Update cache with timestamp
-                            self.status_cache[display_name] = {
-                                'data': status_data,
-                                'timestamp': now
-                            }
-                            return True
-                        else:
-                            logger.error(f"Error getting status for {server_conf.get('name', server_conf.get('docker_name'))}: {status_data}")
-                            return False
-                    except Exception as e:
-                        logger.exception(f"Exception during status update for {server_conf.get('name', server_conf.get('docker_name'))}: {e}")
-                        return False
-                
-                # Execute batch in parallel
-                batch_tasks = [process_server(server_conf) for server_conf in batch]
-                batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
-                
-                # Collect results
-                for result in batch_results:
-                    if result is True:
-                        update_count += 1
-                    else:
+            for docker_name, status_tuple in bulk_results.items():
+                try:
+                    # Find the corresponding server config
+                    server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
+                    if not server_config:
+                        logger.warning(f"[STATUS_LOOP] No server config found for docker_name: {docker_name}")
                         error_count += 1
+                        continue
+                    
+                    display_name = server_config.get('name', docker_name)
+                    
+                    # Update cache with bulk result
+                    self.status_cache[display_name] = {
+                        'data': status_tuple,
+                        'timestamp': now
+                    }
+                    update_count += 1
+                    
+                except Exception as e:
+                    logger.error(f"[STATUS_LOOP] Error processing bulk result for {docker_name}: {e}")
+                    error_count += 1
+            
+            # Handle containers that weren't in bulk results (errors or not found)
+            for server_conf in servers:
+                docker_name = server_conf.get('docker_name')
+                display_name = server_conf.get('name', docker_name)
                 
-                # Short pause between batches
-                if i + BATCH_SIZE < len(servers):
-                    await asyncio.sleep(0.1)
+                if docker_name and docker_name not in bulk_results:
+                    # Container not in bulk results - likely error or offline
+                    logger.debug(f"[STATUS_LOOP] Container '{docker_name}' not in bulk results, marking as offline")
+                    
+                    details_allowed = server_conf.get('allow_detailed_status', True)
+                    offline_status = (display_name, False, 'N/A', 'N/A', 'N/A', details_allowed)
+                    
+                    self.status_cache[display_name] = {
+                        'data': offline_status,
+                        'timestamp': now
+                    }
+                    update_count += 1
             
             # Set last cache update timestamp
             self.last_cache_update = time.time()
             
-            # IMPORTANT: Update the global cache after all servers are processed
+            # Update the global cache after all servers are processed
             self.update_global_status_cache()
             
-            logger.debug(f"Status cache updated with {update_count} success, {error_count} errors.")
+            elapsed_time = (time.time() - start_time) * 1000
+            
+            # Performance logging
+            if elapsed_time > 10000:  # Over 10 seconds
+                logger.error(f"[STATUS_LOOP] CRITICAL: Cache update took {elapsed_time:.1f}ms for {len(container_names)} containers")
+            elif elapsed_time > 5000:  # Over 5 seconds
+                logger.warning(f"[STATUS_LOOP] SLOW: Cache update took {elapsed_time:.1f}ms for {len(container_names)} containers")
+            else:
+                logger.info(f"[STATUS_LOOP] Cache updated: {update_count} success, {error_count} errors in {elapsed_time:.1f}ms")
+                
         except Exception as e:
             logger.error(f"Error in status_update_loop: {e}", exc_info=True)
 

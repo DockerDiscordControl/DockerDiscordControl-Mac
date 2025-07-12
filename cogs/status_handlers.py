@@ -92,8 +92,8 @@ class StatusHandlersMixin:
     
     async def bulk_fetch_container_status(self, container_names: List[str]) -> Dict[str, Tuple]:
         """
-        Fetches status for multiple containers in parallel for ultra-fast performance.
-        Returns a dictionary mapping container names to status tuples.
+        Fetches status for multiple containers in parallel with patient data collection.
+        Prioritizes getting real data over quick responses - UI uses cached data for speed.
         
         Args:
             container_names: List of Docker container names to fetch
@@ -105,29 +105,70 @@ class StatusHandlersMixin:
             return {}
         
         start_time = time.time()
-        logger.info(f"[BULK_FETCH] Starting bulk status fetch for {len(container_names)} containers")
+        logger.info(f"[BULK_FETCH] Starting patient bulk status fetch for {len(container_names)} containers")
         
-        # Create tasks for parallel execution
+        # PATIENT APPROACH: Allow longer execution to get real data
+        # UI will use cache, so we can take time to get accurate information
+        MAX_CONCURRENT_DOCKER_CALLS = 3  # Reduce concurrency to be more patient
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOCKER_CALLS)
+        
+        # Create tasks for parallel execution with patient timeouts
         async def fetch_single_container_info(docker_name: str):
-            """Fetches info and stats for a single container in parallel."""
-            try:
-                # Run info and stats fetch in parallel
-                info_task = asyncio.create_task(get_docker_info(docker_name))
-                stats_task = asyncio.create_task(get_docker_stats(docker_name))
-                
-                info, stats = await asyncio.gather(info_task, stats_task, return_exceptions=True)
-                
-                return docker_name, info, stats
-            except Exception as e:
-                logger.error(f"[BULK_FETCH] Error fetching {docker_name}: {e}")
-                return docker_name, None, None
+            """Fetches info and stats for a single container with patience for real data."""
+            async with semaphore:
+                try:
+                    # PATIENT APPROACH: Allow reasonable time for real data
+                    # Game servers need time, but not infinite time
+                    CONTAINER_FETCH_TIMEOUT = 30.0  # 30 seconds per container (was 5s)
+                    
+                    start_container_time = time.time()
+                    
+                    # Run info and stats fetch in parallel with generous timeout
+                    try:
+                        info_task = asyncio.create_task(get_docker_info(docker_name))
+                        stats_task = asyncio.create_task(get_docker_stats(docker_name))
+                        
+                        # Apply generous timeout to get real data
+                        info, stats = await asyncio.wait_for(
+                            asyncio.gather(info_task, stats_task, return_exceptions=True),
+                            timeout=CONTAINER_FETCH_TIMEOUT
+                        )
+                        
+                        elapsed_time = (time.time() - start_container_time) * 1000
+                        if elapsed_time > 10000:  # Over 10 seconds
+                            logger.info(f"[BULK_FETCH] Patient fetch for {docker_name}: {elapsed_time:.1f}ms (got real data)")
+                        elif elapsed_time > 5000:  # Over 5 seconds
+                            logger.debug(f"[BULK_FETCH] Slow fetch for {docker_name}: {elapsed_time:.1f}ms")
+                        
+                        return docker_name, info, stats
+                        
+                    except asyncio.TimeoutError:
+                        elapsed_time = (time.time() - start_container_time) * 1000
+                        logger.warning(f"[BULK_FETCH] Even patient timeout for {docker_name} after {elapsed_time:.1f}ms")
+                        return docker_name, None, None
+                        
+                except Exception as e:
+                    logger.error(f"[BULK_FETCH] Error fetching {docker_name}: {e}")
+                    return docker_name, None, None
         
-        # Launch all container fetches in parallel
+        # PATIENT APPROACH: Launch all container fetches with generous overall timeout
         fetch_tasks = [fetch_single_container_info(name) for name in container_names]
-        results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        
+        # Execute all tasks with generous overall timeout for real data collection
+        OVERALL_TIMEOUT = 120.0  # 2 minutes total (was 10s) - UI won't wait for this
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*fetch_tasks, return_exceptions=True),
+                timeout=OVERALL_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"[BULK_FETCH] Overall patient timeout exceeded {OVERALL_TIMEOUT}s for {len(container_names)} containers")
+            # Still return partial results rather than empty
+            results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
         
         # Process results into status tuples
         status_results = {}
+        successful_fetches = 0
         
         for result in results:
             if isinstance(result, Exception):
@@ -187,6 +228,7 @@ class StatusHandlersMixin:
                 # Process stats if allowed and available
                 if details_allowed and not isinstance(stats, Exception) and stats:
                     cpu_stat, ram_stat = stats
+                    # Now we get real values instead of timeout "N/A"
                     cpu = cpu_stat if cpu_stat is not None else 'N/A'
                     ram = ram_stat if ram_stat is not None else 'N/A'
                 elif not details_allowed:
@@ -194,9 +236,19 @@ class StatusHandlersMixin:
                     ram = _("Hidden")
             
             status_results[docker_name] = (display_name, is_running, cpu, ram, uptime, details_allowed)
+            successful_fetches += 1
         
         elapsed_time = (time.time() - start_time) * 1000
-        logger.info(f"[BULK_FETCH] Completed bulk fetch for {len(status_results)}/{len(container_names)} containers in {elapsed_time:.1f}ms")
+        
+        # Enhanced logging for patient approach
+        if elapsed_time > 60000:  # Over 1 minute
+            logger.info(f"[BULK_FETCH] Patient bulk fetch took {elapsed_time:.1f}ms for {len(container_names)} containers (got real data)")
+        elif elapsed_time > 30000:  # Over 30 seconds
+            logger.info(f"[BULK_FETCH] Slow bulk fetch took {elapsed_time:.1f}ms for {len(container_names)} containers")
+        elif elapsed_time > 10000:  # Over 10 seconds  
+            logger.debug(f"[BULK_FETCH] Normal bulk fetch took {elapsed_time:.1f}ms for {len(container_names)} containers")
+        else:
+            logger.info(f"[BULK_FETCH] Fast bulk fetch completed for {successful_fetches}/{len(container_names)} containers in {elapsed_time:.1f}ms")
         
         return status_results
 
@@ -411,50 +463,72 @@ class StatusHandlersMixin:
         # --- Determine status_result (from cache or live) ---
         if cached_entry:
             cache_age = (now - cached_entry['timestamp']).total_seconds()
-            # PERFORMANCE OPTIMIZATION: ALWAYS use cache if available for message edits
-            # The 30-second status_update_loop keeps cache fresh, so even "stale" cache is better than direct Docker calls
+            # PATIENT APPROACH: ALWAYS use cache if available - background collects fresh data
+            # Show cache age when data is older so user knows freshness
             if cache_age < self.cache_ttl_seconds:
-                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s, TTL: {self.cache_ttl_seconds}s)")
+                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s)")
+                cache_age_indicator = ""  # No indicator for fresh data
             else:
-                logger.debug(f"[_GEN_EMBED] Using cached status for '{display_name}' (age: {cache_age:.1f}s) - 30s background loop provides updates")
+                logger.debug(f"[_GEN_EMBED] Using cached status for '{display_name}' (age: {cache_age:.1f}s) - background updating...")
+                # Add age indicator for older data
+                if cache_age < 120:  # Less than 2 minutes
+                    cache_age_indicator = f" ({int(cache_age)}s ago)"
+                elif cache_age < 3600:  # Less than 1 hour
+                    cache_age_indicator = f" ({int(cache_age/60)}m ago)"
+                else:
+                    cache_age_indicator = f" ({int(cache_age/3600)}h ago)"
+            
             status_result = cached_entry['data']
+            # Store cache age for later use in embed
+            embed_cache_age = cache_age
+            embed_cache_indicator = cache_age_indicator
         else:
             # ONLY fetch directly if absolutely no cache exists (rare case during startup)
-            logger.info(f"[_GEN_EMBED] No cache entry for '{display_name}'. This should be rare - checking if background loop is running...")
+            logger.info(f"[_GEN_EMBED] No cache entry for '{display_name}'. This should be rare - background loop will populate cache...")
             current_server_conf_for_fetch = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), None)
             if current_server_conf_for_fetch:
-                # LAST RESORT: Direct fetch only when no cache exists at all
-                status_result = await self.get_status(current_server_conf_for_fetch)
-                if not isinstance(status_result, Exception):
-                    self.status_cache[display_name] = {'data': status_result, 'timestamp': now}
-                    logger.info(f"[_GEN_EMBED] Emergency direct fetch completed for '{display_name}' - background loop should prevent this")
-                else:
-                    logger.warning(f"[_GEN_EMBED] Emergency direct fetch failed for '{display_name}': {status_result}")
+                # EMERGENCY FALLBACK: Show loading status instead of blocking UI
+                logger.info(f"[_GEN_EMBED] Showing loading status for '{display_name}' while background fetches data")
+                status_result = None  # Will trigger loading display
+                embed_cache_age = 0
+                embed_cache_indicator = " (loading...)"
             else:
                 logger.warning(f"[_GEN_EMBED] No server configuration found for '{display_name}' during emergency fetch. status_result remains None.")
                 status_result = None
+                embed_cache_age = 0
+                embed_cache_indicator = " (config error)"
 
         # --- Process status_result and generate embed ---
         if status_result is None:
-            logger.warning(f"[_GEN_EMBED] Status result for '{display_name}' is None. Server config likely not found or initial fetch failed.")
-            embed = discord.Embed(
-                title=f"⚠️ {display_name}", 
-                description=_("Error: Could not retrieve status. Configuration for this server might be missing or an initial fetch failed."), 
-                color=discord.Color.red()
-            )
+            logger.debug(f"[_GEN_EMBED] Status result for '{display_name}' is None. Showing loading or error status.")
+            # Check if we have cache age indicator to determine type of message
+            if 'embed_cache_indicator' in locals() and 'loading' in embed_cache_indicator:
+                # Loading status
+                embed = discord.Embed(
+                    description="```\n┌── Loading Status ───────────\n│ 🔄 Fetching container data...\n│ ⏱️ Background process running\n│ 📊 Please wait for fresh data\n└─────────────────────────────\n```",
+                    color=0x3498db
+                )
+                embed.set_footer(text="Background data collection in progress • https://ddc.bot")
+            else:
+                # Error status
+                embed = discord.Embed(
+                    title=f"⚠️ {display_name}", 
+                    description=_("Error: Could not retrieve status. Configuration missing or initial fetch failed."), 
+                    color=discord.Color.red()
+                )
             # running remains False, view remains None
 
         elif isinstance(status_result, Exception):
             logger.error(f"[_GEN_EMBED] Status for '{display_name}' is an exception: {status_result}", exc_info=False) 
             embed = discord.Embed(
                 title=f"⚠️ {display_name}", 
-                description=_("Error: An exception occurred while trying to fetch status details. Please check logs."), 
+                description=_("Error: An exception occurred while fetching status. Background process will retry."), 
                 color=discord.Color.red()
             )
             # running remains False, view remains None
 
         elif isinstance(status_result, tuple) and len(status_result) == 6:
-            # --- Valid Data: Generate Box Embed ---
+            # --- Valid Data: Generate Box Embed with Cache Age Info ---
             display_name_from_status, running, cpu, ram, uptime, details_allowed = status_result # 'running' is updated here
             status_color = 0x00b300 if running else 0xe74c3c
             
@@ -486,6 +560,10 @@ class StatusHandlersMixin:
                 header_line,
                 f"\n│ {current_emoji} {status_text}"
             ]
+
+            # Add cache age indicator if data is older
+            if 'embed_cache_indicator' in locals() and embed_cache_indicator:
+                description_parts.append(embed_cache_indicator)
 
             # Add different lines depending on status and state
             if running:
@@ -526,8 +604,12 @@ class StatusHandlersMixin:
             last_update_text = cached_translations['last_update_text']
             current_time = format_datetime_with_timezone(now_footer, timezone_str, fmt="%H:%M:%S")
             
-            # Insert timestamp above the code block
-            timestamp_line = f"{last_update_text}: {current_time}"
+            # Enhanced timestamp with cache age info
+            if 'embed_cache_age' in locals() and embed_cache_age > self.cache_ttl_seconds:
+                timestamp_line = f"{last_update_text}: {current_time} (data: {int(embed_cache_age)}s ago)"
+            else:
+                timestamp_line = f"{last_update_text}: {current_time}"
+            
             embed.description = f"{timestamp_line}\n{description}" # Place timestamp before the description
             
             # Adjusted footer: Only the URL now
