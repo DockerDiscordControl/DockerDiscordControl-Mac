@@ -1,8 +1,8 @@
 # DockerDiscordControl (DDC)
 
-**Homepage:** [https://ddc.bot](https://ddc.bot) | **📖 [Complete Documentation](../../wiki)**
+**Homepage:** [https://ddc.bot](https://ddc.bot) | **[Complete Documentation](../../wiki)**
 
-Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with ultra-fast performance optimizations. Built on Alpine Linux for enhanced security and minimal resource usage.
+Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with revolutionary performance optimizations. Built on Alpine Linux for enhanced security and minimal resource usage.
 
 [![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE)
@@ -12,17 +12,26 @@ Control your Docker containers directly from Discord! This application provides 
 [![Unraid](https://img.shields.io/badge/Unraid-Community_Apps-orange.svg)](UNRAID.md)
 [![Wiki](https://img.shields.io/badge/documentation-wiki-blue.svg)](../../wiki)
 
-## ✨ Features
+## 🚀 Revolutionary Performance Breakthrough
 
-- **🤖 Discord Bot**: Slash commands, status monitoring, container controls with 90% performance improvement
-- **🌐 Web Interface**: Secure configuration, permissions, logs, and performance monitoring  
-- **⚡ Ultra-Fast Performance**: Revolutionary optimizations with intelligent caching and batch processing
-- **📅 Task System**: Schedule automated container actions (daily, weekly, monthly, one-time)
-- **🛡️ Security**: Channel-based permissions, rate limiting, comprehensive security framework
-- **🌍 Multi-Language**: English, German, French support
-- **🏔️ Alpine Linux**: 327MB image, 94% fewer vulnerabilities than Debian-based containers
-- **💾 Memory Optimized**: <200MB RAM usage with intelligent garbage collection
-- **📊 Production Ready**: Supports 50 containers across 15 Discord channels
+**Major Performance Optimizations Delivered:**
+- **Cache Updates**: 16x faster (33 seconds → 4 seconds)
+- **Message Updates**: 7x faster (2.6 seconds → 350ms average)
+- **Docker Stats**: Eliminated critical 5-17 second timeouts
+- **Background Processing**: Patient data collection with UI responsiveness
+- **Real-time Updates**: No more "N/A" values, accurate CPU/RAM data
+
+## Features
+
+- **Discord Bot**: Slash commands, status monitoring, container controls
+- **Web Interface**: Secure configuration, permissions, logs, and monitoring  
+- **Ultra-Fast Performance**: Revolutionary bulk processing and intelligent caching
+- **Task System**: Schedule automated container actions (daily, weekly, monthly, one-time)
+- **Security**: Channel-based permissions, rate limiting, comprehensive framework
+- **Multi-Language**: English, German, French support
+- **Alpine Linux**: 327MB image, 94% fewer vulnerabilities than Debian-based containers
+- **Memory Optimized**: <200MB RAM usage with intelligent garbage collection
+- **Production Ready**: Supports 50 containers across 15 Discord channels
 
 **New in v3.0:** Revolutionary performance optimizations, complete security vulnerability remediation, 36% code reduction, 100% English documentation.
 
@@ -81,7 +90,7 @@ docker run -d --name ddc \
 3. **Configure**: Bot token, Guild ID, container permissions
 4. **Restart**: `docker compose restart` after initial setup
 
-## 📊 System Requirements
+## System Requirements
 
 ### **Minimum Requirements**
 - **CPU**: 1 core (1.5 cores recommended)
@@ -96,25 +105,25 @@ docker run -d --name ddc \
 - **Cache Size**: 50 status entries with intelligent cleanup
 
 ### **Platform Support**
-- ✅ **Unraid**: Native Community Applications support
-- ✅ **Linux**: x86_64, ARM64 (Apple Silicon, Raspberry Pi)
-- ✅ **Docker**: Swarm, Compose, Standalone
-- ✅ **NAS**: Synology, QNAP, TrueNAS
+- **Unraid**: Native Community Applications support
+- **Linux**: x86_64, ARM64 (Apple Silicon, Raspberry Pi)
+- **Docker**: Swarm, Compose, Standalone
+- **NAS**: Synology, QNAP, TrueNAS
 
-## 📚 Documentation
+## Documentation
 
 | Topic | Description |
 |-------|-------------|
-| [📖 Installation Guide](../../wiki/Installation‐Guide) | Detailed setup for all platforms |
-| [⚙️ Configuration](../../wiki/Configuration) | Web UI, permissions, channels |
-| [📅 Task System](../../wiki/Task‐System) | Automated scheduling system |
-| [🚀 Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
-| [🏔️ Alpine Migration](../../wiki/Alpine‐Linux‐Migration) | Benefits, security, optimization |
-| [💾 Memory Optimization](../../wiki/Memory‐Optimization) | Resource management, limits |
-| [🖥️ Unraid Setup](UNRAID.md) | Community Applications guide |
-| [🔧 Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
-| [👩‍💻 Development](../../wiki/Development) | Contributing & development setup |
-| [🔒 Security](../../wiki/Security) | Best practices & considerations |
+| [Installation Guide](../../wiki/Installation‐Guide) | Detailed setup for all platforms |
+| [Configuration](../../wiki/Configuration) | Web UI, permissions, channels |
+| [Task System](../../wiki/Task‐System) | Automated scheduling system |
+| [Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
+| [Alpine Migration](../../wiki/Alpine‐Linux‐Migration) | Benefits, security, optimization |
+| [Memory Optimization](../../wiki/Memory‐Optimization) | Resource management, limits |
+| [Unraid Setup](UNRAID.md) | Community Applications guide |
+| [Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
+| [Development](../../wiki/Development) | Contributing & development setup |
+| [Security](../../wiki/Security) | Best practices & considerations |
 
 ## ⚠️ Security Notice
 
@@ -133,7 +142,7 @@ docker run -d --name ddc \
 
 ## 🤝 Contributing
 
-We welcome contributions! See our [📖 Development Guide](../../wiki/Development) for setup instructions and coding standards.
+We welcome contributions! See our [Development Guide](../../wiki/Development) for setup instructions and coding standards.
 
 ## 📄 License
 
@@ -141,14 +150,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**⭐ Like DDC? Star the repository!** | **🐛 Found a bug?** [Report it](../../issues) | **💡 Feature idea?** [Suggest it](../../discussions)
+**Like DDC? Star the repository!** | **Found a bug?** [Report it](../../issues) | **Feature idea?** [Suggest it](../../discussions)
 
-## 💖 Support DDC Development
+## Support DDC Development
 
 Help keep DockerDiscordControl growing and improving:
 
-- ☕ **[Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support
-- 💙 **[PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution  
-- 🌟 **[GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing support (coming soon)
+- **[Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support
+- **[PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution  
+- **[GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing support (coming soon)
 
-Your support helps maintain DDC, develop new features, and keep it zero-vulnerability secure! 🛡️ 
+Your support helps maintain DDC, develop new features, and keep it zero-vulnerability secure! 
