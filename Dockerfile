@@ -1,16 +1,19 @@
 # Multi-Stage Build - Alpine Version for DDC
-FROM python:3.11-alpine AS builder
+FROM python:3.12-alpine AS builder
 WORKDIR /build
 
-# Install build dependencies
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev python3-dev libffi-dev openssl-dev
+# Install build dependencies with security updates and C++ compiler
+RUN apk update && apk upgrade && \
+    apk add --no-cache --virtual .build-deps gcc g++ musl-dev python3-dev libffi-dev make && \
+    apk add --no-cache openssl=3.5.1-r0 openssl-dev=3.5.1-r0
 
-# Copy requirements and install Python packages
+# Copy requirements and install Python packages with latest setuptools
 COPY requirements.txt .
 RUN python -m venv /venv && \
-    /venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
     /venv/bin/pip install --no-cache-dir -r requirements.txt && \
-    /venv/bin/pip install --no-cache-dir --force-reinstall "aiohttp>=3.11.16" "setuptools>=78.1.1" && \
+    /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "aiohttp>=3.11.16" "setuptools>=78.1.1" && \
+    /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "setuptools>=78.1.1" && \
     /venv/bin/pip wheel --wheel-dir=/wheels -r requirements.txt
 
 # Copy source code and compile
@@ -21,7 +24,7 @@ RUN python -m compileall -b /build
 RUN apk del .build-deps
 
 # Final stage
-FROM python:3.11-alpine
+FROM python:3.12-alpine
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -29,15 +32,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/venv/bin:$PATH" \
     DOCKER_HOST="unix:///var/run/docker.sock"
 
-# Install runtime dependencies
-RUN apk add --no-cache supervisor curl ca-certificates docker-cli && \
+# Install runtime dependencies with security updates
+RUN apk update && apk upgrade && \
+    apk add --no-cache supervisor curl ca-certificates docker-cli && \
+    apk del openssl && \
+    apk add --no-cache openssl=3.5.1-r0 && \
     ln -sf /usr/local/bin/python3 /usr/local/bin/python
 
 # Copy from builder
 COPY --from=builder /venv /venv
 COPY --from=builder /wheels /wheels
 RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* && \
-    pip install --no-cache-dir --force-reinstall "aiohttp>=3.11.16" "setuptools>=78.1.1" && \
+    pip install --no-cache-dir --force-reinstall --upgrade "aiohttp>=3.11.16" "setuptools>=78.1.1" && \
+    pip install --no-cache-dir --force-reinstall --upgrade setuptools && \
     rm -rf /wheels
 
 COPY --from=builder /build /app
