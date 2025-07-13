@@ -49,31 +49,26 @@ CONTAINER_TYPE_PATTERNS = {
             'deluge', 'rtorrent', 'sabnzbd', 'nzbget', 'overseerr', 'ombi',
             'tautulli', 'organizr', 'heimdall', 'muximux'
         ],
-        'stats_timeout': DEFAULT_FAST_STATS_TIMEOUT,
+        'stats_timeout': DEFAULT_SLOW_STATS_TIMEOUT,
         'info_timeout': DEFAULT_FAST_INFO_TIMEOUT
     },
     'database': {
         'patterns': [
             'mysql', 'mariadb', 'postgres', 'postgresql', 'mongodb', 'redis',
-            'elasticsearch', 'influxdb', 'cassandra', 'couchdb', 'neo4j',
-            'clickhouse', 'timescaledb', 'cockroachdb'
+            'elasticsearch', 'influxdb', 'grafana', 'prometheus', 'clickhouse',
+            'cassandra', 'couchdb', 'neo4j', 'memcached', 'sqlite'
         ],
-        'stats_timeout': DEFAULT_FAST_STATS_TIMEOUT,
+        'stats_timeout': DEFAULT_SLOW_STATS_TIMEOUT,
         'info_timeout': DEFAULT_FAST_INFO_TIMEOUT
     },
     'web_server': {
         'patterns': [
             'nginx', 'apache', 'httpd', 'caddy', 'traefik', 'haproxy',
-            'node', 'express', 'django', 'flask', 'fastapi', 'rails',
-            'spring', 'tomcat', 'jetty', 'undertow'
+            'nodejs', 'node', 'php', 'python', 'django', 'flask',
+            'wordpress', 'nextcloud', 'owncloud', 'photoprism', 'bitwarden'
         ],
-        'stats_timeout': DEFAULT_FAST_STATS_TIMEOUT,
-        'info_timeout': DEFAULT_FAST_INFO_TIMEOUT
-    },
-    'default': {
-        'patterns': [],
         'stats_timeout': DEFAULT_SLOW_STATS_TIMEOUT,
-        'info_timeout': DEFAULT_SLOW_INFO_TIMEOUT
+        'info_timeout': DEFAULT_FAST_INFO_TIMEOUT
     }
 }
 
@@ -329,19 +324,12 @@ async def get_docker_stats(docker_container_name: str) -> Tuple[Optional[str], O
             stats = await asyncio.to_thread(container.stats, stream=False)
             
             elapsed_time = (time.time() - start_time) * 1000
-            
-            # PERFORMANCE MONITORING: Record timing for performance analysis
-            performance_monitor.record_container_timing(f"docker_stats_{docker_container_name}", elapsed_time)
-            
             if elapsed_time > 5000:  # Over 5 seconds - informational only
                 logger.info(f"Long stats call for {docker_container_name}: {elapsed_time:.1f}ms (but got real data)")
             elif elapsed_time > 2000:  # Over 2 seconds
                 logger.debug(f"Slow stats call for {docker_container_name}: {elapsed_time:.1f}ms")
             
         except Exception as e:
-            # PERFORMANCE MONITORING: Record failed timing as well
-            elapsed_time = (time.time() - start_time) * 1000
-            performance_monitor.record_container_timing(f"docker_stats_{docker_container_name}_error", elapsed_time)
             logger.warning(f"Error getting stats for {docker_container_name}: {e}")
             return None, None
 
@@ -371,12 +359,8 @@ async def get_docker_stats(docker_container_name: str) -> Tuple[Optional[str], O
                  mem_usage_str = f"{memory_usage / 1024:.1f} KiB"
              elif memory_usage < 1024 * 1024 * 1024:
                  mem_usage_str = f"{memory_usage / (1024 * 1024):.1f} MiB"
-                 # PERFORMANCE MONITORING: Record memory usage in MB
-                 performance_monitor.record_memory_usage(docker_container_name, memory_usage / (1024 * 1024))
              else:
                  mem_usage_str = f"{memory_usage / (1024 * 1024 * 1024):.1f} GiB"
-                 # PERFORMANCE MONITORING: Record memory usage in MB
-                 performance_monitor.record_memory_usage(docker_container_name, memory_usage / (1024 * 1024))
         return cpu_percent, mem_usage_str
     except docker.errors.NotFound:
         logger.warning(f"Container '{docker_container_name}' not found during stats retrieval.")
@@ -1071,123 +1055,3 @@ async def compare_container_performance(container_names: List[str] = None) -> st
     ])
     
     return "\n".join(output_lines)
-
-# =============================================================================
-# PERFORMANCE MONITORING & DEGRADATION DETECTION
-# =============================================================================
-
-class PerformanceMonitor:
-    """Monitors performance degradation and suggests preventive actions."""
-    
-    def __init__(self):
-        self.container_timings = {}  # container_name -> [timing_history]
-        self.container_memory = {}   # container_name -> [memory_history]
-        self.system_start_time = time.time()
-        self.degradation_threshold = 2.0  # Alert when 2x slower than baseline
-        self.last_cleanup_time = time.time()
-        self.cleanup_interval = 12 * 3600  # 12 hours
-    
-    def record_container_timing(self, container_name: str, duration_ms: float):
-        """Record timing for container operation."""
-        if container_name not in self.container_timings:
-            self.container_timings[container_name] = []
-        
-        history = self.container_timings[container_name]
-        history.append({
-            'timestamp': time.time(),
-            'duration_ms': duration_ms
-        })
-        
-        # Keep only last 100 measurements
-        if len(history) > 100:
-            history.pop(0)
-        
-        # Check for degradation
-        self._check_performance_degradation(container_name, history)
-    
-    def record_memory_usage(self, container_name: str, memory_mb: float):
-        """Record memory usage for container."""
-        if container_name not in self.container_memory:
-            self.container_memory[container_name] = []
-        
-        history = self.container_memory[container_name]
-        history.append({
-            'timestamp': time.time(),
-            'memory_mb': memory_mb
-        })
-        
-        # Keep only last 100 measurements
-        if len(history) > 100:
-            history.pop(0)
-        
-        # Check for memory leaks
-        self._check_memory_leak(container_name, history)
-    
-    def _check_performance_degradation(self, container_name: str, history: list):
-        """Check if container performance is degrading."""
-        if len(history) < 10:
-            return
-        
-        # Compare recent vs baseline
-        recent_avg = sum(h['duration_ms'] for h in history[-5:]) / 5
-        baseline_avg = sum(h['duration_ms'] for h in history[:10]) / 10
-        
-        if recent_avg > baseline_avg * self.degradation_threshold:
-            logger.warning(f"PERFORMANCE DEGRADATION detected for {container_name}: "
-                         f"Recent avg: {recent_avg:.1f}ms vs Baseline: {baseline_avg:.1f}ms "
-                         f"({recent_avg/baseline_avg:.1f}x slower)")
-    
-    def _check_memory_leak(self, container_name: str, history: list):
-        """Check for potential memory leaks."""
-        if len(history) < 20:
-            return
-        
-        recent_memory = [h['memory_mb'] for h in history[-10:]]
-        old_memory = [h['memory_mb'] for h in history[:10]]
-        
-        recent_avg = sum(recent_memory) / len(recent_memory)
-        old_avg = sum(old_memory) / len(old_memory)
-        
-        if recent_avg > old_avg * 1.5 and recent_avg > 1000:
-            logger.warning(f"MEMORY LEAK suspected for {container_name}: "
-                         f"Memory increased from {old_avg:.1f}MB to {recent_avg:.1f}MB")
-    
-    def should_trigger_cleanup(self) -> bool:
-        """Check if automatic cleanup should be triggered."""
-        current_time = time.time()
-        uptime_hours = (current_time - self.system_start_time) / 3600
-        time_since_cleanup = current_time - self.last_cleanup_time
-        
-        # Trigger cleanup every 12 hours
-        if time_since_cleanup >= self.cleanup_interval:
-            self.last_cleanup_time = current_time
-            return True
-        
-        return False
-    
-    def get_performance_summary(self) -> dict:
-        """Get summary of performance metrics."""
-        summary = {
-            'system_uptime_hours': (time.time() - self.system_start_time) / 3600,
-            'monitored_containers': len(self.container_timings),
-            'total_measurements': sum(len(history) for history in self.container_timings.values()),
-            'containers_with_degradation': 0,
-            'containers_with_memory_leaks': 0
-        }
-        
-        # Count containers with issues
-        for container_name, history in self.container_timings.items():
-            if len(history) >= 10:
-                recent_avg = sum(h['duration_ms'] for h in history[-5:]) / 5
-                baseline_avg = sum(h['duration_ms'] for h in history[:10]) / 10
-                if recent_avg > baseline_avg * self.degradation_threshold:
-                    summary['containers_with_degradation'] += 1
-        
-        return summary
-
-# Global performance monitor instance
-performance_monitor = PerformanceMonitor()
-
-# =============================================================================
-# DOCKER UTILITIES WITH PERFORMANCE MONITORING
-# =============================================================================

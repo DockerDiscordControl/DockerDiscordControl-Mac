@@ -832,10 +832,6 @@ class StatusHandlersMixin:
             
             elapsed_time = (time.time() - start_time) * 1000
             
-            # PERFORMANCE MONITORING: Record individual message edit performance
-            from utils.docker_utils import performance_monitor
-            performance_monitor.record_container_timing(f"message_edit_{display_name}", elapsed_time)
-            
             # Smart performance logging
             if elapsed_time > 1000:  # Over 1 second - critical
                 logger.error(f"_edit_single_message: CRITICAL SLOW edit for '{display_name}' took {elapsed_time:.1f}ms")

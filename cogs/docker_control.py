@@ -22,7 +22,7 @@ DiscordOption = get_discord_option()
 
 # Import our utility functions
 from utils.config_loader import load_config, DEFAULT_CONFIG
-from utils.docker_utils import get_docker_info, get_docker_stats, docker_action, performance_monitor
+from utils.docker_utils import get_docker_info, get_docker_stats, docker_action
 from utils.time_utils import format_datetime_with_timezone
 from utils.logging_utils import setup_logger
 from utils.server_order import load_server_order, save_server_order
@@ -1072,25 +1072,13 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
     # --- Status Cache Update Loop ---
     @tasks.loop(seconds=30)
     async def status_update_loop(self):
-        """Periodically updates the internal status cache for all servers with performance monitoring."""
+        """Periodically updates the internal status cache for all servers."""
         try:
             if not self.bot.is_ready():
                 logger.warning("Bot is not ready yet, skipping status update loop iteration")
                 return
                 
             logger.debug("Running status_update_loop to refresh Docker container status cache")
-            
-            # PERFORMANCE MONITORING: Check for system-wide degradation
-            if performance_monitor.should_trigger_cleanup():
-                logger.info("AUTOMATIC CLEANUP triggered - system running for >12 hours")
-                await self._perform_preventive_cleanup()
-            
-            # Get performance summary
-            perf_summary = performance_monitor.get_performance_summary()
-            if perf_summary['degraded_containers']:
-                logger.warning(f"Performance degradation detected in {len(perf_summary['degraded_containers'])} containers")
-                for container_info in perf_summary['degraded_containers']:
-                    logger.warning(f"  - {container_info['name']}: {container_info['degradation_factor']:.1f}x slower than baseline")
             
             # Get server configurations
             servers = self.config.get('servers', [])
@@ -1170,9 +1158,6 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             
             elapsed_time = (time.time() - start_time) * 1000
             
-            # PERFORMANCE MONITORING: Record cache update performance
-            performance_monitor.record_container_timing('cache_update_all', elapsed_time)
-            
             # Performance logging
             if elapsed_time > 10000:  # Over 10 seconds
                 logger.error(f"[STATUS_LOOP] CRITICAL: Cache update took {elapsed_time:.1f}ms for {len(container_names)} containers")
@@ -1180,63 +1165,9 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 logger.warning(f"[STATUS_LOOP] SLOW: Cache update took {elapsed_time:.1f}ms for {len(container_names)} containers")
             else:
                 logger.info(f"[STATUS_LOOP] Cache updated: {update_count} success, {error_count} errors in {elapsed_time:.1f}ms")
-            
+                
         except Exception as e:
             logger.error(f"Error in status_update_loop: {e}", exc_info=True)
-
-    async def _perform_preventive_cleanup(self):
-        """Perform preventive cleanup to prevent performance degradation."""
-        try:
-            logger.info("PREVENTIVE CLEANUP: Starting automatic cleanup")
-            
-            # 1. Clear all performance caches
-            if hasattr(self, 'status_cache'):
-                cache_size = len(self.status_cache)
-                self.status_cache.clear()
-                logger.info(f"PREVENTIVE CLEANUP: Cleared status cache ({cache_size} entries)")
-            
-            # 2. Clear conditional update cache
-            if hasattr(self, 'last_sent_content'):
-                content_cache_size = len(self.last_sent_content)
-                self.last_sent_content.clear()
-                logger.info(f"PREVENTIVE CLEANUP: Cleared conditional update cache ({content_cache_size} entries)")
-            
-            # 3. Clear translation cache
-            if hasattr(self, 'cached_translations'):
-                trans_cache_size = len(self.cached_translations)
-                self.cached_translations.clear()
-                logger.info(f"PREVENTIVE CLEANUP: Cleared translation cache ({trans_cache_size} entries)")
-            
-            # 4. Clear box element cache
-            if hasattr(self, 'cached_box_elements'):
-                box_cache_size = len(self.cached_box_elements)
-                self.cached_box_elements.clear()
-                logger.info(f"PREVENTIVE CLEANUP: Cleared box element cache ({box_cache_size} entries)")
-            
-            # 5. Reset update statistics
-            if hasattr(self, 'update_stats'):
-                self.update_stats = {'skipped': 0, 'sent': 0, 'last_reset': datetime.now(timezone.utc)}
-                logger.info("PREVENTIVE CLEANUP: Reset update statistics")
-            
-            # 6. Force Python garbage collection
-            import gc
-            collected = gc.collect()
-            logger.info(f"PREVENTIVE CLEANUP: Garbage collection freed {collected} objects")
-            
-            # 7. Log memory usage if psutil is available
-            try:
-                import psutil
-                import os
-                process = psutil.Process(os.getpid())
-                memory_mb = process.memory_info().rss / 1024 / 1024
-                logger.info(f"PREVENTIVE CLEANUP: Current memory usage: {memory_mb:.1f}MB")
-            except ImportError:
-                logger.debug("PREVENTIVE CLEANUP: psutil not available for memory monitoring")
-            
-            logger.info("PREVENTIVE CLEANUP: Completed successfully")
-            
-        except Exception as e:
-            logger.error(f"PREVENTIVE CLEANUP: Failed with error: {e}", exc_info=True)
 
     @status_update_loop.before_loop
     async def before_status_update_loop(self):
