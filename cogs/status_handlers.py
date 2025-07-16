@@ -47,8 +47,202 @@ class StatusHandlersMixin:
             self.update_stats = {'skipped': 0, 'sent': 0, 'last_reset': datetime.now(timezone.utc)}
             logger.debug("Initialized update statistics")
     
+    def _ensure_performance_system(self):
+        """Initialize the adaptive performance learning system."""
+        if not hasattr(self, 'container_performance_history'):
+            self.container_performance_history = {}
+            logger.debug("Initialized adaptive performance system")
+        if not hasattr(self, 'performance_learning_config'):
+            self.performance_learning_config = {
+                'min_timeout': 5000,      # 5 seconds minimum
+                'max_timeout': 120000,    # 2 minutes maximum
+                'default_timeout': 30000, # 30 seconds default
+                'slow_threshold': 8000,   # 8+ seconds = slow container
+                'history_window': 20,     # Keep last 20 measurements
+                'retry_attempts': 3,      # Maximum retry attempts
+                'timeout_multiplier': 2.0 # Timeout = avg_time * multiplier
+            }
+            logger.debug("Initialized performance learning configuration")
+    
+    def _get_container_performance_profile(self, container_name: str) -> dict:
+        """Get or create performance profile for a container."""
+        self._ensure_performance_system()
+        
+        if container_name not in self.container_performance_history:
+            self.container_performance_history[container_name] = {
+                'response_times': [],
+                'avg_response_time': self.performance_learning_config['default_timeout'],
+                'max_response_time': self.performance_learning_config['default_timeout'],
+                'min_response_time': 1000,
+                'success_rate': 1.0,
+                'total_attempts': 0,
+                'successful_attempts': 0,
+                'is_slow': False,
+                'last_updated': datetime.now(timezone.utc)
+            }
+            logger.debug(f"Created new performance profile for container: {container_name}")
+        
+        return self.container_performance_history[container_name]
+    
+    def _update_container_performance(self, container_name: str, response_time: float, success: bool):
+        """Update container performance history with new measurement."""
+        profile = self._get_container_performance_profile(container_name)
+        config = self.performance_learning_config
+        
+        # Update attempt counters
+        profile['total_attempts'] += 1
+        if success:
+            profile['successful_attempts'] += 1
+            profile['response_times'].append(response_time)
+        
+        # Maintain sliding window
+        if len(profile['response_times']) > config['history_window']:
+            profile['response_times'] = profile['response_times'][-config['history_window']:]
+        
+        # Calculate new statistics
+        if profile['response_times']:
+            profile['avg_response_time'] = sum(profile['response_times']) / len(profile['response_times'])
+            profile['max_response_time'] = max(profile['response_times'])
+            profile['min_response_time'] = min(profile['response_times'])
+        
+        profile['success_rate'] = profile['successful_attempts'] / profile['total_attempts']
+        profile['is_slow'] = profile['avg_response_time'] > config['slow_threshold']
+        profile['last_updated'] = datetime.now(timezone.utc)
+        
+        if success:
+            logger.debug(f"Performance update for {container_name}: avg={profile['avg_response_time']:.0f}ms, "
+                        f"success_rate={profile['success_rate']:.2f}, is_slow={profile['is_slow']}")
+    
+    def _get_adaptive_timeout(self, container_name: str) -> float:
+        """Calculate adaptive timeout based on container performance history."""
+        profile = self._get_container_performance_profile(container_name)
+        config = self.performance_learning_config
+        
+        # Base timeout on average response time with safety margin
+        adaptive_timeout = max(
+            profile['avg_response_time'] * config['timeout_multiplier'],
+            profile['max_response_time'] * 1.5,  # 1.5x worst recorded time
+            config['min_timeout']  # Never go below minimum
+        )
+        
+        # Cap at maximum timeout
+        adaptive_timeout = min(adaptive_timeout, config['max_timeout'])
+        
+        # Add extra time for containers with poor success rate
+        if profile['success_rate'] < 0.8:
+            adaptive_timeout *= 1.5
+            logger.debug(f"Increased timeout for {container_name} due to low success rate: {profile['success_rate']:.2f}")
+        
+        return adaptive_timeout
+    
+    def _classify_containers_by_performance(self, container_names: List[str]) -> Tuple[List[str], List[str]]:
+        """Classify containers into fast and slow based on performance history."""
+        fast_containers = []
+        slow_containers = []
+        
+        for container_name in container_names:
+            profile = self._get_container_performance_profile(container_name)
+            
+            if profile['is_slow'] or profile['success_rate'] < 0.8:
+                slow_containers.append(container_name)
+                logger.debug(f"Classified {container_name} as slow: avg={profile['avg_response_time']:.0f}ms, "
+                           f"success_rate={profile['success_rate']:.2f}")
+            else:
+                fast_containers.append(container_name)
+        
+        return fast_containers, slow_containers
+    
+    async def _fetch_container_with_retries(self, docker_name: str) -> Tuple[str, Any, Any]:
+        """Fetch container data with intelligent retry strategy - always gets complete data."""
+        start_time = time.time()
+        profile = self._get_container_performance_profile(docker_name)
+        config = self.performance_learning_config
+        
+        last_exception = None
+        
+        for attempt in range(config['retry_attempts']):
+            try:
+                # Calculate timeout for this attempt (increases with each retry)
+                base_timeout = self._get_adaptive_timeout(docker_name)
+                current_timeout = base_timeout * (1.5 ** attempt)  # Exponential backoff
+                
+                logger.debug(f"Fetching {docker_name} - attempt {attempt + 1}/{config['retry_attempts']}, "
+                           f"timeout: {current_timeout:.0f}ms")
+                
+                attempt_start = time.time()
+                
+                # Fetch info and stats in parallel with adaptive timeout
+                info_task = asyncio.create_task(get_docker_info(docker_name))
+                stats_task = asyncio.create_task(get_docker_stats(docker_name))
+                
+                info, stats = await asyncio.wait_for(
+                    asyncio.gather(info_task, stats_task, return_exceptions=True),
+                    timeout=current_timeout / 1000.0  # Convert to seconds
+                )
+                
+                attempt_time = (time.time() - attempt_start) * 1000
+                
+                # Update performance history
+                self._update_container_performance(docker_name, attempt_time, True)
+                
+                total_time = (time.time() - start_time) * 1000
+                if attempt > 0:
+                    logger.info(f"Successfully fetched {docker_name} on attempt {attempt + 1} "
+                              f"(attempt: {attempt_time:.1f}ms, total: {total_time:.1f}ms)")
+                
+                return docker_name, info, stats
+                
+            except asyncio.TimeoutError as e:
+                last_exception = e
+                attempt_time = (time.time() - attempt_start) * 1000 if 'attempt_start' in locals() else current_timeout
+                
+                logger.warning(f"Timeout for {docker_name} on attempt {attempt + 1}/{config['retry_attempts']} "
+                             f"after {attempt_time:.1f}ms")
+                
+                if attempt < config['retry_attempts'] - 1:
+                    # Short delay before retry
+                    await asyncio.sleep(0.5)
+                    
+            except Exception as e:
+                last_exception = e
+                logger.error(f"Error fetching {docker_name} on attempt {attempt + 1}: {e}")
+                
+                if attempt < config['retry_attempts'] - 1:
+                    await asyncio.sleep(0.5)
+        
+        # All retries failed - try emergency fetch without timeout
+        logger.warning(f"All retries failed for {docker_name}, attempting emergency fetch")
+        return await self._emergency_full_fetch(docker_name, last_exception)
+    
+    async def _emergency_full_fetch(self, docker_name: str, last_exception: Exception) -> Tuple[str, Any, Any]:
+        """Emergency fetch with no timeout limits - last resort to get complete data."""
+        try:
+            logger.info(f"Emergency full fetch for {docker_name} - no timeout limit")
+            
+            # NO timeout - wait however long it takes
+            info_task = asyncio.create_task(get_docker_info(docker_name))
+            stats_task = asyncio.create_task(get_docker_stats(docker_name))
+            
+            start_emergency = time.time()
+            info, stats = await asyncio.gather(info_task, stats_task, return_exceptions=True)
+            emergency_time = (time.time() - start_emergency) * 1000
+            
+            # Mark as slow container for future reference
+            profile = self._get_container_performance_profile(docker_name)
+            profile['is_slow'] = True
+            self._update_container_performance(docker_name, emergency_time, True)
+            
+            logger.info(f"Emergency fetch successful for {docker_name} after {emergency_time:.1f}ms")
+            return docker_name, info, stats
+            
+        except Exception as e:
+            # Even emergency fetch failed - update performance and return error
+            self._update_container_performance(docker_name, 0, False)
+            logger.error(f"Emergency fetch failed for {docker_name}: {e}")
+            return docker_name, last_exception, None
+    
     def _get_cached_translations(self, lang: str) -> dict:
-        """Cached translations für bessere Performance."""
+        """Cached translations for better performance."""
         if not hasattr(self, 'cached_translations'):
             self.cached_translations = {}
         
@@ -69,7 +263,7 @@ class StatusHandlersMixin:
         return self.cached_translations[cache_key]
     
     def _get_cached_box_elements(self, display_name: str, BOX_WIDTH: int = 28) -> dict:
-        """Cached box elements für bessere Performance."""
+        """Cached box elements for better performance."""
         if not hasattr(self, 'cached_box_elements'):
             self.cached_box_elements = {}
             
@@ -92,8 +286,8 @@ class StatusHandlersMixin:
     
     async def bulk_fetch_container_status(self, container_names: List[str]) -> Dict[str, Tuple]:
         """
-        Fetches status for multiple containers in parallel with patient data collection.
-        Prioritizes getting real data over quick responses - UI uses cached data for speed.
+        Intelligent bulk fetch with adaptive performance learning and complete data collection.
+        Uses performance history to optimize timeouts and batching while always collecting full details.
         
         Args:
             container_names: List of Docker container names to fetch
@@ -105,74 +299,70 @@ class StatusHandlersMixin:
             return {}
         
         start_time = time.time()
-        logger.info(f"[BULK_FETCH] Starting patient bulk status fetch for {len(container_names)} containers")
+        logger.info(f"[INTELLIGENT_BULK_FETCH] Starting adaptive bulk fetch for {len(container_names)} containers")
         
-        # PATIENT APPROACH: Allow longer execution to get real data
-        # UI will use cache, so we can take time to get accurate information
-        MAX_CONCURRENT_DOCKER_CALLS = 3  # Reduce concurrency to be more patient
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOCKER_CALLS)
+        # Initialize performance system
+        self._ensure_performance_system()
         
-        # Create tasks for parallel execution with patient timeouts
-        async def fetch_single_container_info(docker_name: str):
-            """Fetches info and stats for a single container with patience for real data."""
-            async with semaphore:
-                try:
-                    # PATIENT APPROACH: Allow reasonable time for real data
-                    # Game servers need time, but not infinite time
-                    CONTAINER_FETCH_TIMEOUT = 30.0  # 30 seconds per container (was 5s)
-                    
-                    start_container_time = time.time()
-                    
-                    # Run info and stats fetch in parallel with generous timeout
-                    try:
-                        info_task = asyncio.create_task(get_docker_info(docker_name))
-                        stats_task = asyncio.create_task(get_docker_stats(docker_name))
-                        
-                        # Apply generous timeout to get real data
-                        info, stats = await asyncio.wait_for(
-                            asyncio.gather(info_task, stats_task, return_exceptions=True),
-                            timeout=CONTAINER_FETCH_TIMEOUT
-                        )
-                        
-                        elapsed_time = (time.time() - start_container_time) * 1000
-                        if elapsed_time > 10000:  # Over 10 seconds
-                            logger.info(f"[BULK_FETCH] Patient fetch for {docker_name}: {elapsed_time:.1f}ms (got real data)")
-                        elif elapsed_time > 5000:  # Over 5 seconds
-                            logger.debug(f"[BULK_FETCH] Slow fetch for {docker_name}: {elapsed_time:.1f}ms")
-                        
-                        return docker_name, info, stats
-                        
-                    except asyncio.TimeoutError:
-                        elapsed_time = (time.time() - start_container_time) * 1000
-                        logger.warning(f"[BULK_FETCH] Even patient timeout for {docker_name} after {elapsed_time:.1f}ms")
-                        return docker_name, None, None
-                        
-                except Exception as e:
-                    logger.error(f"[BULK_FETCH] Error fetching {docker_name}: {e}")
-                    return docker_name, None, None
+        # Classify containers by performance history for intelligent batching
+        fast_containers, slow_containers = self._classify_containers_by_performance(container_names)
         
-        # PATIENT APPROACH: Launch all container fetches with generous overall timeout
-        fetch_tasks = [fetch_single_container_info(name) for name in container_names]
+        if fast_containers and slow_containers:
+            logger.info(f"[INTELLIGENT_BULK_FETCH] Smart batching: {len(fast_containers)} fast, {len(slow_containers)} slow containers")
+        elif slow_containers:
+            logger.info(f"[INTELLIGENT_BULK_FETCH] All {len(slow_containers)} containers classified as slow - using patient processing")
+        else:
+            logger.info(f"[INTELLIGENT_BULK_FETCH] All {len(fast_containers)} containers classified as fast - using parallel processing")
         
-        # Execute all tasks with generous overall timeout for real data collection
-        OVERALL_TIMEOUT = 120.0  # 2 minutes total (was 10s) - UI won't wait for this
-        try:
-            results = await asyncio.wait_for(
-                asyncio.gather(*fetch_tasks, return_exceptions=True),
-                timeout=OVERALL_TIMEOUT
-            )
-        except asyncio.TimeoutError:
-            logger.warning(f"[BULK_FETCH] Overall patient timeout exceeded {OVERALL_TIMEOUT}s for {len(container_names)} containers")
-            # Still return partial results rather than empty
-            results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+        # Process containers with intelligent strategies
+        all_results = []
         
-        # Process results into status tuples
+        # Phase 1: Process fast containers in parallel (if any)
+        if fast_containers:
+            logger.debug(f"[INTELLIGENT_BULK_FETCH] Phase 1: Processing {len(fast_containers)} fast containers in parallel")
+            
+            # Use semaphore for controlled concurrency
+            MAX_CONCURRENT_FAST = min(5, len(fast_containers))  # Max 5 concurrent for fast containers
+            semaphore = asyncio.Semaphore(MAX_CONCURRENT_FAST)
+            
+            async def fetch_fast_container(container_name):
+                async with semaphore:
+                    return await self._fetch_container_with_retries(container_name)
+            
+            fast_tasks = [fetch_fast_container(name) for name in fast_containers]
+            fast_results = await asyncio.gather(*fast_tasks, return_exceptions=True)
+            all_results.extend(fast_results)
+            
+            fast_time = (time.time() - start_time) * 1000
+            logger.info(f"[INTELLIGENT_BULK_FETCH] Phase 1 completed: {len(fast_containers)} fast containers in {fast_time:.1f}ms")
+        
+        # Phase 2: Process slow containers individually with patience (if any)
+        if slow_containers:
+            phase2_start = time.time()
+            logger.debug(f"[INTELLIGENT_BULK_FETCH] Phase 2: Processing {len(slow_containers)} slow containers individually")
+            
+            for i, container_name in enumerate(slow_containers):
+                container_start = time.time()
+                logger.debug(f"[INTELLIGENT_BULK_FETCH] Processing slow container {i+1}/{len(slow_containers)}: {container_name}")
+                
+                result = await self._fetch_container_with_retries(container_name)
+                all_results.append(result)
+                
+                container_time = (time.time() - container_start) * 1000
+                logger.debug(f"[INTELLIGENT_BULK_FETCH] Slow container {container_name} completed in {container_time:.1f}ms")
+            
+            slow_time = (time.time() - phase2_start) * 1000
+            logger.info(f"[INTELLIGENT_BULK_FETCH] Phase 2 completed: {len(slow_containers)} slow containers in {slow_time:.1f}ms")
+        
+        # Process all results into status tuples - ALWAYS WITH COMPLETE DATA
         status_results = {}
         successful_fetches = 0
+        failed_fetches = 0
         
-        for result in results:
+        for result in all_results:
             if isinstance(result, Exception):
-                logger.error(f"[BULK_FETCH] Exception in bulk fetch: {result}")
+                logger.error(f"[INTELLIGENT_BULK_FETCH] Exception in fetch result: {result}")
+                failed_fetches += 1
                 continue
                 
             docker_name, info, stats = result
@@ -182,27 +372,29 @@ class StatusHandlersMixin:
             server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
             
             if not server_config:
-                logger.warning(f"[BULK_FETCH] No server config found for {docker_name}")
+                logger.warning(f"[INTELLIGENT_BULK_FETCH] No server config found for {docker_name}")
+                failed_fetches += 1
                 continue
             
-            # Process the fetched data
+            # Process the fetched data - ALWAYS COMPLETE DETAILS
             display_name = server_config.get('name', docker_name)
             details_allowed = server_config.get('allow_detailed_status', True)
             
             if isinstance(info, Exception) or info is None:
-                # Container offline or error
-                logger.debug(f"[BULK_FETCH] {docker_name} appears offline or error: {info}")
+                # Container offline or error - still provide complete status structure
+                logger.debug(f"[INTELLIGENT_BULK_FETCH] {docker_name} appears offline or error: {info}")
                 status_results[docker_name] = (display_name, False, 'N/A', 'N/A', 'N/A', details_allowed)
+                successful_fetches += 1  # Still a successful status determination
                 continue
             
-            # Process container info
+            # Process container info - COMPLETE DATA COLLECTION
             is_running = info.get('State', {}).get('Running', False)
             uptime = "N/A"
             cpu = "N/A"
             ram = "N/A"
             
             if is_running:
-                # Calculate uptime
+                # Calculate uptime from container start time
                 started_at_str = info.get('State', {}).get('StartedAt')
                 if started_at_str:
                     try:
@@ -222,33 +414,38 @@ class StatusHandlersMixin:
                             uptime_parts.append(f"{minutes}m")
                         uptime = " ".join(uptime_parts) if uptime_parts else "< 1m"
                     except ValueError as e:
-                        logger.error(f"[BULK_FETCH] Could not parse StartedAt for {docker_name}: {e}")
+                        logger.error(f"[INTELLIGENT_BULK_FETCH] Could not parse StartedAt for {docker_name}: {e}")
                         uptime = "Error"
                 
-                # Process stats if allowed and available
+                # Process stats - ALWAYS COLLECT IF ALLOWED (never skip for performance)
                 if details_allowed and not isinstance(stats, Exception) and stats:
                     cpu_stat, ram_stat = stats
-                    # Now we get real values instead of timeout "N/A"
+                    # We waited for real values - use them!
                     cpu = cpu_stat if cpu_stat is not None else 'N/A'
                     ram = ram_stat if ram_stat is not None else 'N/A'
                 elif not details_allowed:
                     cpu = _("Hidden")
                     ram = _("Hidden")
+                # If details allowed but stats failed, keep N/A (we tried!)
             
             status_results[docker_name] = (display_name, is_running, cpu, ram, uptime, details_allowed)
             successful_fetches += 1
         
-        elapsed_time = (time.time() - start_time) * 1000
+        total_elapsed = (time.time() - start_time) * 1000
         
-        # Enhanced logging for patient approach
-        if elapsed_time > 60000:  # Over 1 minute
-            logger.info(f"[BULK_FETCH] Patient bulk fetch took {elapsed_time:.1f}ms for {len(container_names)} containers (got real data)")
-        elif elapsed_time > 30000:  # Over 30 seconds
-            logger.info(f"[BULK_FETCH] Slow bulk fetch took {elapsed_time:.1f}ms for {len(container_names)} containers")
-        elif elapsed_time > 10000:  # Over 10 seconds  
-            logger.debug(f"[BULK_FETCH] Normal bulk fetch took {elapsed_time:.1f}ms for {len(container_names)} containers")
+        # Enhanced performance reporting
+        success_rate = (successful_fetches / len(container_names)) * 100 if container_names else 0
+        
+        if total_elapsed > 60000:  # Over 1 minute
+            logger.info(f"[INTELLIGENT_BULK_FETCH] Completed adaptive fetch in {total_elapsed:.1f}ms: "
+                       f"{successful_fetches}/{len(container_names)} successful ({success_rate:.1f}%), "
+                       f"{failed_fetches} failed. Patient processing for complete data.")
+        elif total_elapsed > 30000:  # Over 30 seconds
+            logger.info(f"[INTELLIGENT_BULK_FETCH] Completed adaptive fetch in {total_elapsed:.1f}ms: "
+                       f"{successful_fetches}/{len(container_names)} successful ({success_rate:.1f}%)")
         else:
-            logger.info(f"[BULK_FETCH] Fast bulk fetch completed for {successful_fetches}/{len(container_names)} containers in {elapsed_time:.1f}ms")
+            logger.info(f"[INTELLIGENT_BULK_FETCH] Fast adaptive fetch completed in {total_elapsed:.1f}ms: "
+                       f"{successful_fetches}/{len(container_names)} containers with complete data")
         
         return status_results
 
