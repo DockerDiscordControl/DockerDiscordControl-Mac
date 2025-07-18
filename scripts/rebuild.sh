@@ -72,7 +72,6 @@ docker run -d \
   -v ./logs:/app/logs \
   -e FLASK_SECRET_KEY="${FLASK_SECRET_KEY}" \
   -e ENV_FLASK_SECRET_KEY="${FLASK_SECRET_KEY}" \
-  -e ENV_DOCKER_SOCKET='/var/run/docker.sock' \
   -e PYTHONWARNINGS="ignore" \
   -e LOGGING_LEVEL="INFO" \
   -e DDC_CACHE_TTL="60" \
