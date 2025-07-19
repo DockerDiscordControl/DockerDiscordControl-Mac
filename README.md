@@ -4,7 +4,7 @@
 
 Control your Docker containers directly from Discord on your Mac! This Mac-native version provides a Discord bot and web interface specifically built for **macOS** with **Apple Silicon** performance optimizations and **Docker Desktop** integration.
 
-[![Version](https://img.shields.io/badge/version-3.0.0--mac-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)
+[![Version](https://img.shields.io/badge/version-1.0.0--mac-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/blob/main/LICENSE)
 [![Mac Optimized](https://img.shields.io/badge/Mac-Apple_Silicon_Ready-orange.svg)](https://docs.docker.com/desktop/mac/)
 [![Docker Desktop](https://img.shields.io/badge/Requires-Docker_Desktop-blue.svg)](https://docs.docker.com/desktop/install/mac-install/)
