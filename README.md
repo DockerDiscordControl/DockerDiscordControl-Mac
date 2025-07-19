@@ -157,7 +157,7 @@ osascript -e 'quit app "Docker Desktop"'
 open /Applications/Docker.app
 \`\`\`
 
-### Permission Problems
+### File Permissions
 \`\`\`bash
 # Fix file permissions
 sudo chown -R \$(whoami):staff ./config ./logs
