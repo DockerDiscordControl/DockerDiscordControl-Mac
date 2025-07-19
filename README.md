@@ -8,7 +8,7 @@ Control your Docker containers directly from Discord on your Mac! This Mac-nativ
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/blob/main/LICENSE)
 [![Mac Optimized](https://img.shields.io/badge/Mac-Apple_Silicon_Ready-orange.svg)](https://docs.docker.com/desktop/mac/)
 [![Docker Desktop](https://img.shields.io/badge/Requires-Docker_Desktop-blue.svg)](https://docs.docker.com/desktop/install/mac-install/)
-[![Memory Optimized](https://img.shields.io/badge/RAM-<400MB-green.svg)](#performance-metrics)
+[![Memory Optimized](https://img.shields.io/badge/RAM-~100MB-green.svg)](#performance-metrics)
 
 ## 🍎 Mac-Native Features
 
@@ -20,7 +20,7 @@ Control your Docker containers directly from Discord on your Mac! This Mac-nativ
 
 ### Mac Performance Enhancements
 - **Faster File I/O**: Optimized volume caching for macOS filesystem
-- **Memory Efficient**: <400MB RAM usage optimized for Mac development workflows  
+- **Memory Efficient**: ~100MB RAM usage optimized for Mac development workflows  
 - **CPU Management**: Smart resource allocation working with macOS power management
 - **Network Isolation**: Dedicated bridge network preventing port conflicts
 
@@ -185,7 +185,7 @@ docker inspect ddc-mac | grep Architecture
 ## 📊 Performance Metrics
 
 ### Resource Usage
-- **Memory**: <400MB typical usage
+- **Memory**: ~100MB typical usage
 - **CPU**: <5% on M2 Mac during normal operation  
 - **Startup**: ~20-30 seconds on Apple Silicon
 - **Build Time**: ~2-3 minutes on M2 Mac
@@ -193,7 +193,7 @@ docker inspect ddc-mac | grep Architecture
 ### Mac vs Other Platforms
 | Metric | Mac Version | Benefits |
 |--------|-------------|----------|
-| Memory Limit | 400MB | Optimized for Mac multitasking |
+| Memory Limit | 100MB | Optimized for Mac multitasking |
 | CPU Cores | 1.5 | Conservative for development |
 | Platform | ARM64 Native | No emulation overhead |
 | Volume Caching | cached/delegated | 3-5x faster file I/O |

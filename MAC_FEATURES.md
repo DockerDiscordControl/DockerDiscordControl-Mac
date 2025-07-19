@@ -19,7 +19,7 @@ This document outlines all Mac-specific features and optimizations in DDC-Mac co
 - **Network Isolation**: Dedicated bridge network (`ddc-mac-network`)
 
 #### Resource Management
-- **Conservative Limits**: CPU (1.5 cores) and memory (400MB) limits optimized for Mac development
+- **Conservative Limits**: CPU (1.5 cores) and memory (100MB) limits optimized for Mac development
 - **Smart Reservations**: Minimal resource reservations (0.25 CPU, 128MB RAM)
 - **Mac-friendly Temp Paths**: Uses macOS-compatible temporary directories
 
@@ -138,7 +138,7 @@ FLASK_SECRET_KEY=$(openssl rand -hex 32)
 ### 📊 Performance Metrics
 
 #### Resource Usage (Typical)
-- **Memory**: <400MB (vs 512MB limit on Unraid)
+- **Memory**: <100MB (vs 512MB limit on Unraid)
 - **CPU**: <5% on M2 Mac during normal operation
 - **Startup Time**: ~20-30 seconds on Apple Silicon
 - **Build Time**: ~2-3 minutes on M2 Mac
@@ -146,7 +146,7 @@ FLASK_SECRET_KEY=$(openssl rand -hex 32)
 #### Mac vs Unraid Differences
 | Feature | Unraid Version | Mac Version |
 |---------|---------------|-------------|
-| Memory Limit | 512MB | 400MB |
+| Memory Limit | 512MB | 100MB |
 | CPU Cores | 2.0 | 1.5 |
 | Platform | linux/amd64 | linux/arm64 |
 | Volume Caching | None | cached/delegated |

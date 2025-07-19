@@ -18,7 +18,7 @@
 
 #### Mac Performance Enhancements
 - **Ultra-Fast Performance**: 16x faster cache updates, 7x faster message responses
-- **Memory Efficient**: <400MB RAM usage optimized for Mac development workflows
+- **Memory Efficient**: ~100MB RAM usage optimized for Mac development workflows
 - **CPU Management**: Smart resource allocation (1.5 cores max, 0.25 core reserved)
 - **Network Isolation**: Dedicated ddc-mac-network bridge preventing port conflicts
 
@@ -35,7 +35,7 @@
 
 ### 🚀 Performance Metrics
 
-- **Memory Usage**: <400MB typical usage
+- **Memory Usage**: ~100MB typical usage
 - **CPU Usage**: <5% on M2 Mac during normal operation
 - **Container Startup**: ~20-30 seconds on Apple Silicon
 - **Build Time**: ~2-3 minutes on M2 Mac
