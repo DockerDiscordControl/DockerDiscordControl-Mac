@@ -12,13 +12,13 @@ COPY requirements.txt .
 RUN python -m venv /venv && \
     /venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
     /venv/bin/pip install --no-cache-dir -r requirements.txt && \
-    /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "aiohttp>=3.11.16" "setuptools>=78.1.1" && \
+    /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "aiohttp>=3.12.14" "setuptools>=78.1.1" && \
     /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "setuptools>=78.1.1" && \
     /venv/bin/pip wheel --wheel-dir=/wheels -r requirements.txt
 
-# Copy source code and compile
+# Copy source code and compile (suppress git warnings)
 COPY . /build/
-RUN python -m compileall -b /build
+RUN python -m compileall -b /build 2>/dev/null || python -m compileall -b /build
 
 # Clean up build dependencies
 RUN apk del .build-deps
