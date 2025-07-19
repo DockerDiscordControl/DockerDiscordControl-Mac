@@ -159,4 +159,6 @@ def pre_exec(server):
 # Dynamic settings based on environment variables
 if os.environ.get('DDC_DISABLE_CACHE_LOCKS', '').lower() == 'true':
     os.environ['DDC_CACHE_LOCKS_DISABLED'] = 'true'
-    server_socket = "/tmp/gunicorn.sock" 
+    # Mac-friendly: Use /tmp or user-specific temp directory
+    import tempfile
+    server_socket = os.path.join(tempfile.gettempdir(), "gunicorn.sock") 

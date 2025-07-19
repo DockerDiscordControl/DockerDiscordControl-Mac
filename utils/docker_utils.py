@@ -259,9 +259,12 @@ async def get_docker_client():
     
     # Create new client if needed
     if _docker_client is None:
-        logger.info(f"Creating new DockerClient with base_url='unix:///var/run/docker.sock'. Current DOCKER_HOST env: {os.environ.get('DOCKER_HOST')}")
+        # Mac-friendly: Use environment variable or fallback to default
+        docker_socket = os.environ.get('DOCKER_SOCKET', '/var/run/docker.sock')
+        docker_base_url = f'unix://{docker_socket}'
+        logger.info(f"Creating new DockerClient with base_url='{docker_base_url}'. Current DOCKER_HOST env: {os.environ.get('DOCKER_HOST')}")
         try:
-            client_instance = await asyncio.to_thread(docker.DockerClient, base_url='unix:///var/run/docker.sock', timeout=15) # Erhöht von 10 auf 15
+            client_instance = await asyncio.to_thread(docker.DockerClient, base_url=docker_base_url, timeout=15) # Erhöht von 10 auf 15
             logger.info("Successfully created DockerClient instance.")
             
             # Initial ping for new client
@@ -274,7 +277,7 @@ async def get_docker_client():
             _client_ping_cache = current_time
             return _docker_client
         except Exception as e:
-            logger.error(f"Error creating (or pinging) DockerClient with base_url='unix:///var/run/docker.sock': {e}", exc_info=True)
+            logger.error(f"Error creating (or pinging) DockerClient with base_url='{docker_base_url}': {e}", exc_info=True)
             return None
     
     return _docker_client
