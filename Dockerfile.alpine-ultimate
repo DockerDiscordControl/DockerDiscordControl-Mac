@@ -1,5 +1,5 @@
 # Multi-Stage Build - Alpine Version for DDC
-FROM python:3.13-alpine AS builder
+FROM python:3.11-alpine AS builder
 WORKDIR /build
 
 # Install build dependencies
@@ -33,7 +33,7 @@ RUN python -m compileall -b /build
 RUN apk del .build-deps
 
 # Final stage
-FROM python:3.13-alpine
+FROM python:3.11-alpine
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
