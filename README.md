@@ -105,7 +105,7 @@ services:
     networks:
       - dockerdiscordcontrol
     labels:
-      - "com.dockerdiscordcontrol.version=1.0.3"
+      - "com.dockerdiscordcontrol.version=1.0.4"
       - "com.dockerdiscordcontrol.platform=macos"
 
 networks:
@@ -237,6 +237,7 @@ docker exec dockerdiscordcontrol-mac ping discord.com
 | Tag | Description | Architecture |
 |-----|-------------|--------------|
 | `latest` | Latest stable release | `linux/amd64`, `linux/arm64` |
+| `1.0.4` | Version 1.0.4 | `linux/amd64`, `linux/arm64` |
 | `1.0.3` | Version 1.0.3 | `linux/amd64`, `linux/arm64` |
 | `m1` | Apple Silicon optimized | `linux/arm64` |
 | `intel` | Intel Mac optimized | `linux/amd64` |
@@ -303,7 +304,7 @@ We welcome contributions! Please see our [Contributing Guide](https://github.com
 Help keep DockerDiscordControl growing and improving for macOS Docker Desktop users:
 
 - **[☕ Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support for development
-- **[💳 PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=DOCKERDISCORDCONTROL)** - Direct contribution to the project  
+- **[💳 PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution to the project  
 - **[💖 GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing monthly support
 
 **Your support helps:**
