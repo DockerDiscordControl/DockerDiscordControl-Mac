@@ -71,23 +71,23 @@ jobs:
         build-args: |
           BUILDKIT_INLINE_CACHE=1
 
-    # Alpine Ultimate Variant
-    - name: Build and push Alpine Ultimate variant
-      if: github.event_name != 'pull_request'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.alpine-ultimate
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: |
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpine
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpine-${{ github.sha }}
-        labels: ${{ steps.meta-variants.outputs.labels }}
-        cache-from: type=gha,scope=alpine
-        cache-to: type=gha,mode=max,scope=alpine
-        build-args: |
-          BUILDKIT_INLINE_CACHE=1
+    # Alpine Ultimate Variant (temporarily disabled due to uvloop build issues)
+    # - name: Build and push Alpine Ultimate variant
+    #   if: github.event_name != 'pull_request'
+    #   uses: docker/build-push-action@v5
+    #   with:
+    #     context: .
+    #     file: ./Dockerfile.alpine-ultimate
+    #     platforms: linux/amd64,linux/arm64
+    #     push: true
+    #     tags: |
+    #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpine
+    #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpine-${{ github.sha }}
+    #     labels: ${{ steps.meta-variants.outputs.labels }}
+    #     cache-from: type=gha,scope=alpine
+    #     cache-to: type=gha,mode=max,scope=alpine
+    #     build-args: |
+    #       BUILDKIT_INLINE_CACHE=1
 
     # Debian Variant
     - name: Build and push Debian variant
