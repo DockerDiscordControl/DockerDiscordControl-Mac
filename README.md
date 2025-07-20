@@ -304,8 +304,7 @@ We welcome contributions! Please see our [Contributing Guide](https://github.com
 Help keep DockerDiscordControl growing and improving for macOS Docker Desktop users:
 
 - **[☕ Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support for development
-- **[💳 PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution to the project  
-- **[💖 GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing monthly support
+- **[💳 PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution to the project
 
 **Your support helps:**
 - 🛠️ Maintain DDC for Mac with latest Docker Desktop compatibility
