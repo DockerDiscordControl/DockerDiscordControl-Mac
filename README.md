@@ -32,7 +32,7 @@ docker run -d \
   -e DISCORD_BOT_TOKEN=your_bot_token_here \
   -e ALLOWED_CHANNELS=channel_id_1,channel_id_2 \
   -e ALLOWED_ROLES=role_id_1,role_id_2 \
-  -p 8080:8080 \
+  -p 8374:9374 \
   dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
 ```
 
@@ -77,7 +77,7 @@ This macOS-optimized version includes:
 | `ALLOWED_CHANNELS` | Comma-separated channel IDs | ✅ Yes | - |
 | `ALLOWED_ROLES` | Comma-separated role IDs | ✅ Yes | - |
 | `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | ❌ No | `INFO` |
-| `WEB_UI_PORT` | Web interface port | ❌ No | `8080` |
+| `WEB_UI_PORT` | Web interface port | ❌ No | `8374` |
 | `MAX_CONTAINERS` | Maximum containers to manage | ❌ No | `25` |
 | `MACOS_OPTIMIZED` | Enable macOS-specific optimizations | ❌ No | `true` |
 
@@ -101,7 +101,7 @@ services:
       - LOG_LEVEL=INFO
       - MACOS_OPTIMIZED=true
     ports:
-      - "8080:8080"
+      - "8374:9374"
     networks:
       - dockerdiscordcontrol
     labels:
@@ -135,7 +135,7 @@ networks:
 
 ## 🌐 Web Interface
 
-Access the web interface at `http://localhost:8080` for:
+Access the web interface at `http://localhost:8374` for:
 
 - **Real-time Container Monitoring**: Live status optimized for Mac
 - **Configuration Management**: macOS-friendly setup interface
@@ -183,7 +183,7 @@ docker inspect dockerdiscordcontrol-mac | grep -A5 Health
 docker stats dockerdiscordcontrol-mac
 
 # Check Apple Silicon specific metrics
-curl http://localhost:8080/metrics/macos
+curl http://localhost:8374/metrics/macos
 ```
 
 ## 🛠️ Troubleshooting
@@ -269,7 +269,7 @@ open -a TextEdit .env
 docker-compose up -d
 
 # Open web interface
-open http://localhost:8080
+open http://localhost:8374
 ```
 
 ## 🤝 Support
