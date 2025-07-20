@@ -1,264 +1,324 @@
-# DockerDiscordControl for Mac (DDC-Mac)
+# DockerDiscordControl - macOS Edition
 
-**The Mac-optimized Discord bot for Docker container management**
+[![Docker Hub](https://img.shields.io/docker/v/dockerdiscordcontrol/dockerdiscordcontrol-mac?label=docker%20hub)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol-mac)
+[![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol-mac)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol-mac)
+[![Image Size](https://img.shields.io/docker/image-size/dockerdiscordcontrol/dockerdiscordcontrol-mac/latest)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol-mac)
 
-Control your Docker containers directly from Discord on your Mac! This Mac-native version provides a Discord bot and web interface specifically built for **macOS** with **Apple Silicon** performance optimizations and **Docker Desktop** integration.
+**Control your Docker containers directly from Discord on macOS!**
 
-[![Version](https://img.shields.io/badge/version-1.0.0--mac-blue.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/blob/main/LICENSE)
-[![Mac Optimized](https://img.shields.io/badge/Mac-Apple_Silicon_Ready-orange.svg)](https://docs.docker.com/desktop/mac/)
-[![Docker Desktop](https://img.shields.io/badge/Requires-Docker_Desktop-blue.svg)](https://docs.docker.com/desktop/install/mac-install/)
-[![Memory Optimized](https://img.shields.io/badge/RAM-~100MB-green.svg)](#performance-metrics)
+DockerDiscordControl-Mac is specifically optimized for macOS environments, providing seamless integration with Docker Desktop for Mac and enhanced Apple Silicon (M1/M2/M3) support for the best Discord bot experience on Mac.
 
-## 🍎 Mac-Native Features
-
-### Apple Silicon Optimizations
-- **ARM64 Native**: Built specifically for Apple M1/M2/M3 chips
-- **No Emulation**: Runs natively without x86_64 compatibility layer
-- **Docker Desktop Integration**: Seamless integration with Docker Desktop for Mac
-- **Optimized Volume Mounts**: \`cached\` and \`delegated\` flags for superior macOS performance
-
-### Mac Performance Enhancements
-- **Faster File I/O**: Optimized volume caching for macOS filesystem
-- **Memory Efficient**: ~100MB RAM usage optimized for Mac development workflows  
-- **CPU Management**: Smart resource allocation working with macOS power management
-- **Network Isolation**: Dedicated bridge network preventing port conflicts
-
-## 🚀 Performance Highlights
-
-- **Ultra-Fast Cache Updates**: 16x performance improvement
-- **Quick Message Updates**: 7x faster Discord responses (350ms average)
-- **No Docker Timeouts**: Eliminated critical 5-17 second delays
-- **Apple Silicon Optimized**: Native ARM64 performance
-- **Mac File System**: Optimized I/O with intelligent caching
-
-## ✨ Core Features
-
-- **Discord Bot**: Full slash command interface for container management
-- **Web Interface**: Secure configuration panel with real-time monitoring
-- **Container Control**: Start, stop, restart any Docker container from Discord
-- **Real-time Status**: Live container statistics and health monitoring
-- **Scheduled Tasks**: Automated container actions (daily, weekly, monthly)
-- **Multi-Language**: English, German, French support
-- **Security**: Channel-based permissions and rate limiting
-- **Development Ready**: Perfect for Mac-based Docker development workflows
-
-## 📋 Mac Requirements
-
-### System Requirements
-- **macOS**: Current version or two previous major releases
-- **Hardware**: Mac with Apple Silicon (M1/M2/M3) or Intel chip
-- **RAM**: 4GB minimum (8GB+ recommended for development)
-- **Storage**: 2GB free space for Docker Desktop and containers
-
-### Required Software
-- **Docker Desktop for Mac**: [Download here](https://docs.docker.com/desktop/install/mac-install/)
-- **Discord Bot**: [Create via Developer Portal](https://discord.com/developers/applications)
+**🌐 Homepage: [https://ddc.bot](https://ddc.bot)**
 
 ## 🚀 Quick Start
 
-### 1. Install Docker Desktop
+### Using Docker Hub
 
-**For Apple Silicon (M1/M2/M3):**
-\`\`\`bash
-# Download and install Docker Desktop for Apple Silicon
-curl -o Docker.dmg https://desktop.docker.com/mac/main/arm64/Docker.dmg
-sudo hdiutil attach Docker.dmg
-sudo /Volumes/Docker/Docker.app/Contents/MacOS/install --accept-license
-sudo hdiutil detach /Volumes/Docker
-\`\`\`
+```bash
+# Pull the latest macOS-optimized image
+docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
 
-**For Intel Mac:**
-\`\`\`bash
-# Download and install Docker Desktop for Intel
-curl -o Docker.dmg https://desktop.docker.com/mac/main/amd64/Docker.dmg
-sudo hdiutil attach Docker.dmg
-sudo /Volumes/Docker/Docker.app/Contents/MacOS/install --accept-license
-sudo hdiutil detach /Volumes/Docker
-\`\`\`
+# Run with Docker Compose
+docker-compose up -d
+```
 
-### 2. Setup DDC-Mac
+### Using Docker Run
 
-\`\`\`bash
-# Clone the Mac-optimized repository
-git clone https://github.com/DockerDiscordControl/DockerDiscordControl-Mac.git
-cd DockerDiscordControl-Mac
+```bash
+docker run -d \
+  --name dockerdiscordcontrol-mac \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v ./config:/app/config \
+  -e DISCORD_BOT_TOKEN=your_bot_token_here \
+  -e ALLOWED_CHANNELS=channel_id_1,channel_id_2 \
+  -e ALLOWED_ROLES=role_id_1,role_id_2 \
+  -p 8080:8080 \
+  dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+```
 
-# Create directories and environment
-mkdir -p config logs
-echo "FLASK_SECRET_KEY=\$(openssl rand -hex 32)" > .env
-echo "TZ=\$(date +%Z)" >> .env
+## ✨ macOS-Specific Features
 
-# Validate your setup
-./test-mac-setup.sh
-\`\`\`
+- **Apple Silicon Optimization**: Native support for M1/M2/M3 processors (ARM64)
+- **Docker Desktop for Mac Integration**: Seamless integration with Docker Desktop
+- **macOS Performance Tuning**: Optimized for macOS virtual machine constraints
+- **Homebrew Compatibility**: Easy installation alongside Homebrew packages
+- **macOS Notifications**: Native system notification support (planned)
 
-### 3. Start DDC-Mac
+## 🏗️ Architecture
 
-\`\`\`bash
-# Build and start (Apple Silicon)
-docker compose up --build -d
+This macOS-optimized version includes:
 
-# For Intel Macs
-docker compose build --platform linux/amd64
-docker compose up -d
+- **Alpine Linux Base**: Ultra-lightweight foundation perfect for macOS virtualization
+- **Python 3.13**: Latest Python runtime with macOS optimizations
+- **Supervisor**: Efficient process management for Mac environments
+- **Multi-Architecture**: Native support for both Intel (AMD64) and Apple Silicon (ARM64)
 
-# Check status
-docker compose logs -f ddc
-\`\`\`
+## 📋 Requirements
 
-### 4. Configure via Web Interface
+### System Requirements
+- **macOS**: macOS 10.15 Catalina or later (macOS 12+ recommended)
+- **Architecture**: Intel x64 or Apple Silicon (M1/M2/M3)
+- **Docker Desktop for Mac**: Version 4.0+ with latest updates
+- **Memory**: Minimum 512MB RAM (1GB+ recommended)
+- **Storage**: 500MB+ free disk space
 
-1. **Open**: http://localhost:8374
-2. **Login**: Username \`admin\`, Password \`admin\`
-3. **⚠️ CHANGE PASSWORD IMMEDIATELY!**
-4. **Configure**: Discord bot token and Guild ID
-5. **Set Permissions**: Choose which containers to control
-6. **Restart**: \`docker compose restart ddc\`
+### Discord Requirements
+- Discord bot token with necessary permissions
+- Guild/server with appropriate permissions
+- Channel IDs for command execution
 
-## 🔧 Mac Configuration
-
-### Docker Desktop Settings
-
-**Resources → Advanced:**
-- **CPUs**: 2-4 cores (adjust for your Mac)
-- **Memory**: 4-8GB (minimum 4GB for DDC)
-- **Swap**: 1GB
-
-**File Sharing:**
-- Ensure project directory is accessible
-- Add \`/Users\` if not present
+## 🔧 Configuration
 
 ### Environment Variables
 
-Create/edit \`.env\` file:
-\`\`\`bash
-# Required
-FLASK_SECRET_KEY=your_generated_secret_key
-DISCORD_BOT_TOKEN=your_discord_bot_token
-DISCORD_GUILD_ID=your_discord_server_id
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `DISCORD_BOT_TOKEN` | Your Discord bot token | ✅ Yes | - |
+| `ALLOWED_CHANNELS` | Comma-separated channel IDs | ✅ Yes | - |
+| `ALLOWED_ROLES` | Comma-separated role IDs | ✅ Yes | - |
+| `LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | ❌ No | `INFO` |
+| `WEB_UI_PORT` | Web interface port | ❌ No | `8080` |
+| `MAX_CONTAINERS` | Maximum containers to manage | ❌ No | `25` |
+| `MACOS_OPTIMIZED` | Enable macOS-specific optimizations | ❌ No | `true` |
 
-# Mac optimizations
-TZ=America/New_York
-DOCKER_SOCKET=/var/run/docker.sock
-DOCKER_CONTEXT=desktop-linux
-LOG_LEVEL=INFO
-\`\`\`
+### Docker Compose Example
 
-## 🐛 Mac Troubleshooting
+```yaml
+version: '3.8'
+services:
+  dockerdiscordcontrol:
+    image: dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+    container_name: dockerdiscordcontrol-mac
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config:/app/config
+      - ./logs:/app/logs
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - ALLOWED_CHANNELS=${ALLOWED_CHANNELS}
+      - ALLOWED_ROLES=${ALLOWED_ROLES}
+      - LOG_LEVEL=INFO
+      - MACOS_OPTIMIZED=true
+    ports:
+      - "8080:8080"
+    networks:
+      - dockerdiscordcontrol
+    labels:
+      - "com.dockerdiscordcontrol.version=1.0.3"
+      - "com.dockerdiscordcontrol.platform=macos"
 
-### Docker Issues
-\`\`\`bash
-# Check if Docker Desktop is running
+networks:
+  dockerdiscordcontrol:
+    driver: bridge
+```
+
+## 🎮 Discord Commands
+
+### Container Management
+- `/docker ps` - List running containers
+- `/docker start <container>` - Start a container
+- `/docker stop <container>` - Stop a container
+- `/docker restart <container>` - Restart a container
+- `/docker logs <container>` - View container logs
+- `/docker stats` - Show container statistics
+
+### System Information
+- `/system info` - Display system information
+- `/system resources` - Show resource usage
+- `/docker version` - Docker version information
+
+### macOS-Specific Commands
+- `/system cpu` - Show Apple Silicon CPU information
+- `/system memory` - macOS memory usage statistics
+- `/docker desktop` - Docker Desktop for Mac status
+
+## 🌐 Web Interface
+
+Access the web interface at `http://localhost:8080` for:
+
+- **Real-time Container Monitoring**: Live status optimized for Mac
+- **Configuration Management**: macOS-friendly setup interface
+- **Log Viewer**: Centralized log management with macOS styling
+- **Performance Dashboard**: Apple Silicon performance metrics
+- **Resource Monitor**: macOS-specific resource tracking
+
+## 🔒 Security Features
+
+### Built-in Security
+- **Role-based Access Control**: Discord role verification
+- **Channel Restrictions**: Limit commands to specific channels
+- **Command Auditing**: Full audit trail of all commands
+- **Rate Limiting**: Prevention of command spam
+- **Input Validation**: Sanitized command parameters
+
+### macOS Security Integration
+- **Keychain Integration**: Secure credential storage (planned)
+- **Gatekeeper Compatibility**: Signed for macOS security
+- **Sandbox Support**: Runs within macOS security sandbox
+- **Privacy Permissions**: Respects macOS privacy settings
+
+## 🔍 Monitoring & Logging
+
+### Log Levels
+- **DEBUG**: Detailed debugging information
+- **INFO**: General operational messages
+- **WARNING**: Warning messages for attention
+- **ERROR**: Error conditions
+
+### Health Checks
+The container includes macOS-optimized health checks:
+
+```bash
+# Check container health
+docker inspect --format='{{.State.Health.Status}}' dockerdiscordcontrol-mac
+
+# View health check logs
+docker inspect dockerdiscordcontrol-mac | grep -A5 Health
+```
+
+### Performance Monitoring
+```bash
+# Monitor resource usage on Mac
+docker stats dockerdiscordcontrol-mac
+
+# Check Apple Silicon specific metrics
+curl http://localhost:8080/metrics/macos
+```
+
+## 🛠️ Troubleshooting
+
+### Common macOS Issues
+
+#### Docker Desktop Connection
+```bash
+# Check Docker Desktop status
 docker info
 
-# Restart Docker Desktop
-osascript -e 'quit app "Docker Desktop"'
-open /Applications/Docker.app
-\`\`\`
+# Restart Docker Desktop if needed
+open -a Docker
+```
 
-### File Permissions
-\`\`\`bash
-# Fix file permissions
-sudo chown -R \$(whoami):staff ./config ./logs
-chmod -R 755 ./config ./logs
-\`\`\`
+#### Permission Issues
+```bash
+# Check Docker socket permissions
+ls -la /var/run/docker.sock
 
-### Port Conflicts
-\`\`\`bash
-# Find what's using port 8374
-lsof -ti:8374
+# Verify user is in docker group
+groups $USER
+```
 
-# Kill conflicting process (if safe)
-kill -9 \$(lsof -ti:8374)
-\`\`\`
+#### Apple Silicon Specific
+```bash
+# Verify ARM64 image is being used
+docker inspect dockerdiscordcontrol-mac | grep Architecture
 
-### Apple Silicon Issues
-\`\`\`bash
-# Force ARM64 build
-docker compose build --platform linux/arm64
+# Check for Intel emulation
+docker exec dockerdiscordcontrol-mac uname -m
+```
 
-# Verify native architecture
-docker inspect ddc-mac | grep Architecture
-\`\`\`
+#### Bot Not Responding
+```bash
+# Check bot logs
+docker logs dockerdiscordcontrol-mac --tail 50
 
-## 📊 Performance Metrics
+# Verify network connectivity
+docker exec dockerdiscordcontrol-mac ping discord.com
+```
 
-### Resource Usage
-- **Memory**: ~100MB typical usage
-- **CPU**: <5% on M2 Mac during normal operation  
-- **Startup**: ~20-30 seconds on Apple Silicon
-- **Build Time**: ~2-3 minutes on M2 Mac
+### Performance Optimization
+- Use Apple Silicon native images when available
+- Adjust `MAX_CONTAINERS` based on Mac performance
+- Monitor Docker Desktop resource allocation
+- Use SSD storage for optimal performance
 
-### Mac vs Other Platforms
-| Metric | Mac Version | Benefits |
-|--------|-------------|----------|
-| Memory Limit | 100MB | Optimized for Mac multitasking |
-| CPU Cores | 1.5 | Conservative for development |
-| Platform | ARM64 Native | No emulation overhead |
-| Volume Caching | cached/delegated | 3-5x faster file I/O |
-| Network | Dedicated bridge | No port conflicts |
-| Context | desktop-linux | Docker Desktop integration |
+## 📦 Tags & Versions
 
-## 🛠️ Management Commands
+| Tag | Description | Architecture |
+|-----|-------------|--------------|
+| `latest` | Latest stable release | `linux/amd64`, `linux/arm64` |
+| `1.0.3` | Version 1.0.3 | `linux/amd64`, `linux/arm64` |
+| `m1` | Apple Silicon optimized | `linux/arm64` |
+| `intel` | Intel Mac optimized | `linux/amd64` |
+| `alpine` | Alpine Linux base | `linux/amd64`, `linux/arm64` |
 
-\`\`\`bash
-# Status and monitoring
-docker ps | grep ddc-mac                 # Check container status
-docker stats ddc-mac                    # Monitor resources
-docker compose logs -f ddc              # View live logs
+## 🍎 Installation on macOS
 
-# Container management  
-docker compose restart ddc              # Restart DDC
-docker compose stop                     # Stop DDC
-docker compose down                     # Stop and remove
-docker compose up -d                    # Start in background
+### Prerequisites
+```bash
+# Install Docker Desktop for Mac
+brew install --cask docker
 
-# Updates and maintenance
-git pull                                # Get latest changes
-docker compose down && docker compose up --build -d  # Update DDC
-./test-mac-setup.sh                     # Validate setup
-\`\`\`
+# Verify installation
+docker --version
+docker-compose --version
+```
 
-## 🔐 Security Best Practices
+### Quick Setup
+```bash
+# Clone repository
+git clone https://github.com/dockerdiscordcontrol/dockerdiscordcontrol-mac.git
+cd dockerdiscordcontrol-mac
 
-1. **Change Default Password**: First priority after installation
-2. **Secure Bot Token**: Keep Discord bot token private and secure
-3. **Network Security**: Consider restricting port 8374 access
-4. **Regular Updates**: Keep Docker Desktop and DDC-Mac updated
-5. **Backup Configuration**: Regular backups of config directory
+# Setup configuration
+cp env.template .env
+open -a TextEdit .env
 
-## 🆘 Getting Help
+# Start the service
+docker-compose up -d
 
-- **Mac Issues**: [GitHub Issues](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/issues)
-- **Installation Guide**: [INSTALL_MAC.md](INSTALL_MAC.md)
-- **Feature Overview**: [MAC_FEATURES.md](MAC_FEATURES.md)
-- **Setup Validation**: Run \`./test-mac-setup.sh\`
-- **Docker Desktop**: [Official Mac Documentation](https://docs.docker.com/desktop/mac/)
+# Open web interface
+open http://localhost:8080
+```
 
-## 🤝 Contributing
+## 🤝 Support
 
-Mac-specific improvements and optimizations are welcome! This is a specialized Mac port focused on:
+### Documentation
+- **🌐 Official Homepage**: [https://ddc.bot](https://ddc.bot)
+- **Main Repository (Unraid)**: [DockerDiscordControl](https://github.com/DockerDiscordControl/DockerDiscordControl)
+- **Mac Repository**: [DockerDiscordControl-Mac](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)
+- **Installation Guide**: [macOS Setup Instructions](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/INSTALL_MAC.md)
+- **Wiki**: [Comprehensive Documentation](https://github.com/DockerDiscordControl/DockerDiscordControl/wiki)
 
-- Apple Silicon performance optimizations
-- Docker Desktop integration improvements  
-- Mac-specific UX enhancements
-- macOS filesystem optimizations
+### Community
+- **Discord Server**: Join our community for support
+- **GitHub Issues**: Report bugs and feature requests
+- **GitHub Discussions**: Community Q&A and discussions
+
+### macOS-Specific Support
+- Apple Silicon optimization help
+- Docker Desktop for Mac integration
+- macOS security and permissions guidance
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/LICENSE) file for details.
+
+## 🎉 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](https://github.com/DockerDiscordControl/DockerDiscordControl/blob/main/CONTRIBUTING.md) for details.
+
+## 💝 Support DDC Development
+
+Help keep DockerDiscordControl growing and improving for macOS Docker Desktop users:
+
+- **[☕ Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support for development
+- **[💳 PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=DOCKERDISCORDCONTROL)** - Direct contribution to the project  
+- **[💖 GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Ongoing monthly support
+
+**Your support helps:**
+- 🛠️ Maintain DDC for Mac with latest Docker Desktop compatibility
+- ✨ Develop new macOS-specific features and Apple Silicon optimizations  
+- 🔒 Keep DockerDiscordControl zero-vulnerability secure for Mac environments
+- 📚 Create comprehensive macOS documentation and setup guides
+- 🚀 Performance optimizations for Apple Silicon and Intel Mac users
+
+**Thank you for supporting open source development!** 🙏
 
 ---
 
-**Built for Mac Developers** | **Optimized for Apple Silicon** | **Docker Desktop Ready**
+**Made with ❤️ for the macOS Docker community**
 
-### ☕ Support Development
-
-Help improve DDC-Mac for the Mac community:
-
-- **[GitHub Sponsors](https://github.com/sponsors/DockerDiscordControl)** - Support ongoing development
-- **[Report Issues](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/issues)** - Help improve stability  
-- **[Submit PRs](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/pulls)** - Contribute Mac optimizations
-
-**Made with ❤️ for Mac developers** 🍎🐳
+[![GitHub](https://img.shields.io/badge/GitHub-DockerDiscordControl-blue?logo=github)](https://github.com/DockerDiscordControl)
+[![Docker Hub](https://img.shields.io/badge/Docker%20Hub-dockerdiscordcontrol-blue?logo=docker)](https://hub.docker.com/u/dockerdiscordcontrol)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-Optimized-success?logo=apple)](https://github.com/DockerDiscordControl)
