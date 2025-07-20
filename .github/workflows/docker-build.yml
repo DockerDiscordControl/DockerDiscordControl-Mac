@@ -16,6 +16,12 @@ env:
   REGISTRY: docker.io
   IMAGE_NAME: dockerdiscordcontrol/dockerdiscordcontrol-mac
 
+# Security: Explicit minimal permissions (GitHub CodeQL requirement)
+permissions:
+  contents: read      # Read repository contents
+  actions: read       # Read GitHub Actions cache
+  security-events: write  # Write security events if needed
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
