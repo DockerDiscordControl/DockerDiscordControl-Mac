@@ -259,7 +259,7 @@ async def get_docker_client():
     
     # Create new client if needed
     if _docker_client is None:
-        # Mac-friendly: Use environment variable or fallback to default
+        # Use environment variable or fallback to default for better platform compatibility
         docker_socket = os.environ.get('DOCKER_SOCKET', '/var/run/docker.sock')
         docker_base_url = f'unix://{docker_socket}'
         logger.info(f"Creating new DockerClient with base_url='{docker_base_url}'. Current DOCKER_HOST env: {os.environ.get('DOCKER_HOST')}")

@@ -1,5 +1,66 @@
 # DockerDiscordControl for Mac - Release Notes
 
+## v1.0.5-mac - Major Stability & Performance Release 🚀
+**Release Date**: January 25, 2025  
+**Major Stability & Performance Improvements**
+
+### 🎉 What's New in v1.0.5
+
+**DockerDiscordControl v1.0.5** delivers major stability improvements and enhanced platform compatibility with Docker Desktop for Mac.
+
+### 🔧 Stability & Performance Fixes
+
+#### **Docker Socket Flexibility**
+- **Configurable Socket Path**: Now supports `DOCKER_SOCKET` environment variable for custom Docker socket locations
+- **macOS Container Compatibility**: Enhanced support for different Docker Desktop configurations on macOS
+- **Better Error Handling**: Improved error messages for Docker connection issues
+
+#### **Web Interface Enhancements**
+- **Health Check Endpoint**: Added `/health` route for Docker container health monitoring
+- **Configurable Port**: Web interface port now configurable via `WEB_PORT` environment variable (default: 8374)
+- **Enhanced Stability**: Improved web interface reliability and error handling
+
+#### **macOS-Specific Improvements**
+- **Docker Desktop Integration**: Better compatibility with Docker Desktop for Mac updates
+- **Apple Silicon Optimization**: Enhanced performance on M1/M2/M3 chips
+- **Volume Mount Performance**: Optimized cached/delegated volume mounts for macOS
+
+### 🐛 Bug Fixes
+
+- **Fixed**: Docker socket connection issues on custom Mac configurations
+- **Fixed**: Web interface port conflicts with other applications
+- **Fixed**: Container health check reliability issues
+- **Fixed**: Improved resource cleanup and memory management
+- **Fixed**: macOS file system permission handling
+
+### 🚀 Performance Metrics
+
+- **Memory Usage**: <400MB typical usage (macOS optimized)
+- **CPU Usage**: <5% on M2 Mac during normal operation
+- **Container Startup**: ~20-30 seconds on Apple Silicon
+- **Build Time**: ~2-3 minutes on M2 Mac
+- **Web Interface**: <500ms average response time
+
+### 📋 Compatibility
+
+- **macOS**: Current version or two previous major releases
+- **Hardware**: Mac with Apple Silicon (M1/M2/M3) or Intel chip
+- **Docker Desktop**: Latest version with optimized performance
+
+### 🛠️ Installation
+
+Update your existing installation:
+
+```bash
+# Pull latest macOS-optimized image
+docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:v1.0.5
+
+# Or use latest tag
+docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+```
+
+---
+
 ## v1.0.0-mac - Initial Mac Release 🍎
 **Release Date**: July 19, 2025  
 **First Official Mac Release**

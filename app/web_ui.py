@@ -213,6 +213,11 @@ def create_app(test_config=None):
                 # Catch errors during thread termination to avoid disrupting Flask
                 app.logger.error(f"Error during background thread cleanup: {e}")
                 # Continue with teardown, ignore errors
+    
+    # Add health check route for Docker
+    @app.route("/health")
+    def health_check():
+        return {"status": "healthy", "service": "DockerDiscordControl"}, 200
 
     return app
 
