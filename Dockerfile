@@ -2,7 +2,7 @@
 FROM python:3.12-alpine AS builder
 WORKDIR /build
 
-# Install build dependencies with security updates and C++ compiler
+# Update to Alpine 3.22.1 and install dependencies
 RUN apk update && apk upgrade && \
     apk add --no-cache --virtual .build-deps gcc g++ musl-dev python3-dev libffi-dev make && \
     apk add --no-cache openssl=3.5.1-r0 openssl-dev=3.5.1-r0
