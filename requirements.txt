@@ -25,8 +25,8 @@ python-json-logger==2.0.7
 cryptography>=45.0.5  # For token encryption - Updated from 41.0.5 for security fixes, latest stable version
 
 # --- Performance Optimizations ---
-ujson==5.8.0  # Faster JSON processing
-uvloop==0.19.0  # Faster asyncio event loop
+ujson>=5.10.0  # Faster JSON processing
+uvloop>=0.19.0  # Faster asyncio event loop
 cachetools==5.3.2  # For better in-memory caching
 # supervisor-memory-monitor==0.4.0  # For memmon in supervisord - Not available on PyPI
 superlance==2.0.0  # Contains memmon for supervisord and more
