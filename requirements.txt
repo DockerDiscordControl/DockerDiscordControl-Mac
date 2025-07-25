@@ -1,6 +1,5 @@
 # --- Main package for Discord Bot ---
 py-cord==2.6.1
-audioop-lts==0.2.1; python_version >= "3.13"  # Python 3.13 compatibility - audioop was removed in 3.13
 
 # --- SECURITY FIXES: Override py-cord dependencies ---
 aiohttp>=3.12.14  # Security fix: CVE-2024-23334, CVE-2024-30251, CVE-2024-52304, CVE-2024-52303 - Latest secure version
@@ -26,8 +25,8 @@ python-json-logger==2.0.7
 cryptography>=45.0.5  # For token encryption - Updated from 41.0.5 for security fixes, latest stable version
 
 # --- Performance Optimizations ---
-# ujson==5.8.0  # Faster JSON processing - Disabled: Build complexity for minimal Discord bot benefit
-# uvloop==0.19.0  # Faster asyncio event loop - Disabled: Overkill for Discord bot, causes Python 3.13 issues
+ujson==5.8.0  # Faster JSON processing
+uvloop==0.19.0  # Faster asyncio event loop
 cachetools==5.3.2  # For better in-memory caching
 # supervisor-memory-monitor==0.4.0  # For memmon in supervisord - Not available on PyPI
 superlance==2.0.0  # Contains memmon for supervisord and more
