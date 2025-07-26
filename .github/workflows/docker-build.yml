@@ -1,4 +1,4 @@
-name: Build and Push Docker Images - Mac
+name: 🐳🍎 Mac Docker Hub Push (Apple Silicon)
 
 on:
   push:
