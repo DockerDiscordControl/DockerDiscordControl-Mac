@@ -65,7 +65,9 @@ COPY --chown=ddcuser:ddcuser app/ app/
 COPY --chown=ddcuser:ddcuser utils/ utils/
 COPY --chown=ddcuser:ddcuser cogs/ cogs/
 COPY --chown=ddcuser:ddcuser gunicorn_config.py .
+# Copy supervisord configuration to both expected locations for supervisorctl compatibility
 COPY supervisord-optimized.conf /etc/supervisor/conf.d/supervisord.conf
+COPY supervisord-optimized.conf /etc/supervisord.conf
 
 # Final cleanup and permissions
 RUN mkdir -p /app/config /app/logs \
