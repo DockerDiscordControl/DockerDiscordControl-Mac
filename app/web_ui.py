@@ -9,7 +9,7 @@ import re
 from werkzeug.middleware.proxy_fix import ProxyFix
 from utils.time_utils import format_datetime_with_timezone
 import logging.handlers
-from utils.config_loader import load_config, save_config, DEFAULT_CONFIG
+from utils.config_loader import load_config, save_config, DEFAULT_CONFIG, get_server_config, update_server_config
 # Import auth from .auth
 from .auth import auth, init_limiter
 from app.utils.web_helpers import (
@@ -25,6 +25,7 @@ from app.utils.web_helpers import (
 from app.utils.shared_data import load_active_containers_from_config
 from datetime import datetime, timezone, timedelta
 from app.constants import COMMON_TIMEZONES # Import from new constants file
+import secrets
 
 # Frühes Monkey-Patching von Gevent für bessere Thread-Kompatibilität
 try:
@@ -66,10 +67,18 @@ def create_app(test_config=None):
             print(f"Gevent error during init: {e}")
     
     app = Flask(__name__)
-
-    # Configure App
-    app.config.from_mapping(
-        SECRET_KEY=os.getenv('FLASK_SECRET_KEY', 'fallback-secret-key-for-dev-if-not-set'),
+    
+    # IMPROVED: Generate secure Flask secret key if not provided
+    flask_secret = os.getenv('FLASK_SECRET_KEY')
+    if not flask_secret or flask_secret.strip() == '' or flask_secret == 'fallback-secret-key-for-dev-if-not-set':
+        # Generate a cryptographically secure random secret key
+        flask_secret = secrets.token_hex(32)  # 64 character hex string
+        app.logger.info("Generated secure Flask secret key automatically (no FLASK_SECRET_KEY environment variable set)")
+    else:
+        app.logger.info("Using provided Flask secret key from environment")
+    
+    app.config.update(
+        SECRET_KEY=flask_secret,
         SESSION_COOKIE_SECURE=False,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
@@ -214,10 +223,42 @@ def create_app(test_config=None):
                 app.logger.error(f"Error during background thread cleanup: {e}")
                 # Continue with teardown, ignore errors
     
-    # Add health check route for Docker
+    # Add health check route for Docker - NO SESSION REQUIRED
     @app.route("/health")
     def health_check():
-        return {"status": "healthy", "service": "DockerDiscordControl"}, 200
+        """
+        Health check endpoint for Docker containers and monitoring systems.
+        This endpoint does not require authentication or sessions.
+        """
+        try:
+            # Basic health status
+            health_data = {
+                "status": "healthy",
+                "service": "DockerDiscordControl",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "version": "v1.1.3"
+            }
+            
+            # Optional: Add basic system checks without requiring authentication
+            try:
+                config = load_config()
+                health_data["config_loaded"] = True
+                health_data["servers_configured"] = len(config.get('servers', []))
+            except Exception:
+                health_data["config_loaded"] = False
+                health_data["servers_configured"] = 0
+            
+            return jsonify(health_data), 200
+            
+        except Exception as e:
+            # Ensure health endpoint always returns something, even on error
+            error_data = {
+                "status": "error",
+                "service": "DockerDiscordControl", 
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            return jsonify(error_data), 500
 
     return app
 
