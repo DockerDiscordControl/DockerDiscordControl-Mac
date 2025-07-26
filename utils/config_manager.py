@@ -143,7 +143,8 @@ class ConfigManager:
             
             # Cache invalidation control
             self._last_cache_invalidation = 0
-            self._min_invalidation_interval = 1.0  # Minimum 1 second between invalidations
+            self._min_invalidation_interval = 30.0  # Minimum 30 seconds between invalidations to prevent loops
+            self._save_in_progress = False  # Flag to prevent reloading during saves
             
             # Configuration change subscribers
             self._subscribers = []
@@ -422,9 +423,20 @@ class ConfigManager:
         try:
             # Return cache if valid and no force_reload
             if self._config_cache is not None and not force_reload:
-                # Only check for file changes every 60 seconds
-                if time.time() - self._cache_timestamp > 60 and self._has_files_changed():
+                # IMPORTANT: Never reload during active save operations
+                if self._save_in_progress:
+                    return self._config_cache.copy()
+                
+                # Only check for file changes every 300 seconds (5 minutes) AND respect rate limiting
+                current_time = time.time()
+                time_since_cache = current_time - self._cache_timestamp
+                time_since_invalidation = current_time - self._last_cache_invalidation
+                
+                if (time_since_cache > 300 and 
+                    time_since_invalidation > self._min_invalidation_interval and 
+                    self._has_files_changed()):
                     logger.info("Configuration files changed on disk, reloading...")
+                    self._last_cache_invalidation = current_time
                     return self._load_config_from_disk()
                 return self._config_cache.copy()
             
@@ -483,6 +495,8 @@ class ConfigManager:
     def save_config(self, config_data: Dict[str, Any]) -> bool:
         """Save configuration to disk and update cache."""
         try:
+            # Set flag to prevent reload loops during save
+            self._save_in_progress = True
             config = config_data.copy()
             
             # Handle password change
@@ -518,19 +532,32 @@ class ConfigManager:
             if success:
                 # Update cache
                 self._config_cache = config.copy()
-                self._cache_timestamp = time.time()
+                current_time = time.time()
+                self._cache_timestamp = current_time
+                
+                # Update file modification times after save
                 self._update_file_mtimes()
                 
-                # Notify subscribers
+                # Reset rate limiting to prevent immediate reload detection
+                self._last_cache_invalidation = current_time
+                
+                                # Notify subscribers
                 self._notify_subscribers(config)
                 logger.info("Configuration saved successfully")
+                
+                # Clear save flag
+                self._save_in_progress = False
                 return True
-            
+
             logger.error("Failed to save one or more configuration files")
+            # Clear save flag on failure
+            self._save_in_progress = False
             return False
             
         except Exception as e:
             logger.error(f"Error saving configuration: {e}")
+            # Clear save flag on exception
+            self._save_in_progress = False
             return False
     
     def get_server_config(self, server_name: str) -> Optional[Dict[str, Any]]:
