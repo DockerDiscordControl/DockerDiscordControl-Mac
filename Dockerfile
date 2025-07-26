@@ -1,66 +1,83 @@
-# Multi-Stage Build - Alpine Version for DDC
-FROM python:3.12-alpine AS builder
-WORKDIR /build
+# Ultra-Minimal Alpine Build - Target <100MB
+FROM alpine:3.22.1
 
-# Install build dependencies with security updates and C++ compiler
-RUN apk update && apk upgrade && \
-    apk add --no-cache --virtual .build-deps gcc g++ musl-dev python3-dev libffi-dev make && \
-    apk add --no-cache openssl=3.5.1-r0 openssl-dev=3.5.1-r0
-
-# Copy requirements and install Python packages with latest setuptools
-COPY requirements.txt .
-RUN python -m venv /venv && \
-    /venv/bin/pip install --no-cache-dir --upgrade pip setuptools && \
-    /venv/bin/pip install --no-cache-dir -r requirements.txt && \
-    /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "aiohttp>=3.12.14" "setuptools>=78.1.1" && \
-    /venv/bin/pip install --no-cache-dir --force-reinstall --upgrade "setuptools>=78.1.1" && \
-    /venv/bin/pip wheel --wheel-dir=/wheels -r requirements.txt
-
-# Copy source code and compile (suppress git warnings)
-COPY . /build/
-RUN python -m compileall -b /build 2>/dev/null || python -m compileall -b /build
-
-# Clean up build dependencies
-RUN apk del .build-deps
-
-# Final stage
-FROM python:3.12-alpine
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PATH="/venv/bin:$PATH" \
-    DOCKER_HOST="unix:///var/run/docker.sock"
+# Install Python and essential packages in one layer
+RUN apk add --no-cache --virtual .build-deps \
+        gcc musl-dev libffi-dev openssl-dev rust cargo \
+    && apk add --no-cache \
+        python3 python3-dev py3-pip \
+        supervisor docker-cli ca-certificates \
+    && python3 -m venv /venv \
+    && /venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /venv/bin/pip install --no-cache-dir \
+        Flask==3.1.1 \
+        Werkzeug==3.1.3 \
+        py-cord==2.6.1 \
+        gunicorn==23.0.0 \
+        gevent==24.11.1 \
+        docker==7.1.0 \
+        cryptography>=45.0.5 \
+        APScheduler==3.10.4 \
+        python-dotenv==1.0.1 \
+        PyYAML==6.0.1 \
+        requests==2.32.4 \
+        aiohttp>=3.12.14 \
+        Flask-HTTPAuth==4.8.0 \
+        Jinja2>=3.1.4 \
+        python-json-logger==2.0.7 \
+        pytz==2024.2 \
+        cachetools==5.3.2 \
+        itsdangerous>=2.2.0 \
+        click>=8.1.7 \
+        blinker>=1.8.2 \
+        MarkupSafe>=2.1.5 \
+        flask-limiter>=3.5.0 \
+        limits>=3.9.0 \
+        greenlet>=3.0.3 \
+        zope.event>=5.0 \
+        zope.interface>=6.2 \
+    && apk del .build-deps python3-dev \
+    && rm -rf /root/.cache/pip \
+    && rm -rf /tmp/* \
+    && rm -rf /var/cache/apk/* \
+    && rm -rf /usr/share/man \
+    && rm -rf /usr/share/doc \
+    && rm -rf /usr/lib/python*/ensurepip \
+    && rm -rf /usr/lib/python*/idlelib \
+    && rm -rf /usr/lib/python*/tkinter \
+    && find /venv -name "*.pyc" -delete \
+    && find /venv -name "__pycache__" -exec rm -rf {} + || true \
+    && find /venv -name "test" -type d -exec rm -rf {} + || true \
+    && find /venv -name "tests" -type d -exec rm -rf {} + || true \
+    && find /venv -name "*.pyo" -delete || true
 
-# Install runtime dependencies with security updates
-RUN apk update && apk upgrade && \
-    apk add --no-cache supervisor curl ca-certificates docker-cli && \
-    apk del openssl && \
-    apk add --no-cache openssl=3.5.1-r0 && \
-    ln -sf /usr/local/bin/python3 /usr/local/bin/python
+# Create user and groups
+RUN addgroup -g 281 -S docker \
+    && addgroup -g 1000 -S ddcuser \
+    && adduser -u 1000 -S ddcuser -G ddcuser \
+    && adduser ddcuser docker
 
-# Copy from builder
-COPY --from=builder /venv /venv
-COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels /wheels/* && \
-    pip install --no-cache-dir --force-reinstall --upgrade "aiohttp>=3.11.16" "setuptools>=78.1.1" && \
-    pip install --no-cache-dir --force-reinstall --upgrade setuptools && \
-    rm -rf /wheels
+# Copy only essential files
+COPY --chown=ddcuser:ddcuser bot.py .
+COPY --chown=ddcuser:ddcuser app/ app/
+COPY --chown=ddcuser:ddcuser utils/ utils/
+COPY --chown=ddcuser:ddcuser cogs/ cogs/
+COPY --chown=ddcuser:ddcuser gunicorn_config.py .
+COPY supervisord-optimized.conf /etc/supervisor/conf.d/supervisord.conf
 
-COPY --from=builder /build /app
-RUN find /app -name "*.py" -not -path "*/app/*" -delete && \
-    find /app -name "*.pyc" -not -path "*/app/*" -delete && \
-    rm -rf /app/.git /app/.github /app/tests /app/venv
+# Final cleanup and permissions
+RUN mkdir -p /app/config /app/logs \
+    && chown -R ddcuser:ddcuser /app \
+    && find /app -name "*.pyc" -delete \
+    && find /app -name "__pycache__" -exec rm -rf {} + || true
 
-# Configure supervisor and directories
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-RUN mkdir -p /app/config /app/logs /app/app/logs /app/scripts /app/heartbeat_monitor && \
-    chmod 777 /app/config /app/logs /app/app/logs
+# Set environment
+ENV PATH="/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-# Copy scripts and monitor
-COPY scripts/fix_permissions.sh /app/scripts/
-RUN chmod +x /app/scripts/fix_permissions.sh
-COPY heartbeat_monitor/ddc_heartbeat_monitor.py /app/heartbeat_monitor/
-
+USER ddcuser
 EXPOSE 9374
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
