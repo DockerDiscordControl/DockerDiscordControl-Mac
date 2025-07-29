@@ -3,14 +3,13 @@ name: 🐳🍎 Mac Docker Hub Push (Apple Silicon)
 on:
   push:
     branches:
-      - main
-      - develop
+      - 'main'
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
-      - develop
+  workflow_dispatch:
 
 env:
   REGISTRY: docker.io
@@ -23,128 +22,54 @@ permissions:
   security-events: write  # Write security events if needed
 
 jobs:
-  build-and-push:
+  build_and_push:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
+      packages: write
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-    - name: Log in to Docker Hub
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Extract metadata for Standard
-      id: meta-standard
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=raw,value=latest,enable={{is_default_branch}}
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Extract metadata for variants
-      id: meta-variants
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch,suffix=-{{sha}}
-          type=semver,pattern={{version}}-{{sha}}
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: dockerdiscordcontrol/dockerdiscordcontrol-mac
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=mac,enable={{is_default_branch}}
+            type=raw,value=apple-silicon,enable={{is_default_branch}}
 
-    # Standard Dockerfile Build
-    - name: Build and push Docker image (Standard)
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta-standard.outputs.tags }}
-        labels: ${{ steps.meta-standard.outputs.labels }}
-        cache-from: type=gha,scope=standard
-        cache-to: type=gha,mode=max,scope=standard
-        build-args: |
-          BUILDKIT_INLINE_CACHE=1
-
-    # Alpine Ultimate Variant - Preferred lightweight option
-    - name: Build and push Alpine Ultimate variant
-      if: github.event_name != 'pull_request'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.alpine-ultimate
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: |
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpine
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:alpine-${{ github.sha }}
-        labels: ${{ steps.meta-variants.outputs.labels }}
-        cache-from: type=gha,scope=alpine
-        cache-to: type=gha,mode=max,scope=alpine
-        build-args: |
-          BUILDKIT_INLINE_CACHE=1
-
-    # Debian Variant (temporarily disabled due to SSL issues)
-    # - name: Build and push Debian variant
-    #   if: github.event_name != 'pull_request'
-    #   uses: docker/build-push-action@v5
-    #   with:
-    #     context: .
-    #     file: ./Dockerfile.debian
-    #     platforms: linux/amd64,linux/arm64
-    #     push: true
-    #     tags: |
-    #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:debian
-    #       ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:debian-${{ github.sha }}
-    #     labels: ${{ steps.meta-variants.outputs.labels }}
-    #     cache-from: type=gha,scope=debian
-    #     cache-to: type=gha,mode=max,scope=debian
-    #     build-args: |
-    #       BUILDKIT_INLINE_CACHE=1
-
-    # Optimized Variant
-    - name: Build and push Optimized variant
-      if: github.event_name != 'pull_request'
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./Dockerfile.optimized
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: |
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:optimized
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:optimized-${{ github.sha }}
-        labels: ${{ steps.meta-variants.outputs.labels }}
-        cache-from: type=gha,scope=optimized
-        cache-to: type=gha,mode=max,scope=optimized
-        build-args: |
-          BUILDKIT_INLINE_CACHE=1
-
-  # Summary job to check all builds
-  build-summary:
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    if: always()
-    
-    steps:
-    - name: Build Summary
-      run: |
-        echo "## Docker Build Summary - Mac Repository" >> $GITHUB_STEP_SUMMARY
-        echo "| Variant | Status |" >> $GITHUB_STEP_SUMMARY
-        echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
-        echo "| Standard | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
-        echo "| Alpine | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
-        echo "| Optimized | ✅ Complete |" >> $GITHUB_STEP_SUMMARY
-        echo "| Debian | ⏸️ Disabled |" >> $GITHUB_STEP_SUMMARY
-        echo "Mac Docker variants built successfully! Alpine Linux is the preferred lightweight option." >> $GITHUB_STEP_SUMMARY 
+      - name: Build and push Mac (Multi-Arch)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max 
