@@ -30,7 +30,7 @@ Control your Docker containers directly from Discord on macOS! This Mac-native v
 [![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org)
 [![Alpine](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#docker-hub-repository)
 
-## 🆕 Latest Updates - v2.0.0 (2025-11-19)
+## 🆕 Latest Updates - v2.0.0 (2024-11-19)
 
 ### ✅ **MAJOR UPDATE - Complete Rewrite for macOS**
 
