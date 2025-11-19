@@ -33,16 +33,16 @@ fi
 # Exits the script immediately if a command fails (except those with || true)
 set -e
 
-echo -e "${YELLOW}🛑 Stopping container ddc...${NC}"
-if docker stop ddc 2>/dev/null; then
+echo -e "${YELLOW}🛑 Stopping container dockerdiscordcontrol...${NC}"
+if docker stop dockerdiscordcontrol 2>/dev/null; then
     echo -e "${GREEN}✅ Container stopped successfully${NC}"
 else
     echo -e "${CYAN}ℹ️  Container was not running${NC}"
 fi
 sleep 1
 
-echo -e "${YELLOW}🗑️  Removing container ddc...${NC}"
-if docker rm ddc 2>/dev/null; then
+echo -e "${YELLOW}🗑️  Removing container dockerdiscordcontrol...${NC}"
+if docker rm dockerdiscordcontrol 2>/dev/null; then
     echo -e "${GREEN}✅ Container removed successfully${NC}"
 else
     echo -e "${CYAN}ℹ️  Container did not exist${NC}"
@@ -55,11 +55,11 @@ find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 echo -e "${GREEN}✅ Cache directories cleaned${NC}"
 sleep 1
 
-# 🐳 Build Docker image
-echo -e "${BLUE}🐳 Rebuilding Alpine image dockerdiscordcontrol (without cache)...${NC}"
-echo -e "${CYAN}⏳ This may take a few minutes...${NC}"
-if docker build --no-cache -t dockerdiscordcontrol . 2>/dev/null; then
-    echo -e "${GREEN}✅ Docker image built successfully!${NC}"
+# 🐳 Build the new, ultra-optimized Docker image
+echo -e "${BLUE}🐳 Rebuilding Ultra-Optimized image 'dockerdiscordcontrol' (using standard Dockerfile)...${NC}"
+echo -e "${YELLOW}⏳ This may take a few minutes...${NC}"
+if docker build --no-cache -t dockerdiscordcontrol .; then
+    echo -e "${GREEN}✅ Docker image built successfully${NC}"
 else
     echo -e "${RED}❌ Docker build failed${NC}"
     exit 1
@@ -101,13 +101,16 @@ if [ -z "$FLASK_SECRET_KEY" ]; then
 fi
 
 # 🚀 Start the container
-echo -e "${GREEN}🚀 Starting new container ddc...${NC}"
+echo -e "${GREEN}🚀 Starting new container dockerdiscordcontrol...${NC}"
 docker run -d \
-  --name ddc \
-  -p 8374:9374 \
+  --name dockerdiscordcontrol \
+  -p 9374:9374 \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v ./config:/app/config \
-  -v ./logs:/app/logs \
+  -v "$(pwd)/config":/app/config \
+  -v "$(pwd)/logs":/app/logs \
+  -v "$(pwd)/cached_animations":/app/cached_animations \
+  -v "$(pwd)/cached_displays":/app/cached_displays \
+  -v "$(pwd)/assets":/app/assets \
   -e FLASK_SECRET_KEY="${FLASK_SECRET_KEY}" \
   -e ENV_FLASK_SECRET_KEY="${FLASK_SECRET_KEY}" \
   -e PYTHONWARNINGS="ignore" \
@@ -127,19 +130,26 @@ docker run -d \
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Container started successfully!${NC}"
     sleep 1
-    echo -e "${BLUE}📋 Script finished! Check the logs with: ${WHITE}docker logs ddc -f${NC}"
+    echo -e "${BLUE}📋 Script finished! Check the logs with: ${WHITE}docker logs dockerdiscordcontrol -f${NC}"
     echo ""
     echo -e "${PURPLE}🌐 Web UI available at:${NC}"
     
     # Get local IP address
     LOCAL_IP=$(hostname -I | awk '{print $1}' 2>/dev/null || ip route get 1 | awk '{print $7}' 2>/dev/null || echo "localhost")
     
-    echo -e "${WHITE}   📍 Local:    ${CYAN}http://localhost:8374${NC}"
+    echo -e "${WHITE}   📍 Local:    ${CYAN}http://localhost:9374${NC}"
     if [ "$LOCAL_IP" != "localhost" ] && [ -n "$LOCAL_IP" ]; then
-        echo -e "${WHITE}   🌍 Network:  ${CYAN}http://${LOCAL_IP}:8374${NC}"
+        echo -e "${WHITE}   🌍 Network:  ${CYAN}http://${LOCAL_IP}:9374${NC}"
     fi
     echo ""
 else
     echo -e "${RED}❌ Failed to start container${NC}"
     exit 1
 fi
+
+# ⚠️ Permissions Reminder
+echo -e "\n${YELLOW}⚠️  IMPORTANT: Permissions Notice${NC}"
+echo -e "${WHITE}The new container runs as a non-root user ('ddcuser' with UID 1000).${NC}"
+echo -e "${WHITE}Please ensure the '${PWD}/config' and '${PWD}/logs' directories on your Unraid host are writable by this user.${NC}"
+echo -e "${WHITE}You may need to run: ${CYAN}chown -R 1000:1000 ./config ./logs${NC}"
+echo -e "${WHITE}or adjust permissions via the Unraid UI.${NC}"

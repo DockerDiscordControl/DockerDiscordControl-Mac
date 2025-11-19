@@ -2,7 +2,7 @@
 # ============================================================================ #
 # DockerDiscordControl (DDC) - Common Helpers                                 #
 # https://ddc.bot                                                              #
-# Copyright (c) 2023-2025 MAX                                                  #
+# Copyright (c) 2025 MAX                                                  #
 # Licensed under the MIT License                                               #
 # ============================================================================ #
 
@@ -12,8 +12,12 @@ Eliminates redundant code between different modules.
 """
 
 from typing import Dict, Any, List, Optional, Union, Tuple
+import asyncio
 from utils.logging_utils import get_module_logger
 from utils.time_utils import get_datetime_imports, format_duration
+
+import requests
+import socket
 
 # Central datetime imports
 datetime, timedelta, timezone, time = get_datetime_imports()
@@ -35,7 +39,8 @@ def hash_container_data(container_data: Dict[str, Any]) -> Union[int, float]:
         # Create a hash from relevant fields
         hash_input = f"{container_data.get('id', '')}-{container_data.get('status', '')}-{container_data.get('image', '')}"
         return hash(hash_input)
-    except Exception:
+    except (TypeError, AttributeError, KeyError):
+        # Hash creation errors (type errors, missing attributes/keys)
         # In case of errors, return a timestamp, which leads to reevaluation
         return time.time()
 
@@ -244,6 +249,69 @@ def sanitize_log_message(message: str) -> str:
     
     return message
 
+def is_valid_ip(ip: str) -> bool:
+    """Basic IP validation."""
+    try:
+        socket.inet_aton(ip)
+        return True
+    except socket.error:
+        return False
+
+async def get_wan_ip_async() -> Optional[str]:
+    """
+    Async version of WAN IP detection using aiohttp.
+    
+    Returns:
+        WAN IP address as string or None if detection fails
+    """
+    import aiohttp
+    
+    services = [
+        'https://api.ipify.org',
+        'https://ifconfig.me/ip', 
+        'https://icanhazip.com'
+    ]
+    
+    timeout = aiohttp.ClientTimeout(total=5.0)
+    
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for service in services:
+                try:
+                    async with session.get(service) as response:
+                        if response.status == 200:
+                            ip = (await response.text()).strip()
+                            if is_valid_ip(ip):
+                                return ip
+                except (OSError, RuntimeError, AttributeError, TypeError, ValueError) as e:
+                    # Service connection errors (network I/O, runtime issues, attribute/type/value errors)
+                    logger.debug(f"Service {service} failed: {e}")
+                    continue
+
+    except (OSError, ImportError, RuntimeError, AttributeError) as e:
+        # WAN IP detection errors (network I/O, import failures, runtime issues, attribute errors)
+        logger.debug(f"WAN IP detection failed: {e}")
+        
+    return None
+
+def validate_ip_format(ip_string: str) -> bool:
+    """
+    Basic validation for IP/domain format.
+    
+    Args:
+        ip_string: IP address, domain, or hostname (with optional port)
+        
+    Returns:
+        bool: True if format is valid, False otherwise
+    """
+    if not ip_string:
+        return True  # Empty is valid
+    
+    # Allow domain names, IPs, with optional port
+    import re
+    pattern = re.compile(r'^([a-zA-Z0-9.-]+|localhost)(?::\d{1,5})?$')
+    return bool(pattern.match(ip_string))
+
 def batch_process(items: List[Any], batch_size: int = 10) -> List[List[Any]]:
     """
     Splits a list into batches of specified size.
@@ -301,7 +369,8 @@ def retry_on_exception(max_retries: int = 3, delay: float = 1.0, backoff: float 
             for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
-                except Exception as e:
+                except (OSError, ImportError, RuntimeError, AttributeError, TypeError, ValueError, KeyError) as e:
+                    # Function execution errors (I/O, import failures, runtime issues, attribute/type/value/key errors)
                     last_exception = e
                     if attempt < max_retries:
                         logger.warning(f"Attempt {attempt + 1} failed for {func.__name__}: {e}. Retrying in {current_delay}s...")
@@ -312,4 +381,96 @@ def retry_on_exception(max_retries: int = 3, delay: float = 1.0, backoff: float 
                         
             raise last_exception
         return wrapper
+    return decorator
+
+def async_retry_with_backoff(max_retries=3, initial_delay=1.0, backoff=2.0):
+    """
+    Async version of retry_with_backoff decorator that uses asyncio.sleep.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay between retries in seconds
+        backoff: Multiplier for delay after each retry
+    """
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            current_delay = initial_delay
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    if asyncio.iscoroutinefunction(func):
+                        return await func(*args, **kwargs)
+                    else:
+                        return func(*args, **kwargs)
+                except (OSError, ImportError, RuntimeError, AttributeError, TypeError, ValueError, KeyError) as e:
+                    # Async function execution errors (I/O, import failures, runtime issues, attribute/type/value/key errors)
+                    last_exception = e
+                    if attempt < max_retries:
+                        logger.warning(f"Attempt {attempt + 1} failed for {func.__name__}: {e}. Retrying in {current_delay}s...")
+                        await asyncio.sleep(current_delay)
+                        current_delay *= backoff
+                    else:
+                        logger.error(f"All {max_retries + 1} attempts failed for {func.__name__}")
+                        
+            raise last_exception
+        return wrapper
     return decorator 
+
+def get_public_ip() -> Optional[str]:
+    """
+    Get the public/external IP address of the server.
+    
+    Returns:
+        str: Public IP address or None if detection fails
+    """
+    try:
+        # Try multiple services for reliability
+        services = [
+            'https://api.ipify.org',
+            'https://ifconfig.me',
+            'https://icanhazip.com'
+        ]
+        
+        for service in services:
+            try:
+                response = requests.get(service, timeout=5)
+                try:
+                    if response.status_code == 200:
+                        ip = response.text.strip()
+                        # Basic IP validation
+                        if _is_valid_ip(ip):
+                            return ip
+                finally:
+                    # Ensure response is properly closed to prevent resource leaks
+                    response.close()
+            except (OSError, requests.RequestException, AttributeError, TypeError, ValueError) as e:
+                # Service request errors (network I/O, HTTP errors, attribute/type/value errors)
+                logger.debug(f"Failed to get IP from {service}: {e}")
+                continue
+
+        logger.warning("Failed to detect public IP from all services")
+        return None
+
+    except (OSError, ImportError, AttributeError) as e:
+        # Public IP detection errors (network I/O, import failures, attribute errors)
+        logger.error(f"Error detecting public IP: {e}")
+        return None
+
+def _is_valid_ip(ip: str) -> bool:
+    """
+    Validate if a string is a valid IP address.
+    
+    Args:
+        ip: IP address string to validate
+        
+    Returns:
+        bool: True if valid IP address
+    """
+    try:
+        socket.inet_aton(ip)
+        return True
+    except socket.error:
+        return False
+
+ 

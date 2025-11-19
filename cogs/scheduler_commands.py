@@ -1,4 +1,10 @@
 # -*- coding: utf-8 -*-
+# ============================================================================ #
+# DockerDiscordControl (DDC)                                                  #
+# https://ddc.bot                                                              #
+# Copyright (c) 2025 MAX                                                  #
+# Licensed under the MIT License                                               #
+# ============================================================================ #
 """
 Module containing schedule command handlers for Discord slash commands.
 These are implemented as a mixin class to be used with the main DockerControlCog.
@@ -16,10 +22,10 @@ import traceback
 # Import necessary utilities
 from utils.logging_utils import setup_logger
 from utils.time_utils import format_datetime_with_timezone
-from utils.config_loader import load_config
-from utils.config_cache import get_cached_config  # Performance optimization
-from utils.action_logger import log_user_action
-from utils.scheduler import (
+from services.config.config_service import load_config
+from services.config.server_config_service import get_server_config_service
+from services.infrastructure.action_logger import log_user_action
+from services.scheduling.scheduler import (
     ScheduledTask, add_task, delete_task, update_task, load_tasks,
     get_tasks_for_container, get_next_week_tasks, get_tasks_in_timeframe,
     VALID_CYCLES, VALID_ACTIONS, DAYS_OF_WEEK,
@@ -41,7 +47,7 @@ from .autocomplete_handlers import (
 )
 
 # Import helper functions
-from utils.schedule_helpers import (
+from services.scheduling.schedule_helpers import (
     parse_and_validate_time, create_and_save_task, 
     check_schedule_permissions, handle_schedule_command_error,
     create_task_success_message, ScheduleValidationError
@@ -78,12 +84,12 @@ class ScheduleCommandsMixin:
                 return months_de[month_int - 1]
             else:
                 return months_en[month_int - 1]
-        return str(month_int)  # Fallback bei ungültigen Werten
+        return str(month_int)  # Fallback for invalid values
     
     # --- Schedule Helper Methods ---
     async def _format_schedule_embed(self, tasks: List[ScheduledTask], title: str, description: str = "") -> discord.Embed:
         """Creates an embed with the list of scheduled tasks."""
-        config = get_cached_config()  # Performance optimization: use cache instead of load_config()
+        config = load_config()  # Performance optimization: use cache instead of load_config()
         timezone_str = config.get('timezone', 'Europe/Berlin')
         
         embed = discord.Embed(
@@ -153,12 +159,14 @@ class ScheduleCommandsMixin:
         """Common functionality for all schedule commands."""
         try:
             # Check permissions
-            config = get_cached_config()  # Performance optimization: use cache instead of load_config()
+            config = load_config()  # Performance optimization: use cache instead of load_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             # Check if the user has schedule permissions
             has_permission = False
-            servers = config.get('servers', [])
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
             target_server = None
             
             for server in servers:
@@ -227,8 +235,8 @@ class ScheduleCommandsMixin:
             else:
                 await ctx.respond(_("Error adding the task. Please check the logs."), ephemeral=True)
                 return False
-                
-        except Exception as e:
+
+        except (ValueError, KeyError, RuntimeError, ImportError) as e:
             logger.error(f"Error creating a scheduled task: {e}", exc_info=True)
             await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
             return False
@@ -260,11 +268,11 @@ class ScheduleCommandsMixin:
             # Parse and validate year
             try:
                 year_int = int(year)
-                if year_int < 2024 or year_int > 2030:
-                    await ctx.respond(_("Year must be between 2024 and 2030."), ephemeral=True)
+                if year_int < 2025 or year_int > 2030:
+                    await ctx.respond(_("Year must be between 2025 and 2030."), ephemeral=True)
                     return
             except ValueError:
-                await ctx.respond(_("Invalid year format. Please use a 4-digit year (e.g., 2024)."), ephemeral=True)
+                await ctx.respond(_("Invalid year format. Please use a 4-digit year (e.g., 2025)."), ephemeral=True)
                 return
             
             # Parse and validate month
@@ -293,7 +301,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Create the task
-            config = get_cached_config()
+            config = load_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             task = ScheduledTask(
@@ -314,8 +322,8 @@ class ScheduleCommandsMixin:
                 await ctx.respond(message, ephemeral=True)
             else:
                 await ctx.respond(result, ephemeral=True)
-                
-        except Exception as e:
+
+        except (ValueError, KeyError, RuntimeError, discord.errors.DiscordException) as e:
             await handle_schedule_command_error(ctx, e, "schedule_once")
     
     # Implementation for daily tasks
@@ -347,7 +355,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Create the task
-            config = get_cached_config()
+            config = load_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             task = ScheduledTask(
@@ -367,8 +375,8 @@ class ScheduleCommandsMixin:
                 await ctx.respond(message, ephemeral=True)
             else:
                 await ctx.respond(result, ephemeral=True)
-                
-        except Exception as e:
+
+        except (ValueError, KeyError, RuntimeError, discord.errors.DiscordException) as e:
             await handle_schedule_command_error(ctx, e, "schedule_daily")
     
     # Implementation for weekly tasks
@@ -410,7 +418,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Create the task
-            config = get_cached_config()
+            config = load_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             task = ScheduledTask(
@@ -438,8 +446,8 @@ class ScheduleCommandsMixin:
                 await ctx.respond(message, ephemeral=True)
             else:
                 await ctx.respond(result, ephemeral=True)
-                
-        except Exception as e:
+
+        except (ValueError, KeyError, RuntimeError, discord.errors.DiscordException) as e:
             await handle_schedule_command_error(ctx, e, "schedule_weekly")
     
     # Implementation for monthly tasks
@@ -482,7 +490,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Create the task
-            config = get_cached_config()
+            config = load_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             task = ScheduledTask(
@@ -503,8 +511,8 @@ class ScheduleCommandsMixin:
                 await ctx.respond(message, ephemeral=True)
             else:
                 await ctx.respond(result, ephemeral=True)
-                
-        except Exception as e:
+
+        except (ValueError, KeyError, RuntimeError, discord.errors.DiscordException) as e:
             await handle_schedule_command_error(ctx, e, "schedule_monthly")
     
     # Implementation for schedule command (help)
@@ -521,21 +529,16 @@ class ScheduleCommandsMixin:
             return
                 
         embed = discord.Embed(
-            title=_("DockerDiscordControl - Scheduling Commands"),
-            description=_("Specialized commands are available for different scheduling cycles:"),
+            title=_("DockerDiscordControl - Task Scheduling"),
+            description=_("Task scheduling is now handled through UI buttons in container status messages:"),
             color=discord.Color.blue()
         )
-        embed.add_field(name="`/task_once`", value=_("Schedule a **one-time** task with year, month, day, and time."), inline=False)
-        embed.add_field(name="`/task_daily`", value=_("Schedule a **daily** task at the specified time."), inline=False)
-        embed.add_field(name="`/task_weekly`", value=_("Schedule a **weekly** task on the specified weekday and time."), inline=False)
-        embed.add_field(name="`/task_monthly`", value=_("Schedule a **monthly** task on the specified day and time."), inline=False)
-        embed.add_field(name="`/task_yearly`", value=_("Schedule a **yearly** task on the specified month, day, and time."), inline=False)
-        embed.add_field(name="`/task_info`", value=_("Shows information about all scheduled tasks."), inline=False)
-        embed.add_field(name="`/task_delete`", value=_("Delete a scheduled task by its task ID."), inline=False)
+        embed.add_field(name=_("⏰ Add Tasks"), value=_("Click the ⏰ button in any container status message to schedule tasks (once, daily, weekly, monthly, yearly)."), inline=False)
+        embed.add_field(name=_("❌ Manage Tasks"), value=_("Click the ❌ button to view and delete scheduled tasks for that container."), inline=False)
+        embed.add_field(name=_("Available Task Types"), value=_("**One-time**, **Daily**, **Weekly**, **Monthly**, and **Yearly** tasks are supported through the UI."), inline=False)
         
-        # Add note about limitations
-        embed.add_field(name=_("Note on Day Selection"), 
-                        value=_("Due to Discord's 25-option limit for autocomplete, only a strategic selection of days (1-5, 7, 9, 10, 12-15, 17, 18, 20-22, 24-28, 30, 31) is shown initially. You can still type any day number manually."), 
+        embed.add_field(name=_("How to Access"), 
+                        value=_("Use `/serverstatus` or `/ss` to see container status messages, then click the ⏰ or ❌ buttons to manage tasks."), 
                         inline=False)
         
         await ctx.respond(embed=embed)
@@ -546,21 +549,34 @@ class ScheduleCommandsMixin:
                                   period: str = "all"):
         """Shows information about scheduled tasks."""
         try:
+            # Defer immediately to prevent timeout - even before other checks
+            await ctx.defer()
+        except (discord.errors.HTTPException, discord.errors.NotFound, discord.errors.DiscordException) as defer_error:
+            logger.error(f"Failed to defer task_info interaction: {defer_error}", exc_info=True)
+            # Try to respond with error if defer failed
+            try:
+                await ctx.respond(_("Command timeout. Please try again."), ephemeral=True)
+            except (discord.errors.HTTPException, discord.errors.NotFound) as respond_error:
+                # Log the error but don't crash - this is last resort error handling
+                logger.warning(f"Failed to send error response after defer failed: {respond_error}")
+            return
+        
+        try:
             # Check channel permissions
             if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
+                await ctx.followup.send(_("This command can only be used in server channels."), ephemeral=True)
                 return
             
             config = self.config
             if not _channel_has_permission(ctx.channel.id, 'schedule', self.config):
-                await ctx.respond(_("This channel does not have permission to use this command."), ephemeral=True)
+                await ctx.followup.send(_("This channel does not have permission to use this command."), ephemeral=True)
                 return
 
             # Get all existing tasks
             all_tasks = load_tasks()
             logger.info(f"Total tasks found: {len(all_tasks)}")
             if not all_tasks:
-                await ctx.respond(_("No scheduled tasks found."))
+                await ctx.followup.send(_("No scheduled tasks found."))
                 return
 
             now = datetime.now(pytz.timezone(config.get('timezone', 'Europe/Berlin')))
@@ -687,16 +703,20 @@ class ScheduleCommandsMixin:
                 title = _("All active scheduled tasks")
             
             if not filtered_tasks:
-                await ctx.respond(_("No active scheduled tasks found for the specified period."))
+                await ctx.followup.send(_("No active scheduled tasks found for the specified period."))
                 return
                 
             embed = await self._format_schedule_embed(filtered_tasks, title)
-            await ctx.respond(embed=embed)
-            
-        except Exception as e:
-            logger.error(f"Error executing schedule_info command: {e}")
+            await ctx.followup.send(embed=embed)
+
+        except (KeyError, ValueError, RuntimeError, ImportError) as e:
+            logger.error(f"Error executing schedule_info command: {e}", exc_info=True)
             logger.error(traceback.format_exc())
-            await ctx.respond(_("An error occurred while fetching scheduled tasks. Please check the logs."))
+            try:
+                await ctx.followup.send(_("An error occurred while fetching scheduled tasks. Please check the logs."))
+            except (discord.errors.HTTPException, discord.errors.NotFound) as followup_error:
+                # Log the error but don't crash - interaction might be dead or timed out
+                logger.debug(f"Failed to send error followup (interaction might be dead): {followup_error}")
 
     # Implementation for yearly tasks
     async def _impl_schedule_yearly_command(self, ctx: discord.ApplicationContext, 
@@ -738,7 +758,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Use current year for yearly tasks
-            current_year = datetime.now().year
+            current_year = datetime.now(timezone.utc).year
             
             # Validate the inputs using existing function
             is_valid_input, error_message = validate_new_task_input(
@@ -749,7 +769,7 @@ class ScheduleCommandsMixin:
                 return
             
             # Create the task
-            config = get_cached_config()
+            config = load_config()
             timezone_str = config.get('timezone', 'Europe/Berlin')
             
             task = ScheduledTask(
@@ -770,6 +790,6 @@ class ScheduleCommandsMixin:
                 await ctx.respond(message, ephemeral=True)
             else:
                 await ctx.respond(result, ephemeral=True)
-                
-        except Exception as e:
+
+        except (ValueError, KeyError, RuntimeError, discord.errors.DiscordException) as e:
             await handle_schedule_command_error(ctx, e, "schedule_yearly") 

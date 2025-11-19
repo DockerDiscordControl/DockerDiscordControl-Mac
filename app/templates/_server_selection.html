@@ -14,6 +14,7 @@
                     <th scope="col" class="text-center" style="width: 10%;">Start<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to start container?"></i></th>
                     <th scope="col" class="text-center" style="width: 10%;">Stop<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to stop container?"></i></th>
                     <th scope="col" class="text-center" style="width: 10%;">Restart<i class="bi bi-question-circle help-icon" data-bs-toggle="tooltip" data-bs-placement="top" title="Allow bot to restart container?"></i></th>
+                    <th scope="col" class="text-center" style="width: 5%;">Info</th>
                 </tr>
             </thead>
             <tbody id="docker-container-list">
@@ -21,6 +22,7 @@
                     {% for container in all_containers %}
                         {% set server_config = configured_servers.get(container.name, {}) %}
                         {% set is_selected = container.name in configured_servers %}
+                        {% set info_config = container_info_data.get(container.name, {}) %}
                         <tr data-container-id="{{ container.id }}" data-container-name="{{ container.name }}">
                             <td class="text-center align-middle">
                                 <span class="order-number me-1"></span>
@@ -71,12 +73,27 @@
                                     <label class="form-check-label visually-hidden" for="restart_{{ container.id }}">Restart</label>
                                 </div>
                             </td>
+                            <td class="text-center">
+                                <button type="button" class="btn btn-sm {% if info_config.get('enabled', False) %}btn-outline-info{% else %}btn-outline-secondary{% endif %} info-btn" data-container="{{ container.name }}" title="Edit Info" {% if not is_selected %}disabled{% endif %}>
+                                    <i class="bi bi-info-circle"></i>
+                                </button>
+                            </td>
                         </tr>
+                        {# Hidden inputs for container info configuration #}
+                        <input type="hidden" name="info_enabled_{{ container.name }}" value="{% if info_config.get('enabled', False) %}1{% else %}0{% endif %}">
+                        <input type="hidden" name="info_show_ip_{{ container.name }}" value="{% if info_config.get('show_ip', False) %}1{% else %}0{% endif %}">
+                        <input type="hidden" name="info_custom_ip_{{ container.name }}" value="{{ info_config.get('custom_ip', '') }}">
+                        <input type="hidden" name="info_custom_port_{{ container.name }}" value="{{ info_config.get('custom_port', '') }}">
+                        <textarea name="info_custom_text_{{ container.name }}" style="display:none;">{{ info_config.get('custom_text', '') }}</textarea>
+                        {# Protected info hidden inputs #}
+                        <input type="hidden" name="info_protected_enabled_{{ container.name }}" value="{% if info_config.get('protected_enabled', False) %}1{% else %}0{% endif %}">
+                        <textarea name="info_protected_content_{{ container.name }}" style="display:none;">{{ info_config.get('protected_content', '') }}</textarea>
+                        <input type="hidden" name="info_protected_password_{{ container.name }}" value="{{ info_config.get('protected_password', '') }}">
                     {% endfor %}
                 {% elif cache_error %}
-                    <tr><td colspan="8"><div class="alert alert-warning m-0">{{ cache_error }}</div></td></tr>
+                    <tr><td colspan="9"><div class="alert alert-warning m-0">{{ cache_error }}</div></td></tr>
                 {% else %}
-                     <tr><td colspan="8"><div class="alert alert-info m-0">No Docker containers found.</div></td></tr>
+                     <tr><td colspan="9"><div class="alert alert-info m-0">No Docker containers found.</div></td></tr>
                 {% endif %}
             </tbody>
         </table>
@@ -94,5 +111,110 @@
             </button>
         </small>
         <div class="form-text mt-1" id="cache-status-text" style="display: none;">Container list cache is initializing...</div>
+    </div>
+</div>
+
+{# Container Info Modal #}
+<div class="modal fade" id="containerInfoModal" tabindex="-1" aria-labelledby="containerInfoModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header">
+                <h5 class="modal-title" id="containerInfoModalLabel">
+                    <i class="bi bi-info-circle"></i> Container Info Configuration
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <form id="containerInfoForm">
+                    <input type="hidden" id="modal-container-name" name="container_name">
+                    
+                    {# IP and Port Settings - Top Row #}
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="mb-2">
+                                <label for="modal-info-custom-ip" class="form-label">Custom IP/URL Override</label>
+                                <input type="text" class="form-control" name="info_custom_ip" id="modal-info-custom-ip" placeholder="e.g., mydomain.com or 192.168.1.100">
+                                <div class="form-text">Leave empty to use auto-detected public IP</div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-2">
+                                <label for="modal-info-custom-port" class="form-label">Custom Port</label>
+                                <input type="text" class="form-control" name="info_custom_port" id="modal-info-custom-port" placeholder="e.g., 7777">
+                                <div class="form-text">Optional: Port number for the server</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {# Checkboxes - Second Row #}
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" name="info_enabled" value="1" id="modal-info-enabled">
+                                <label class="form-check-label" for="modal-info-enabled">
+                                    <i class="bi bi-toggle-on"></i> Enable Info Button
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="form-check mb-2">
+                                <input class="form-check-input" type="checkbox" name="info_show_ip" value="1" id="modal-info-show-ip">
+                                <label class="form-check-label" for="modal-info-show-ip">
+                                    <i class="bi bi-broadcast"></i> Show IP Address
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {# Custom Text - Bottom Section #}
+                    <div class="mb-3">
+                        <label for="modal-info-custom-text" class="form-label">
+                            <i class="bi bi-card-text"></i> Custom Info Text
+                        </label>
+                        <textarea class="form-control" name="info_custom_text" id="modal-info-custom-text" rows="4" maxlength="250" placeholder="Password: mypass123&#10;Mods: ModName1, ModName2&#10;Max Players: 8"></textarea>
+                        <div class="form-text">
+                            <span id="modal-char-counter">0</span>/250 characters - Use line breaks for multiple entries
+                        </div>
+                    </div>
+
+                    {# Protected Info Section #}
+                    <div class="border-top pt-3 mt-3">
+                        <h6 class="mb-3"><i class="bi bi-shield-lock"></i> Protected Information</h6>
+
+                        <div class="form-check mb-3">
+                            <input class="form-check-input" type="checkbox" name="info_protected_enabled" value="1" id="modal-info-protected-enabled">
+                            <label class="form-check-label" for="modal-info-protected-enabled">
+                                <i class="bi bi-lock"></i> Enable Password-Protected Content
+                            </label>
+                            <div class="form-text">Content that requires a password to view in Discord</div>
+                        </div>
+
+                        <div id="protected-info-fields" style="display: none;">
+                            <div class="mb-3">
+                                <label for="modal-info-protected-content" class="form-label">
+                                    <i class="bi bi-file-earmark-lock"></i> Protected Content
+                                </label>
+                                <textarea class="form-control" name="info_protected_content" id="modal-info-protected-content" rows="3" maxlength="250" placeholder="Admin passwords, secret IPs, sensitive information..."></textarea>
+                                <div class="form-text">
+                                    <span id="modal-protected-char-counter">0</span>/250 characters - This content will be password protected
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="modal-info-protected-password" class="form-label">
+                                    <i class="bi bi-key"></i> Access Password
+                                </label>
+                                <input type="text" class="form-control" name="info_protected_password" id="modal-info-protected-password" maxlength="60" placeholder="Password required to view protected content">
+                                <div class="form-text">Users will need this password to see the protected information</div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" id="saveContainerInfo">Save Changes</button>
+            </div>
+        </div>
     </div>
 </div> 

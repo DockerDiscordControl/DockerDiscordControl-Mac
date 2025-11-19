@@ -2,26 +2,26 @@
 # ============================================================================ #
 # DockerDiscordControl (DDC)                                                  #
 # https://ddc.bot                                                              #
-# Copyright (c) 2023-2025 MAX                                                  #
+# Copyright (c) 2025 MAX                                                  #
 # Licensed under the MIT License                                               #
 # ============================================================================ #
 
 import discord
 from typing import List, Dict, Any, Optional, Union
-from utils.config_loader import load_config
-from utils.config_cache import get_cached_config, get_cached_servers, get_cached_guild_id  # Performance optimization
+from services.config.config_service import load_config
 from .translation_manager import _ # Import the translation function
 from utils.time_utils import format_datetime_with_timezone, get_datetime_imports # Import time helper
 from utils.logging_utils import get_module_logger
+from utils.config_cache import get_cached_guild_id, get_cached_servers
 
-# Zentrale datetime-Imports
+# Central datetime imports
 datetime, timedelta, timezone, time = get_datetime_imports()
 
 # Import app_commands using central utility
 from utils.app_commands_helper import get_app_commands
 app_commands = get_app_commands()
 
-# Logger mit zentraler Utility
+# Logger with central utility
 logger = get_module_logger('control_helpers')
 
 def get_guild_id() -> Union[List[int], None]:
@@ -33,15 +33,6 @@ def get_guild_id() -> Union[List[int], None]:
     # None is returned, which means the command is global.
     logger.warning("No valid guild_id found in config. Commands will be registered globally.")
     return None
-
-# Old function commented out
-# async def container_select(ctx: discord.AutocompleteContext) -> List[str]:
-#     """ Returns a list of configured Docker containers for autocomplete. """
-#     config = load_config()
-#     servers = config.get('servers', [])
-#     # We return the `docker_name` as this is the unique identifier
-#     # that we need for actions.
-#     return [server.get('docker_name') for server in servers if server.get('docker_name')]
 
 # Updated function for Discord Autocomplete
 async def container_select(original_ctx, original_current):
@@ -58,8 +49,8 @@ async def container_select(original_ctx, original_current):
         try:
             search_text = original_current.value or ""
             logger.info(f"  Search text from original_current.value: '{search_text}'")
-        except Exception as e:
-            logger.error(f"  Error accessing original_current.value: {e}. Defaulting search_text.")
+        except (RuntimeError) as e:
+            logger.error(f"  Error accessing original_current.value: {e}. Defaulting search_text.", exc_info=True)
             search_text = ""
     elif hasattr(original_ctx, 'value') and not isinstance(original_ctx, str):
         # Fallback if original_ctx is an AutocompleteContext (e.g. PyCord standard)
@@ -67,8 +58,8 @@ async def container_select(original_ctx, original_current):
         try:
             search_text = original_ctx.value or ""
             logger.info(f"  Search text from original_ctx.value: '{search_text}'")
-        except Exception as e:
-            logger.error(f"  Error accessing original_ctx.value: {e}. Defaulting search_text.")
+        except (RuntimeError, discord.Forbidden, discord.HTTPException, discord.NotFound) as e:
+            logger.error(f"  Error accessing original_ctx.value: {e}. Defaulting search_text.", exc_info=True)
             search_text = ""
     elif isinstance(original_current, str):
         # Standard discord.py: original_current is the string value, original_ctx is Interaction
@@ -104,7 +95,7 @@ async def container_select(original_ctx, original_current):
 def _channel_has_permission(channel_id: int, permission_key: str, config: dict = None) -> bool:
     """Checks if a channel has a specific permission."""
     if config is None:
-        config = get_cached_config()  # Performance optimization: use cache if no config provided
+        config = load_config()  # Performance optimization: use cache if no config provided
     
     channel_permissions = config.get('channel_permissions', {})
     channel_config = channel_permissions.get(str(channel_id))
@@ -120,7 +111,7 @@ def _channel_has_permission(channel_id: int, permission_key: str, config: dict =
 def _get_pending_embed(display_name: str) -> discord.Embed:
     """Generates a standardized embed for the pending status in the box design."""
     # --- Start: Adjusted box formatting for Pending --- #
-    config = get_cached_config()  # Performance optimization: use cache instead of load_config()
+    config = load_config()  # Performance optimization: use cache instead of load_config()
     language = config.get('language', 'de') # Needed for translation context
     status_text = _("Pending...") # Use translated text
     current_emoji = "⏳"
@@ -148,7 +139,8 @@ def _get_pending_embed(display_name: str) -> discord.Embed:
     # Add footer similar to the normal status message
     now_footer = datetime.now(timezone.utc)
     last_update_text = _("Pending since")
-    current_time = format_datetime_with_timezone(now_footer, config.get('timezone'), fmt="%H:%M:%S")
+    # Get timezone from config (format_datetime_with_timezone will handle fallbacks)
+    current_time = format_datetime_with_timezone(now_footer, config.get('timezone'), time_only=True)
     
     # Insert timestamp above the code block
     timestamp_line = f"{last_update_text}: {current_time}"

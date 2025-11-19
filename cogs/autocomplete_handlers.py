@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
+# ============================================================================ #
+# DockerDiscordControl (DDC)                                                  #
+# https://ddc.bot                                                              #
+# Copyright (c) 2025 MAX                                                  #
+# Licensed under the MIT License                                               #
+# ============================================================================ #
 """
 Module containing autocomplete handlers for Discord slash commands.
 These functions provide dropdown suggestions for command arguments.
 """
 import logging
 import discord
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Union, Optional, Callable, Any
 from functools import lru_cache
 import time
@@ -15,10 +21,10 @@ from utils.app_commands_helper import get_app_commands
 app_commands = get_app_commands()
 
 # Import utility functions
-from utils.config_loader import load_config
-from utils.config_cache import get_cached_config, get_cached_servers
+from services.config.config_service import load_config
 from utils.logging_utils import setup_logger
-from utils.scheduler import (
+from services.docker_service.status_cache_runtime import get_docker_status_cache_runtime
+from services.scheduling.scheduler import (
     VALID_CYCLES, VALID_ACTIONS, DAYS_OF_WEEK,
     parse_time_string, parse_month_string, parse_weekday_string
 )
@@ -56,8 +62,9 @@ async def schedule_container_select(
     
     active_docker_data_set = set() # Stores (docker_name, is_running)
     try:
-        from utils.docker_utils import get_containers_data
-        containers_data = await get_containers_data() # This has its own 10s cache
+        # SERVICE FIRST: Use container status service instead of old docker_utils
+        from services.infrastructure.container_status_service import get_container_list_service_first
+        containers_data = await get_container_list_service_first() # Modern service with caching
         
         if containers_data:
             for container_data in containers_data:
@@ -69,18 +76,17 @@ async def schedule_container_select(
         else:
             logger.debug("No active container names found via Docker API/utils cache")
             
-    except Exception as e:
-        logger.error(f"Error accessing Docker API or its cache in schedule_container_select: {e}")
+    except (RuntimeError, docker.errors.APIError, docker.errors.DockerException) as e:
+        logger.error(f"Error accessing Docker API or its cache in schedule_container_select: {e}", exc_info=True)
         # Fallback to docker_status_cache from cogs.docker_control if direct/util-cached query fails
         try:
-            from cogs.docker_control import docker_status_cache
-            logger.debug("Falling back to docker_status_cache for active container names")
-            for docker_name_cached, container_item in docker_status_cache.items():
+            runtime = get_docker_status_cache_runtime()
+            logger.debug("Falling back to shared docker status cache runtime for active container names")
+            for docker_name_cached, container_item in runtime.items():
                 if docker_name_cached and container_item and isinstance(container_item, dict) and 'data' in container_item:
-                    # Assuming docker_status_cache stores names directly or can be adapted
                     active_docker_data_set.add(docker_name_cached)
-        except Exception as cache_e:
-            logger.error(f"Error accessing docker_status_cache: {cache_e}")
+        except (RuntimeError, docker.errors.APIError, docker.errors.DockerException):
+            logger.error(f"Error accessing docker status cache runtime: {cache_e}")
 
     # Populate choices_to_cache from configured servers
     # We present all configured servers, their actual current status (running/stopped)
@@ -202,7 +208,7 @@ async def schedule_month_select(
     from .translation_manager import _
     
     # Get the current language from config
-    config = get_cached_config()  # Performance optimization: use cache instead of load_config()
+    config = load_config()  # Performance optimization: use cache instead of load_config()
     current_language = config.get('language', 'en')
     
     # English month names
@@ -335,7 +341,7 @@ async def schedule_year_select(
     ctx: discord.AutocompleteContext
 ):
     value_being_typed = ctx.value
-    current_year = datetime.now().year
+    current_year = datetime.now(timezone.utc).year
     years_str = [str(current_year + i) for i in range(6)] 
     
     return _filter_choices(value_being_typed, years_str)
@@ -350,7 +356,7 @@ async def schedule_task_id_select(
     value_being_typed = ctx.value
     
     try:
-        from utils.scheduler import load_tasks, CYCLE_ONCE
+        from services.scheduling.scheduler import load_tasks, CYCLE_ONCE
         import time
         
         # Load all tasks
@@ -390,12 +396,12 @@ async def schedule_task_id_select(
                     value_being_typed.lower() in display_name.lower()):
                     choices.append(task.task_id)
                     
-            except Exception as e:
+            except (RuntimeError) as e:
                 logger.debug(f"Error formatting task {task.task_id}: {e}")
                 continue
         
         return choices[:25]
         
-    except Exception as e:
-        logger.error(f"Error in schedule_task_id_select: {e}")
+    except (RuntimeError) as e:
+        logger.error(f"Error in schedule_task_id_select: {e}", exc_info=True)
         return [] 

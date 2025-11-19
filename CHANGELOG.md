@@ -1,4 +1,90 @@
-# Changelog
+# Changelog - DockerDiscordControl for macOS
+
+All notable changes to the macOS version of DockerDiscordControl will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [2.0.0] - 2025-11-19
+
+### 🎉 MAJOR UPDATE - Complete Rewrite
+
+This is a complete synchronization with the main DockerDiscordControl v2.0 release, bringing all new features and improvements to macOS.
+
+### ✨ Added
+
+#### Discord-First Control
+- **Live Logs Viewer** - Monitor container output in real-time directly in Discord
+- **Task System** - Create, view, delete tasks (Once, Daily, Weekly, Monthly, Yearly) entirely in Discord
+- **Container Info System** - Attach custom info and password-protected info to containers
+- **Public IP Display** - Automatic WAN IP detection with custom port support
+- **Full Container Management** - Start, stop, restart, bulk operations without leaving Discord
+
+#### Multi-Language Support
+- **Full Discord UI Translation** in German, French, and English
+- **Dynamic Language Switching** via Web UI settings
+- **100% Translation Coverage** across entire bot interface
+
+#### Mech Evolution System
+- **11-Stage Mech Evolution** with animated WebP graphics
+- **Continuous Power Decay System** for fair donation tracking
+- **Premium Key System** for power users
+- **Visual Feedback** with stage-specific animations and particle effects
+
+#### New Architecture Components
+- **New Cogs**: `admin_overview.py`, `enhanced_info_modal_simple.py`, `status_info_integration.py`
+- **Services Directory**: Modular service-oriented architecture
+- **Encrypted Assets**: Secure storage for sensitive data
+- **Cached Animations**: Pre-rendered mech evolution animations
+- **Cached Displays**: Pre-rendered status displays
+- **Tools Directory**: Development and maintenance utilities
+
+### ⚡ Performance Improvements
+- **16x Faster Docker Status Cache** - Optimized from 500ms to 31ms
+- **7x Faster Container Processing** - Through async optimization
+- **Smart Queue System** with fair request processing
+- **Intelligent Caching** with background refresh
+
+### 🔒 Security Enhancements
+- **Alpine Linux 3.22.2** - 94% fewer vulnerabilities
+- **Multi-Stage Docker Build** - Ultra-compact image (<200MB RAM)
+- **Production-Ready Security Hardening**
+- **Enhanced Token Encryption and Validation**
+
+### 🍎 macOS-Specific Optimizations
+- **Native Docker Desktop Integration** - Optimized socket handling
+- **Universal Binary Support** - Full M1/M2/M3/M4 and Intel compatibility
+- **Resource Efficiency** - <200MB RAM usage
+- **Multi-Stage Dockerfile** - 78% size reduction
+
+### 🎨 UI/UX Improvements
+- **Beautiful Discord Embeds** with consistent styling
+- **Advanced Spam Protection** with configurable cooldowns
+- **Enhanced Container Information System**
+- **Real-Time Monitoring** and status updates
+
+### 🔧 Configuration Changes
+- **New Environment Variables** for performance optimization
+- **First-Time Setup** with temporary 'setup' password
+- **Multiple Setup Methods** - Web setup, credentials, or env variable
+
+### 🐛 Bug Fixes
+- **Port Mapping Consistency** - Standardized on port 9374
+- **Interaction Timeout Issues** - Fixed with defer() pattern
+- **Container Control Reliability** - Improved through async optimization
+
+### 🔄 Changed
+- **Bot Entry Point** - Refactored to 157 lines (was 608)
+- **Dockerfile** - Complete rewrite with multi-stage build
+- **Requirements** - Added `Pillow>=10.2.0` for mech animations
+- **User** - Changed from `ddcuser` to `ddc`
+
+### 🗑️ Removed
+- **Heartbeat Monitor** - Replaced with integrated health checks
+- **Old Dockerfiles** - Consolidated into single optimized Dockerfile
+- **Legacy Code** - Removed in favor of modular architecture
+
+---
 
 ## v1.1.2-alpine (2025-01-26)
 

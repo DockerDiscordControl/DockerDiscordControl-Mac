@@ -1,0 +1,807 @@
+<!-- Advanced Settings Modal -->
+<div class="modal fade" id="advancedSettingsModal" tabindex="-1" aria-labelledby="advancedSettingsModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content bg-dark text-light">
+            <div class="modal-header">
+                <h5 class="modal-title" id="advancedSettingsModalLabel">
+                    <i class="bi bi-gear-fill"></i> Advanced Settings
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-warning" role="alert">
+                    <i class="bi bi-exclamation-triangle"></i> Advanced settings for fine-tuning performance. Changes require container restart to take effect.
+                </div>
+                
+                <!-- Docker Performance -->
+                <div class="card bg-secondary mb-3">
+                    <div class="card-header text-light">
+                        <h6 class="mb-0"><i class="bi bi-speedometer2"></i> Docker Performance</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-2">
+                                <label class="form-label">Status update loop interval (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord Bot: How often to fetch fresh container status for Discord commands (/serverstatus, /control). Lower = more responsive bot, higher CPU usage."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_DOCKER_CACHE_DURATION" name="env_DDC_DOCKER_CACHE_DURATION" min="10" max="300" value="{{ (config.env.DDC_DOCKER_CACHE_DURATION if config.env else '') or '' }}" placeholder="30" onchange="updateCacheTTL()">
+                                <div class="form-text"><strong>Discord Bot</strong>: Container status refresh for commands. Recommended: 30-60s</div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Cache TTL (calculated) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="How long cached container data stays valid before being considered stale. Automatically calculated as Status Update Interval × 2.5 for optimal performance."></i></label>
+                                <input type="text" class="form-control" id="calculated_cache_ttl" readonly style="background-color: #2d3748; border: 1px solid #4a5568;">
+                                <div class="form-text"><strong>Auto-calculated</strong>: Cache validity duration (interval × 2.5)</div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Docker query cooldown (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Minimum time between Docker API calls for the same container. Prevents API spam when multiple Discord users trigger commands simultaneously."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_DOCKER_QUERY_COOLDOWN" name="env_DDC_DOCKER_QUERY_COOLDOWN" min="0" max="60" value="{{ (config.env.DDC_DOCKER_QUERY_COOLDOWN if config.env else '') or '' }}" placeholder="2">
+                                <div class="form-text"><strong>Rate limiting</strong>: Prevents API spam from simultaneous commands</div>
+                            </div>
+                            <div class="col-md-2">
+                                <label class="form-label">Docker max cache age (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Maximum age before cached Docker data is forcibly refreshed, regardless of normal cache TTL. Safety mechanism for critical operations."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_DOCKER_MAX_CACHE_AGE" name="env_DDC_DOCKER_MAX_CACHE_AGE" min="1" max="7200" value="{{ (config.env.DDC_DOCKER_MAX_CACHE_AGE if config.env else '') or '' }}" placeholder="300">
+                                <div class="form-text"><strong>Safety limit</strong>: Force refresh after this time regardless of TTL</div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="form-check form-switch mt-4">
+                                    <input class="form-check-input" type="checkbox" id="env_DDC_ENABLE_BACKGROUND_REFRESH" name="env_DDC_ENABLE_BACKGROUND_REFRESH" value="true" {% if not config.env or not config.env.get('DDC_ENABLE_BACKGROUND_REFRESH') or config.env.get('DDC_ENABLE_BACKGROUND_REFRESH').lower() in ['true', '1', 'on', 'yes'] %}checked{% endif %}>
+                                    <label class="form-check-label" for="env_DDC_ENABLE_BACKGROUND_REFRESH">
+                                        Enable background refresh <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Web UI: Automatically refresh container list in background. Disable if you have many containers or limited resources."></i>
+                                    </label>
+                                </div>
+                                <div class="form-text"><strong>Web UI</strong>: Auto-refresh container list (disable for resource savings)</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Background Refresh -->
+                <div class="card bg-secondary mb-3">
+                    <div class="card-header text-light">
+                        <h6 class="mb-0"><i class="bi bi-arrow-repeat"></i> Background Refresh</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label">Refresh interval (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Web UI: How often to refresh the container list in the Web UI dashboard. Separate from Discord Bot refresh. Higher values reduce server load."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_BACKGROUND_REFRESH_INTERVAL" name="env_DDC_BACKGROUND_REFRESH_INTERVAL" min="30" max="3600" value="{{ (config.env.DDC_BACKGROUND_REFRESH_INTERVAL if config.env else '') or '' }}" placeholder="300">
+                                <div class="form-text"><strong>Web UI</strong>: Container list refresh cycle. Recommended: 300-600s</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Background refresh limit <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Maximum number of containers to refresh per background cycle. Prevents overwhelming the system when you have many containers."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_BACKGROUND_REFRESH_LIMIT" name="env_DDC_BACKGROUND_REFRESH_LIMIT" min="1" max="1000" value="{{ (config.env.DDC_BACKGROUND_REFRESH_LIMIT if config.env else '') or '' }}" placeholder="50">
+                                <div class="form-text"><strong>Performance</strong>: Max containers per refresh cycle</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Refresh timeout (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Timeout for each container refresh operation. If a container takes longer than this to respond, it's skipped to prevent blocking."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_BACKGROUND_REFRESH_TIMEOUT" name="env_DDC_BACKGROUND_REFRESH_TIMEOUT" min="5" max="300" value="{{ (config.env.DDC_BACKGROUND_REFRESH_TIMEOUT if config.env else '') or '' }}" placeholder="30">
+                                <div class="form-text"><strong>Safety</strong>: Skip slow containers after this timeout</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Max containers display <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Maximum number of containers to show in the Web UI. Higher numbers may slow down page loading. Does not affect Discord Bot functionality."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_MAX_CONTAINERS_DISPLAY" name="env_DDC_MAX_CONTAINERS_DISPLAY" min="1" max="500" value="{{ (config.env.DDC_MAX_CONTAINERS_DISPLAY if config.env else '') or '' }}" placeholder="100">
+                                <div class="form-text"><strong>Web UI</strong>: Container list display limit for performance</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scheduler Throughput -->
+                <div class="card bg-secondary mb-3">
+                    <div class="card-header text-light">
+                        <h6 class="mb-0"><i class="bi bi-calendar-check"></i> Scheduler Throughput</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Scheduler check interval (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="How often the scheduler checks for pending tasks (start/stop/restart commands). Lower values = more responsive scheduled actions, higher CPU usage."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_SCHEDULER_CHECK_INTERVAL" name="env_DDC_SCHEDULER_CHECK_INTERVAL" min="1" max="300" value="{{ (config.env.DDC_SCHEDULER_CHECK_INTERVAL if config.env else '') or '' }}" placeholder="120">
+                                <div class="form-text"><strong>Scheduler</strong>: Task check frequency. Recommended: 60-180s</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Max concurrent tasks <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Maximum number of scheduled tasks (container actions) that can run simultaneously. Prevents system overload during mass operations."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_MAX_CONCURRENT_TASKS" name="env_DDC_MAX_CONCURRENT_TASKS" min="1" max="50" value="{{ (config.env.DDC_MAX_CONCURRENT_TASKS if config.env else '') or '' }}" placeholder="3">
+                                <div class="form-text"><strong>Safety</strong>: Parallel task execution limit</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Task batch size <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Number of tasks to process together in one scheduler cycle. Higher values = more efficient processing, but may cause delays for some tasks."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_TASK_BATCH_SIZE" name="env_DDC_TASK_BATCH_SIZE" min="1" max="100" value="{{ (config.env.DDC_TASK_BATCH_SIZE if config.env else '') or '' }}" placeholder="5">
+                                <div class="form-text"><strong>Efficiency</strong>: Tasks processed per scheduler cycle</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Logs Settings -->
+                <div class="card bg-secondary mb-3">
+                    <div class="card-header text-light">
+                        <h6 class="mb-0"><i class="bi bi-file-text"></i> Live Logs Settings</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label">Auto-refresh interval (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord: How often to update live log messages with new container log lines. Lower values = more real-time logs, higher Discord API usage."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_LIVE_LOGS_REFRESH_INTERVAL" name="env_DDC_LIVE_LOGS_REFRESH_INTERVAL" min="1" max="30" value="{{ (config.env.DDC_LIVE_LOGS_REFRESH_INTERVAL if config.env else '') or '' }}" placeholder="5">
+                                <div class="form-text"><strong>Discord</strong>: Log message update frequency</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Max refresh cycles <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord: Maximum number of times to refresh live logs before auto-stopping. Prevents infinite Discord API calls."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_LIVE_LOGS_MAX_REFRESHES" name="env_DDC_LIVE_LOGS_MAX_REFRESHES" min="1" max="100" value="{{ (config.env.DDC_LIVE_LOGS_MAX_REFRESHES if config.env else '') or '' }}" placeholder="12">
+                                <div class="form-text"><strong>Safety</strong>: Auto-stop after X refreshes (prevents spam)</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Log lines to fetch <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord: Number of recent log lines to show per container. Higher values show more history but may hit Discord message length limits."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_LIVE_LOGS_TAIL_LINES" name="env_DDC_LIVE_LOGS_TAIL_LINES" min="10" max="200" value="{{ (config.env.DDC_LIVE_LOGS_TAIL_LINES if config.env else '') or '' }}" placeholder="50">
+                                <div class="form-text"><strong>Discord</strong>: Log lines per message (watch Discord limits)</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Message timeout (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord: How long to keep live log messages active before auto-deletion. Keeps Discord channels clean."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_LIVE_LOGS_TIMEOUT" name="env_DDC_LIVE_LOGS_TIMEOUT" min="30" max="600" value="{{ (config.env.DDC_LIVE_LOGS_TIMEOUT if config.env else '') or '' }}" placeholder="120">
+                                <div class="form-text"><strong>Cleanup</strong>: Auto-delete log messages after timeout</div>
+                            </div>
+                        </div>
+                        <div class="row g-3 mt-2">
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="env_DDC_LIVE_LOGS_ENABLED" name="env_DDC_LIVE_LOGS_ENABLED" value="true" {% if not config.env or not config.env.get('DDC_LIVE_LOGS_ENABLED') or config.env.get('DDC_LIVE_LOGS_ENABLED').lower() in ['true', '1', 'on', 'yes'] %}checked{% endif %}>
+                                    <label class="form-check-label" for="env_DDC_LIVE_LOGS_ENABLED">
+                                        Enable Live Logs feature <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord: Allow users to view live container logs in Discord. Disable to reduce Discord API usage and prevent log spam."></i>
+                                    </label>
+                                </div>
+                                <div class="form-text"><strong>Feature toggle</strong>: Enable /logs command in Discord</div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="env_DDC_LIVE_LOGS_AUTO_START" name="env_DDC_LIVE_LOGS_AUTO_START" value="true" {% if config.env and config.env.get('DDC_LIVE_LOGS_AUTO_START', '').lower() in ['true', '1', 'on', 'yes'] %}checked{% endif %}>
+                                    <label class="form-check-label" for="env_DDC_LIVE_LOGS_AUTO_START">
+                                        Auto-start on button click <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Discord: Automatically start live log updates when someone clicks the logs button. If disabled, users need to manually start/stop."></i>
+                                    </label>
+                                </div>
+                                <div class="form-text"><strong>UX</strong>: Start logs immediately vs. manual control</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Docker Timeouts -->
+                <div class="card bg-secondary">
+                    <div class="card-header text-light">
+                        <h6 class="mb-0"><i class="bi bi-clock-history"></i> Docker Timeouts</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Fast stats timeout (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Docker API: Timeout for quick container stats (CPU, memory). Used for responsive Discord commands. If containers don't respond within this time, they're marked as slow."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_FAST_STATS_TIMEOUT" name="env_DDC_FAST_STATS_TIMEOUT" min="1" max="60" value="{{ (config.env.DDC_FAST_STATS_TIMEOUT if config.env else '') or '' }}" placeholder="10">
+                                <div class="form-text"><strong>Performance</strong>: Quick stats timeout for responsive commands</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Slow stats timeout (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Docker API: Extended timeout for containers that were previously slow. Gives more time for detailed stats without blocking fast containers."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_SLOW_STATS_TIMEOUT" name="env_DDC_SLOW_STATS_TIMEOUT" min="1" max="300" value="{{ (config.env.DDC_SLOW_STATS_TIMEOUT if config.env else '') or '' }}" placeholder="30">
+                                <div class="form-text"><strong>Fallback</strong>: Extended timeout for slow containers</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Container list timeout (s) <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Docker API: Timeout for fetching the complete container list from Docker. If Docker daemon is slow, this prevents hanging operations."></i></label>
+                                <input type="number" class="form-control" id="env_DDC_CONTAINER_LIST_TIMEOUT" name="env_DDC_CONTAINER_LIST_TIMEOUT" min="1" max="120" value="{{ (config.env.DDC_CONTAINER_LIST_TIMEOUT if config.env else '') or '' }}" placeholder="15">
+                                <div class="form-text"><strong>Safety</strong>: Docker daemon list operation timeout</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Donation System Control -->
+                <div class="card bg-secondary mb-3">
+                    <div class="card-header text-light">
+                        <h6 class="mb-0">
+                            <i class="bi bi-shield-check"></i> Donation System Control
+                            {% if config.donation_disable_key and donations_disabled %}
+                            <span class="badge bg-success ms-2" id="donationHeaderBadge">
+                                <i class="bi bi-check-circle-fill"></i> PREMIUM ACTIVE
+                            </span>
+                            {% endif %}
+                        </h6>
+                    </div>
+                    <div class="card-body">
+                        {% if config.donation_disable_key and donations_disabled %}
+                        <div class="alert alert-success mb-3" role="alert" id="donationStatusAlert">
+                            <i class="bi bi-check-circle-fill"></i> <strong>Donation System is DISABLED</strong><br>
+                            <small>All donation elements are hidden in Web UI and Discord. Remove the key below to re-enable donations.</small>
+                        </div>
+                        {% endif %}
+                        <div class="row g-3 align-items-end">
+                            <div class="col-md-6">
+                                <label class="form-label">Disable Donation System Key <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Enter a valid key to completely remove all donation buttons, mech animations, and Power bars from both Web UI and Discord. Purchase key at Buy Me a Coffee."></i></label>
+                                <input type="text" class="form-control" id="donation_disable_key" name="donation_disable_key" value="{{ config.donation_disable_key or '' }}" placeholder="DDC-EXAMPLE-XXXX-XXXX-XXXX-XXXX-2025" maxlength="80">
+                                <div class="form-text">
+                                    <span id="keyStatus" class="text-muted">Enter key to disable all donation features</span>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="d-flex gap-2">
+                                    <button type="button" class="btn btn-outline-info" onclick="validateDonationKey()">
+                                        <i class="bi bi-check-circle"></i> Validate Key
+                                    </button>
+                                    <a href="https://buymeacoffee.com/dockerdiscordcontrol/extras" target="_blank" rel="noopener noreferrer" class="btn btn-warning">
+                                        <i class="bi bi-award"></i> Buy License
+                                    </a>
+                                    <button type="button" class="btn btn-info" onclick="openDonationManagementModal()" title="Manage Donations">
+                                        <i class="bi bi-list-ul"></i> Manage Donations
+                                    </button>
+                                </div>
+                                <div class="form-text mt-2">Purchase a key to completely remove all donation elements</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Mech Evolution Difficulty (only show if donations are enabled) -->
+                        {% if not donations_disabled %}
+                        <div class="row g-3 mt-3">
+                            <div class="col-12">
+                                <hr class="text-secondary">
+                                <h6 class="text-light mb-3">
+                                    <i class="bi bi-gear-wide-connected"></i> Mech Evolution Difficulty
+                                </h6>
+                            </div>
+                            <!-- Manual Difficulty Override - Separate API handling -->
+                            <div class="col-12 mb-3">
+                                <div class="card bg-dark border-warning">
+                                    <div class="card-body p-3">
+                                        <div class="form-check form-switch">
+                                            <input class="form-check-input" type="checkbox" id="mech_manual_difficulty_override_standalone" onchange="saveMechOverrideToggle()">
+                                            <label class="form-check-label" for="mech_manual_difficulty_override_standalone">
+                                                <i class="bi bi-sliders"></i> Static Difficulty Override
+                                                <i class="bi bi-info-circle ms-1" data-bs-toggle="tooltip" data-bs-placement="top" title="Enable to override dynamic community-based evolution costs with static custom difficulty. When OFF, costs adjust based on Discord community size (minimum 1.0x). When ON, use your custom slider settings. Achieved levels always stay locked."></i>
+                                            </label>
+                                        </div>
+                                        <div class="form-text mt-2">
+                                            <strong>OFF:</strong> <span class="text-success">Dynamic evolution costs based on community size (min 1.0x)</span><br>
+                                            <strong>ON:</strong> <span class="text-warning">Static custom difficulty from slider/buttons</span>
+                                            <br><small class="text-info"><i class="bi bi-lightning"></i> Changes saved immediately • Achieved levels stay locked forever</small>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-8">
+                                <label class="form-label">Evolution Cost Multiplier <i class="bi bi-info-circle" data-bs-toggle="tooltip" data-bs-placement="top" title="Adjusts the difficulty of mech evolution costs with 20 granular steps. Easy (0.5x) makes evolution half price, Hard (2.0x) makes it double price. Achieved levels stay locked forever."></i></label>
+                                <div class="d-flex align-items-center gap-3">
+                                    <span class="text-muted">Easy</span>
+                                    <input type="range" class="form-range flex-grow-1" id="mech_difficulty_multiplier" name="mech_difficulty_multiplier"
+                                           min="0.5" max="2.4" step="0.1" value="1.0"
+                                           oninput="onSliderChange()" onchange="onSliderChange()">
+                                    <span class="text-muted">Hard</span>
+                                </div>
+                                <div class="form-text">
+                                    <strong>Current:</strong> <span id="difficultyValue">1.0x</span> - 
+                                    <span id="levelCostPreview">Next evolution costs: $20</span>
+                                    <span class="text-muted ms-2" id="levelCostDetails">(Base: $20, Community: Medium)</span>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="d-flex flex-column gap-2">
+                                    <button type="button" class="btn btn-outline-info btn-sm" onclick="setDifficulty(0.5)">
+                                        <i class="bi bi-speedometer"></i> Easy (0.5x)
+                                    </button>
+                                    <button type="button" class="btn btn-outline-warning btn-sm" onclick="setDifficulty(1.0)">
+                                        <i class="bi bi-speedometer2"></i> Normal (1.0x)
+                                    </button>
+                                    <button type="button" class="btn btn-outline-danger btn-sm" onclick="setDifficulty(2.0)">
+                                        <i class="bi bi-speedometer-fill"></i> Hard (2.0x)
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-success" onclick="saveAdvancedSettings()">
+                    <i class="bi bi-save"></i> Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function updateCacheTTL() {
+    const intervalInput = document.getElementById('env_DDC_DOCKER_CACHE_DURATION');
+    const ttlDisplay = document.getElementById('calculated_cache_ttl');
+    
+    if (intervalInput && ttlDisplay) {
+        const interval = parseInt(intervalInput.value) || 30;
+        const calculatedTTL = Math.round(interval * 2.5);
+        ttlDisplay.value = calculatedTTL + 's';
+    }
+}
+
+// Update cache TTL when modal is shown and field has a value
+document.addEventListener('DOMContentLoaded', function() {
+    // Update TTL on initial load
+    updateCacheTTL();
+    
+    // Initialize Bootstrap tooltips
+    const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+    const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl));
+    
+    // Listen for when the advanced settings modal is shown
+    const advancedModal = document.getElementById('advancedSettingsModal');
+    if (advancedModal) {
+        advancedModal.addEventListener('shown.bs.modal', function() {
+            updateCacheTTL();
+            updateKeyStatus();
+            // Load current difficulty and manual override status
+            loadDifficultyMultiplier();
+            // Re-initialize tooltips in case they weren't ready before
+            const modalTooltips = this.querySelectorAll('[data-bs-toggle="tooltip"]');
+            [...modalTooltips].forEach(tooltip => {
+                if (!bootstrap.Tooltip.getInstance(tooltip)) {
+                    new bootstrap.Tooltip(tooltip);
+                }
+            });
+        });
+    }
+});
+
+function saveAdvancedSettings() {
+    // Copy advanced settings values to main form before saving
+    const mainForm = document.getElementById('config-form');
+    const advancedModal = document.getElementById('advancedSettingsModal');
+    
+    if (mainForm && advancedModal) {
+        // Get all input fields from the advanced settings modal
+        const advancedInputs = advancedModal.querySelectorAll('input[name^="env_"], input[name="donation_disable_key"], input[name="mech_difficulty_multiplier"]');
+        
+        console.log(`Found ${advancedInputs.length} advanced inputs to copy`);
+        
+        // Specifically check for donation key
+        const donationKeyInput = advancedModal.querySelector('input[name="donation_disable_key"]');
+        if (donationKeyInput) {
+            console.log(`Donation key input found with value: "${donationKeyInput.value}"`);
+        } else {
+            console.log('WARNING: Donation key input NOT FOUND!');
+        }
+        
+        advancedInputs.forEach(input => {
+            // Find or create corresponding hidden input in main form
+            let mainInput = mainForm.querySelector(`input[name="${input.name}"]`);
+            
+            if (!mainInput) {
+                // Create hidden input if it doesn't exist
+                mainInput = document.createElement('input');
+                mainInput.type = 'hidden';
+                mainInput.name = input.name;
+                mainForm.appendChild(mainInput);
+            }
+            
+            // Copy value
+            if (input.type === 'checkbox') {
+                mainInput.value = input.checked ? '1' : '0';
+            } else {
+                mainInput.value = input.value;
+            }
+            
+            console.log(`Copied ${input.name} = ${mainInput.value} to main form`);
+        });
+    }
+    
+    // Save mech difficulty setting via API
+    const difficultySlider = document.getElementById('mech_difficulty_multiplier');
+    if (difficultySlider) {
+        saveMechDifficulty(parseFloat(difficultySlider.value));
+    }
+    
+    // Trigger unsaved changes warning to show that settings have changed
+    if (typeof showUnsavedChangesAlert === 'function') {
+        showUnsavedChangesAlert(true);
+    }
+    
+    // Use the existing save function
+    if (typeof saveConfigAjax === 'function') {
+        saveConfigAjax();
+    }
+    
+    // Close the modal after saving
+    setTimeout(() => {
+        const modal = document.getElementById('advancedSettingsModal');
+        if (modal) {
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            if (bsModal) {
+                bsModal.hide();
+            }
+        }
+    }, 1000); // Give time for save to complete
+}
+
+function updateKeyStatus() {
+    const keyInput = document.getElementById('donation_disable_key');
+    const keyStatus = document.getElementById('keyStatus');
+    
+    if (keyInput && keyStatus) {
+        const keyValue = keyInput.value.trim();
+        if (!keyValue) {
+            keyStatus.textContent = 'Enter premium license key to disable all donation features';
+            keyStatus.className = 'text-muted';
+        } else if (validateKeyFormat(keyValue)) {
+            keyStatus.textContent = '✅ Valid license key - donations will be disabled';
+            keyStatus.className = 'text-success';
+        } else {
+            keyStatus.textContent = '❌ Invalid license key - purchase at Buy Me a Coffee';
+            keyStatus.className = 'text-danger';
+        }
+    }
+}
+
+function decryptKey(encryptedKey, cryptoKey = 'NothingToEncrypt') {
+    try {
+        // Decode base64
+        const encrypted = atob(encryptedKey);
+        
+        // Convert string to bytes (compatible with older browsers)
+        const keyBytes = [];
+        for (let i = 0; i < cryptoKey.length; i++) {
+            keyBytes.push(cryptoKey.charCodeAt(i));
+        }
+        
+        let decrypted = '';
+        for (let i = 0; i < encrypted.length; i++) {
+            const encByte = encrypted.charCodeAt(i);
+            const keyByte = keyBytes[i % keyBytes.length];
+            decrypted += String.fromCharCode(encByte ^ keyByte);
+        }
+        
+        return decrypted;
+    } catch (e) {
+        console.error('Key decryption failed:', e);
+        return '';
+    }
+}
+
+function validateKeyFormat(key) {
+    // Encrypted donation keys - use decryptKey() to get actual keys
+    const encryptedKeys = [
+        'Cis3RTk8KHldcSVWX0AoPHlCOVsnP0oNNQAoTkBJQkE=',          // Professional license
+        'Cis3RSUnIRE7DCMmX0E2TQ9CRzhbJUpjPgkjTjAxKDdjXURaXA==',    // Lifetime license
+        'CiA3Iyw8ShAmFi0sID1dNxo9OEVQKVMWQnA0LSVUICYLIj09JA==',    // Full product name
+        'Cis3RSohKhkqFy0qMzVdPwJXMUVdPDMHQnMjMiRUND0dLjYkLA==',    // Commercial license
+        'Cis3RVteVWFCACA3NysgJgc8MUVaNy9tQgcjKCpURzIfI1k4OyE='     // Enterprise edition
+    ];
+    
+    // Decrypt and check
+    try {
+        const validKeys = encryptedKeys.map(encrypted => decryptKey(encrypted));
+        console.log('Decrypted keys:', validKeys.slice(0, 2)); // Show first 2 for debugging
+        const result = validKeys.some(validKey => validKey.toUpperCase() === key.toUpperCase());
+        console.log('Key validation result:', result, 'for key:', key);
+        return result;
+    } catch (e) {
+        console.error('validateKeyFormat error:', e);
+        return false;
+    }
+}
+
+function updateDonationStatus(isValid) {
+    const statusAlert = document.getElementById('donationStatusAlert');
+    const headerBadge = document.getElementById('donationHeaderBadge');
+    
+    if (isValid) {
+        // Show success status
+        if (!statusAlert) {
+            const alertHtml = `
+                <div class="alert alert-success mb-3" role="alert" id="donationStatusAlert">
+                    <i class="bi bi-check-circle-fill"></i> <strong>Donation System will be DISABLED</strong><br>
+                    <small>Save the configuration to apply changes. All donation elements will be hidden.</small>
+                </div>`;
+            const cardBody = document.querySelector('.card-body');
+            if (cardBody) {
+                cardBody.insertAdjacentHTML('afterbegin', alertHtml);
+            }
+        }
+        if (!headerBadge) {
+            const badgeHtml = `<span class="badge bg-success ms-2" id="donationHeaderBadge">
+                <i class="bi bi-check-circle-fill"></i> PREMIUM ACTIVE
+            </span>`;
+            const header = document.querySelector('.card-header h6');
+            if (header && !header.querySelector('#donationHeaderBadge')) {
+                header.insertAdjacentHTML('beforeend', badgeHtml);
+            }
+        }
+    } else {
+        // Remove success status if key is invalid/removed
+        if (statusAlert) statusAlert.remove();
+        if (headerBadge) headerBadge.remove();
+    }
+}
+
+function validateDonationKey() {
+    const keyInput = document.getElementById('donation_disable_key');
+    const keyStatus = document.getElementById('keyStatus');
+    
+    if (!keyInput || !keyStatus) return;
+    
+    const key = keyInput.value.trim();
+    if (!key) {
+        keyStatus.textContent = '❌ Please enter a key first';
+        keyStatus.className = 'text-danger';
+        updateDonationStatus(false);
+        return;
+    }
+    
+    if (validateKeyFormat(key)) {
+        keyStatus.textContent = '✅ License key validated! Donations will be completely disabled.';
+        keyStatus.className = 'text-success';
+        updateDonationStatus(true);
+        
+        // Show success message
+        setTimeout(() => {
+            keyStatus.textContent = '✅ Valid license key - save settings to apply changes';
+        }, 2000);
+    } else {
+        keyStatus.textContent = '❌ Invalid license key. Purchase a valid license at Buy Me a Coffee.';
+        keyStatus.className = 'text-danger';
+        updateDonationStatus(false);
+    }
+}
+
+// Update key status when typing and add event listener
+document.addEventListener('DOMContentLoaded', function() {
+    const keyInput = document.getElementById('donation_disable_key');
+    if (keyInput) {
+        keyInput.addEventListener('input', updateKeyStatus);
+    }
+    
+    // Initialize difficulty slider
+    loadDifficultyMultiplier();
+});
+
+// ======= Mech Evolution Difficulty Functions =======
+
+function onSliderChange() {
+    // This is called by user interaction with the slider
+    updateDifficultyDisplay();
+    enableManualOverride();
+}
+
+function updateDifficultyDisplay() {
+    const slider = document.getElementById('mech_difficulty_multiplier');
+    const difficultyValue = document.getElementById('difficultyValue');
+    const levelCostPreview = document.getElementById('levelCostPreview');
+    const levelCostDetails = document.getElementById('levelCostDetails');
+
+    if (slider && difficultyValue) {
+        const multiplier = parseFloat(slider.value);
+        difficultyValue.textContent = multiplier.toFixed(2) + 'x';
+
+        // Update slider thumb color based on difficulty
+        if (multiplier < 0.75) {
+            slider.style.accentColor = '#28a745'; // Green for easy
+        } else if (multiplier <= 1.25) {
+            slider.style.accentColor = '#ffc107'; // Yellow for normal
+        } else {
+            slider.style.accentColor = '#dc3545'; // Red for hard
+        }
+
+        // Update level cost preview with current multiplier
+        if (window.baseMechData) {
+            const newCost = Math.round(window.baseMechData.base_cost * multiplier * (window.baseMechData.total_multiplier / window.baseMechData.difficulty_multiplier));
+
+            if (window.baseMechData.is_max_level) {
+                levelCostPreview.textContent = `MAX LEVEL REACHED`;
+                levelCostDetails.textContent = `(All evolutions completed)`;
+            } else {
+                levelCostPreview.textContent = `${window.baseMechData.next_level_name} costs: $${newCost}`;
+                levelCostDetails.textContent = `(Base: $${window.baseMechData.base_cost}, Community: ${window.baseMechData.community_tier})`;
+            }
+        }
+    }
+
+    // Note: Manual override auto-enabling is now handled in onSliderChange() for user interactions
+}
+
+function setDifficulty(value) {
+    const slider = document.getElementById('mech_difficulty_multiplier');
+    if (slider) {
+        slider.value = value;
+        updateDifficultyDisplay();
+        // Auto-enable manual override when buttons are used (user interaction)
+        enableManualOverride();
+    }
+}
+
+async function loadDifficultyMultiplier() {
+    try {
+        const response = await fetch('/api/mech/difficulty');
+        if (response.ok) {
+            const data = await response.json();
+            const slider = document.getElementById('mech_difficulty_multiplier');
+            const levelCostPreview = document.getElementById('levelCostPreview');
+            const levelCostDetails = document.getElementById('levelCostDetails');
+            
+            if (slider && data.difficulty_multiplier !== undefined) {
+                slider.value = data.difficulty_multiplier;
+
+                // Load manual override toggle status for standalone toggle
+                const manualOverrideToggle = document.getElementById('mech_manual_difficulty_override_standalone');
+                if (manualOverrideToggle && data.manual_override !== undefined) {
+                    manualOverrideToggle.checked = data.manual_override;
+
+                    // Set initial disabled state based on manual override status
+                    const manualOverride = data.manual_override;
+                    slider.disabled = !manualOverride;
+
+                    // Also disable/enable difficulty buttons
+                    const buttons = document.querySelectorAll('button[onclick*="setDifficulty"]');
+                    buttons.forEach(btn => btn.disabled = !manualOverride);
+                }
+
+                // Store base data for calculations
+                window.baseMechData = {
+                    current_level: data.current_level || 1,
+                    next_level: data.next_level || 2,
+                    next_level_name: data.next_level_name || 'REPAIRED MECH',
+                    next_level_cost: data.next_level_cost || 20,
+                    base_cost: data.base_cost || 20,
+                    member_count: data.member_count || 50,
+                    community_tier: data.community_tier || 'MEDIUM',
+                    total_multiplier: data.total_multiplier || 1.0,
+                    difficulty_multiplier: data.difficulty_multiplier || 1.0,
+                    is_max_level: data.is_max_level || false,
+                    manual_override: data.manual_override || false
+                };
+                
+                // Initial display update
+                if (data.is_max_level) {
+                    levelCostPreview.textContent = 'MAX LEVEL REACHED';
+                    levelCostDetails.textContent = '(All evolutions completed)';
+                } else {
+                    levelCostPreview.textContent = `${data.next_level_name} costs: $${data.next_level_cost}`;
+                    levelCostDetails.textContent = `(Base: $${data.base_cost}, Community: ${data.community_tier})`;
+                }
+                
+                updateDifficultyDisplay();
+            }
+        }
+    } catch (error) {
+        console.log('Could not load difficulty multiplier:', error);
+        // Use default values
+        updateDifficultyDisplay();
+    }
+}
+
+async function saveMechDifficulty(difficultyMultiplier) {
+    try {
+        // Get manual override toggle status from standalone toggle
+        const manualOverrideToggle = document.getElementById('mech_manual_difficulty_override_standalone');
+        const manualOverride = manualOverrideToggle ? manualOverrideToggle.checked : false;
+
+        const response = await fetch('/api/mech/difficulty', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                difficulty_multiplier: difficultyMultiplier,
+                manual_override: manualOverride
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                console.log('Mech difficulty saved successfully:', data.message);
+                
+                // Show success feedback
+                showNotification('Mech difficulty updated: ' + data.message, 'success');
+            } else {
+                console.error('Failed to save mech difficulty:', data.error);
+                showNotification('Failed to save difficulty: ' + data.error, 'error');
+            }
+        } else {
+            console.error('HTTP error saving mech difficulty:', response.status);
+            showNotification('Failed to save difficulty settings', 'error');
+        }
+    } catch (error) {
+        console.error('Error saving mech difficulty:', error);
+        showNotification('Error saving difficulty settings', 'error');
+    }
+}
+
+function showNotification(message, type = 'info') {
+    // Simple notification function - could be enhanced with toasts
+    const alertClass = type === 'success' ? 'alert-success' :
+                      type === 'error' ? 'alert-danger' : 'alert-info';
+
+    // You could implement proper toast notifications here
+    console.log(`[${type.toUpperCase()}] ${message}`);
+}
+
+// ======= Manual Difficulty Override Functions =======
+
+async function saveMechOverrideToggle() {
+    try {
+        const manualOverrideToggle = document.getElementById('mech_manual_difficulty_override_standalone');
+        const manualOverride = manualOverrideToggle ? manualOverrideToggle.checked : false;
+
+        // UX: Reset slider to normal (1.0x) when manual override is disabled
+        const difficultySlider = document.getElementById('mech_difficulty_multiplier');
+        let difficultyMultiplier;
+
+        if (!manualOverride) {
+            // Manual override OFF → Reset to normal (automatic mode)
+            difficultyMultiplier = 1.0;
+            if (difficultySlider) {
+                difficultySlider.value = 1.0;
+                difficultySlider.disabled = true; // Disable slider when override is OFF
+                updateDifficultyDisplay(); // Update UI to show 1.0x
+            }
+            // Disable difficulty buttons too
+            const buttons = document.querySelectorAll('button[onclick*="setDifficulty"]');
+            buttons.forEach(btn => btn.disabled = true);
+        } else {
+            // Manual override ON → Use current slider value
+            difficultyMultiplier = difficultySlider ? parseFloat(difficultySlider.value) : 1.0;
+            if (difficultySlider) {
+                difficultySlider.disabled = false; // Enable slider when override is ON
+            }
+            // Enable difficulty buttons too
+            const buttons = document.querySelectorAll('button[onclick*="setDifficulty"]');
+            buttons.forEach(btn => btn.disabled = false);
+        }
+
+        console.log(`Saving manual override toggle: ${manualOverride} with difficulty: ${difficultyMultiplier}`);
+
+        const response = await fetch('/api/mech/difficulty', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                difficulty_multiplier: difficultyMultiplier,
+                manual_override: manualOverride
+            })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            if (data.success) {
+                console.log('Manual override toggle saved successfully:', data.message);
+
+                // Show brief visual feedback
+                const label = manualOverrideToggle?.closest('.form-check')?.querySelector('.form-check-label');
+                if (label) {
+                    const originalColor = label.style.color;
+                    label.style.color = '#28a745'; // Green for success
+                    setTimeout(() => {
+                        label.style.color = originalColor;
+                    }, 500);
+                }
+            } else {
+                console.error('Failed to save manual override:', data.error);
+            }
+        } else {
+            console.error('HTTP error saving manual override:', response.status);
+        }
+    } catch (error) {
+        console.error('Error saving manual override toggle:', error);
+    }
+}
+
+function enableManualOverride() {
+    const manualOverrideToggle = document.getElementById('mech_manual_difficulty_override_standalone');
+    if (manualOverrideToggle && !manualOverrideToggle.checked) {
+        manualOverrideToggle.checked = true;
+        console.log('Manual difficulty override automatically enabled due to user interaction');
+
+        // Save immediately via dedicated API
+        saveMechOverrideToggle();
+
+        // Visual feedback
+        const label = manualOverrideToggle.closest('.form-check').querySelector('.form-check-label');
+        if (label) {
+            label.style.color = '#ffc107';
+            setTimeout(() => {
+                label.style.color = '';
+            }, 1000);
+        }
+    }
+}
+
+</script>

@@ -1,85 +1,180 @@
-# Ultra-Minimal Alpine Build - Target <100MB
-FROM alpine:3.22.1
+# Multi-stage build for ultra-small production image
+FROM alpine:3.22.2 AS builder
+
+WORKDIR /build
+
+# Install build dependencies only
+RUN apk add --no-cache \
+    python3 python3-dev py3-pip \
+    gcc musl-dev libffi-dev openssl-dev \
+    jpeg-dev zlib-dev freetype-dev
+
+# Create venv and install Python packages
+RUN python3 -m venv /venv
+COPY requirements.prod.txt ./
+RUN /venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /venv/bin/pip install --no-cache-dir -r requirements.prod.txt
+
+# Drop build-only Python packaging helpers to reduce the virtualenv footprint
+RUN python3 - <<'PY'
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+
+site_packages = Path('/venv/lib') / f"python{sys.version_info.major}.{sys.version_info.minor}" / 'site-packages'
+for package in ('pip', 'setuptools', 'wheel'):
+    package_dir = site_packages / package
+    if package_dir.exists():
+        shutil.rmtree(package_dir, ignore_errors=True)
+
+    module_path = site_packages / f'{package}.py'
+    if module_path.exists():
+        module_path.unlink()
+
+    for metadata in site_packages.glob(f"{package.replace('-', '_')}*-info"):
+        shutil.rmtree(metadata, ignore_errors=True)
+
+bin_dir = Path('/venv/bin')
+for script in ('pip', 'pip3', 'pip3.12'):
+    target = bin_dir / script
+    if target.exists():
+        target.unlink()
+PY
+
+# Strip binaries and clean up
+RUN find /venv -type f -name "*.so" -exec strip --strip-unneeded {} + && \
+    find /venv -name "*.pyc" -delete && \
+    find /venv -name "__pycache__" -exec rm -rf {} + && \
+    find /venv -name "test" -type d -exec rm -rf {} + && \
+    find /venv -name "tests" -type d -exec rm -rf {} + && \
+    find /venv -name "*.egg-info" -type d -exec rm -rf {} +
+
+# Extract the cleaned site-packages tree so the runtime image can extend the
+# system interpreter without copying the full virtualenv hierarchy.
+RUN PY_MINOR=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")') && \
+    mkdir -p /runtime/site-packages && \
+    cp -a "/venv/lib/python${PY_MINOR}/site-packages/." /runtime/site-packages/ && \
+    python3 - <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+runtime = Path('/runtime/site-packages')
+source = f"/venv/lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
+
+for pth_file in runtime.glob('*.pth'):
+    try:
+        content = pth_file.read_text()
+    except OSError:
+        continue
+    updated = content.replace(source, str(runtime))
+    if updated != content:
+        pth_file.write_text(updated)
+PY
+
+# Production stage - minimal runtime
+FROM alpine:3.22.2
 
 WORKDIR /app
 
-# Install Python and essential packages in one layer
-RUN apk add --no-cache --virtual .build-deps \
-        gcc musl-dev libffi-dev openssl-dev rust cargo \
-    && apk add --no-cache \
-        python3 python3-dev py3-pip \
-        supervisor docker-cli ca-certificates \
-    && python3 -m venv /venv \
-    && /venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /venv/bin/pip install --no-cache-dir \
-        Flask==3.1.1 \
-        Werkzeug==3.1.3 \
-        py-cord==2.6.1 \
-        gunicorn==23.0.0 \
-        gevent==24.11.1 \
-        docker==7.1.0 \
-        cryptography>=45.0.5 \
-        APScheduler==3.10.4 \
-        python-dotenv==1.0.1 \
-        PyYAML==6.0.1 \
-        requests==2.32.4 \
-        aiohttp>=3.12.14 \
-        Flask-HTTPAuth==4.8.0 \
-        Jinja2>=3.1.4 \
-        python-json-logger==2.0.7 \
-        pytz==2024.2 \
-        cachetools==5.3.2 \
-        itsdangerous>=2.2.0 \
-        click>=8.1.7 \
-        blinker>=1.8.2 \
-        MarkupSafe>=2.1.5 \
-        flask-limiter>=3.5.0 \
-        limits>=3.9.0 \
-        greenlet>=3.0.3 \
-        zope.event>=5.0 \
-        zope.interface>=6.2 \
-    && apk del .build-deps python3-dev \
-    && rm -rf /root/.cache/pip \
-    && rm -rf /tmp/* \
-    && rm -rf /var/cache/apk/* \
-    && rm -rf /usr/share/man \
-    && rm -rf /usr/share/doc \
-    && rm -rf /usr/lib/python*/ensurepip \
-    && rm -rf /usr/lib/python*/idlelib \
-    && rm -rf /usr/lib/python*/tkinter \
-    && find /venv -name "*.pyc" -delete \
-    && find /venv -name "__pycache__" -exec rm -rf {} + || true \
-    && find /venv -name "test" -type d -exec rm -rf {} + || true \
-    && find /venv -name "tests" -type d -exec rm -rf {} + || true \
-    && find /venv -name "*.pyo" -delete || true
+# Install ONLY runtime dependencies
+# Note: docker-cli removed - we use Docker Python SDK (docker-py) which communicates
+#       directly with Docker socket, no CLI binary needed. Eliminates CVE-2025-58187.
+RUN apk add --no-cache \
+    python3 \
+    ca-certificates \
+    tzdata \
+    jpeg \
+    zlib \
+    freetype && \
+    # Install supervisor 4.3.0+ from edge repo to fix CVE-2023-27482
+    apk add --no-cache --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main supervisor
 
-# Create user and groups
-RUN addgroup -g 281 -S docker \
-    && addgroup -g 1000 -S ddcuser \
-    && adduser -u 1000 -S ddcuser -G ddcuser \
-    && adduser ddcuser docker
+# Copy cleaned venv from builder
+COPY --from=builder /runtime/site-packages /opt/runtime/site-packages
 
-# Copy only essential files
-COPY --chown=ddcuser:ddcuser bot.py .
-COPY --chown=ddcuser:ddcuser app/ app/
-COPY --chown=ddcuser:ddcuser utils/ utils/
-COPY --chown=ddcuser:ddcuser cogs/ cogs/
-COPY --chown=ddcuser:ddcuser gunicorn_config.py .
-# Copy supervisord configuration to both expected locations for supervisorctl compatibility
-COPY supervisord-optimized.conf /etc/supervisor/conf.d/supervisord.conf
-COPY supervisord-optimized.conf /etc/supervisord.conf
+# Strip CPython test suite and ensurepip to reduce the base image size further
+RUN python3 - <<'PY'
+from __future__ import annotations
 
-# Final cleanup and permissions
-RUN mkdir -p /app/config /app/logs \
-    && chown -R ddcuser:ddcuser /app \
-    && find /app -name "*.pyc" -delete \
-    && find /app -name "__pycache__" -exec rm -rf {} + || true
+import shutil
+import sysconfig
+from pathlib import Path
 
-# Set environment
-ENV PATH="/venv/bin:$PATH" \
+stdlib = Path(sysconfig.get_path('stdlib'))
+for relative in (
+    'test',
+    'ensurepip',
+    'idlelib',
+    'tkinter',
+    'turtledemo',
+    'lib2to3',
+):
+    target = stdlib / relative
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+
+dynload = stdlib / 'lib-dynload'
+for module in ('_tkinter', '_tkinter_impl', 'tkinter'):  # defensive clean-up
+    for candidate in dynload.glob(f'{module}*.so'):
+        candidate.unlink(missing_ok=True)
+
+for root in (stdlib, Path(sysconfig.get_path('platlib'))):
+    for pycache in root.rglob('__pycache__'):
+        shutil.rmtree(pycache, ignore_errors=True)
+    for compiled in root.rglob('*.pyc'):
+        compiled.unlink(missing_ok=True)
+PY
+
+# Ensure stripped stdlib binaries without keeping binutils around
+RUN apk add --no-cache --virtual .strip-deps binutils && \
+    strip --strip-unneeded /usr/bin/python3 && \
+    strip --strip-unneeded /usr/lib/libpython3.* && \
+    find /usr/lib/python3.12/lib-dynload -type f -name "*.so" -exec strip --strip-unneeded {} + && \
+    apk del .strip-deps
+
+# Create user
+RUN addgroup -g 1000 -S ddc && \
+    adduser -u 1000 -S ddc -G ddc && \
+    (addgroup -g 281 -S docker 2>/dev/null || addgroup -S docker) && \
+    adduser ddc docker
+
+# Copy application code
+COPY --chown=ddc:ddc bot.py .
+COPY --chown=ddc:ddc app/ app/
+COPY --chown=ddc:ddc utils/ utils/
+COPY --chown=ddc:ddc cogs/ cogs/
+COPY --chown=ddc:ddc services/ services/
+COPY --chown=ddc:ddc encrypted_assets/ encrypted_assets/
+# V2.0 Cache-Only: Only copy cached animations, PNG sources excluded via .dockerignore
+COPY --chown=ddc:ddc cached_animations/ cached_animations/
+COPY --chown=ddc:ddc cached_displays/ cached_displays/
+COPY --chown=ddc:ddc gunicorn_config.py .
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --chown=ddc:ddc scripts/entrypoint.sh /app/entrypoint.sh
+
+# Setup permissions
+RUN chmod +x /app/entrypoint.sh && \
+    mkdir -p /app/config /app/logs /app/scripts && \
+    mkdir -p /app/config/info /app/config/tasks && \
+    mkdir -p /app/cached_displays && \
+    chown -R ddc:ddc /app && \
+    chmod -R 755 /app && \
+    chmod -R 775 /app/config /app/logs /app/cached_displays && \
+    find /app -type d -name '__pycache__' -prune -exec rm -rf {} +
+
+# Environment
+ENV PYTHONPATH="/opt/runtime/site-packages" \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    PYTHONOPTIMIZE=1 \
+    TZ="Europe/Berlin"
 
-USER ddcuser
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+USER ddc
 EXPOSE 9374
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
+ENTRYPOINT ["/app/entrypoint.sh"]

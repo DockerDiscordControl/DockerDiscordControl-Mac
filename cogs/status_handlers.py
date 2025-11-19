@@ -2,7 +2,7 @@
 # ============================================================================ #
 # DockerDiscordControl (DDC)                                                  #
 # https://ddc.bot                                                              #
-# Copyright (c) 2023-2025 MAX                                                  #
+# Copyright (c) 2025 MAX                                                  #
 # Licensed under the MIT License                                               #
 # ============================================================================ #
 
@@ -18,9 +18,12 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 import discord
 
 # Import necessary utilities
-from utils.logging_utils import setup_logger, get_module_logger
-from utils.docker_utils import get_docker_info, get_docker_stats
+from utils.logging_utils import get_module_logger
+from services.infrastructure.container_status_service import get_docker_info_dict_service_first, get_docker_stats_service_first
 from utils.time_utils import format_datetime_with_timezone
+from services.config.server_config_service import get_server_config_service
+from services.docker_status import get_performance_service, get_fetch_service, ContainerStatusResult
+from services.discord import get_conditional_cache_service, get_embed_helper_service
 
 # Import helper functions
 from .control_helpers import _channel_has_permission, _get_pending_embed
@@ -37,276 +40,59 @@ class StatusHandlersMixin:
     Mixin class containing status handler functionality for DockerControlCog.
     Handles retrieving, processing, and displaying Docker container statuses.
     """
-    
-    def _ensure_conditional_cache(self):
-        """Ensure conditional update cache is initialized."""
-        if not hasattr(self, 'last_sent_content'):
-            self.last_sent_content = {}  # Track last sent embed content for conditional updates
-            logger.debug("Initialized conditional update cache")
-        if not hasattr(self, 'update_stats'):
-            self.update_stats = {'skipped': 0, 'sent': 0, 'last_reset': datetime.now(timezone.utc)}
-            logger.debug("Initialized update statistics")
-    
-    def _ensure_performance_system(self):
-        """Initialize the adaptive performance learning system."""
-        if not hasattr(self, 'container_performance_history'):
-            self.container_performance_history = {}
-            logger.debug("Initialized adaptive performance system")
-        if not hasattr(self, 'performance_learning_config'):
-            self.performance_learning_config = {
-                'min_timeout': 5000,      # 5 seconds minimum
-                'max_timeout': 120000,    # 2 minutes maximum
-                'default_timeout': 30000, # 30 seconds default
-                'slow_threshold': 8000,   # 8+ seconds = slow container
-                'history_window': 20,     # Keep last 20 measurements
-                'retry_attempts': 3,      # Maximum retry attempts
-                'timeout_multiplier': 2.0 # Timeout = avg_time * multiplier
-            }
-            logger.debug("Initialized performance learning configuration")
-    
-    def _get_container_performance_profile(self, container_name: str) -> dict:
-        """Get or create performance profile for a container."""
-        self._ensure_performance_system()
-        
-        if container_name not in self.container_performance_history:
-            self.container_performance_history[container_name] = {
-                'response_times': [],
-                'avg_response_time': self.performance_learning_config['default_timeout'],
-                'max_response_time': self.performance_learning_config['default_timeout'],
-                'min_response_time': 1000,
-                'success_rate': 1.0,
-                'total_attempts': 0,
-                'successful_attempts': 0,
-                'is_slow': False,
-                'last_updated': datetime.now(timezone.utc)
-            }
-            logger.debug(f"Created new performance profile for container: {container_name}")
-        
-        return self.container_performance_history[container_name]
-    
-    def _update_container_performance(self, container_name: str, response_time: float, success: bool):
-        """Update container performance history with new measurement."""
-        profile = self._get_container_performance_profile(container_name)
-        config = self.performance_learning_config
-        
-        # Update attempt counters
-        profile['total_attempts'] += 1
-        if success:
-            profile['successful_attempts'] += 1
-            profile['response_times'].append(response_time)
-        
-        # Maintain sliding window
-        if len(profile['response_times']) > config['history_window']:
-            profile['response_times'] = profile['response_times'][-config['history_window']:]
-        
-        # Calculate new statistics
-        if profile['response_times']:
-            profile['avg_response_time'] = sum(profile['response_times']) / len(profile['response_times'])
-            profile['max_response_time'] = max(profile['response_times'])
-            profile['min_response_time'] = min(profile['response_times'])
-        
-        profile['success_rate'] = profile['successful_attempts'] / profile['total_attempts']
-        profile['is_slow'] = profile['avg_response_time'] > config['slow_threshold']
-        profile['last_updated'] = datetime.now(timezone.utc)
-        
-        if success:
-            logger.debug(f"Performance update for {container_name}: avg={profile['avg_response_time']:.0f}ms, "
-                        f"success_rate={profile['success_rate']:.2f}, is_slow={profile['is_slow']}")
-    
-    def _get_adaptive_timeout(self, container_name: str) -> float:
-        """Calculate adaptive timeout based on container performance history."""
-        profile = self._get_container_performance_profile(container_name)
-        config = self.performance_learning_config
-        
-        # Base timeout on average response time with safety margin
-        adaptive_timeout = max(
-            profile['avg_response_time'] * config['timeout_multiplier'],
-            profile['max_response_time'] * 1.5,  # 1.5x worst recorded time
-            config['min_timeout']  # Never go below minimum
-        )
-        
-        # Cap at maximum timeout
-        adaptive_timeout = min(adaptive_timeout, config['max_timeout'])
-        
-        # Add extra time for containers with poor success rate
-        if profile['success_rate'] < 0.8:
-            adaptive_timeout *= 1.5
-            logger.debug(f"Increased timeout for {container_name} due to low success rate: {profile['success_rate']:.2f}")
-        
-        return adaptive_timeout
-    
-    def _classify_containers_by_performance(self, container_names: List[str]) -> Tuple[List[str], List[str]]:
-        """Classify containers into fast and slow based on performance history."""
-        fast_containers = []
-        slow_containers = []
-        
-        for container_name in container_names:
-            profile = self._get_container_performance_profile(container_name)
-            
-            if profile['is_slow'] or profile['success_rate'] < 0.8:
-                slow_containers.append(container_name)
-                logger.debug(f"Classified {container_name} as slow: avg={profile['avg_response_time']:.0f}ms, "
-                           f"success_rate={profile['success_rate']:.2f}")
-            else:
-                fast_containers.append(container_name)
-        
-        return fast_containers, slow_containers
-    
-    async def _fetch_container_with_retries(self, docker_name: str) -> Tuple[str, Any, Any]:
-        """Fetch container data with intelligent retry strategy - always gets complete data."""
-        start_time = time.time()
-        profile = self._get_container_performance_profile(docker_name)
-        config = self.performance_learning_config
-        
-        last_exception = None
-        
-        for attempt in range(config['retry_attempts']):
-            try:
-                # Calculate timeout for this attempt (increases with each retry)
-                base_timeout = self._get_adaptive_timeout(docker_name)
-                current_timeout = base_timeout * (1.5 ** attempt)  # Exponential backoff
-                
-                logger.debug(f"Fetching {docker_name} - attempt {attempt + 1}/{config['retry_attempts']}, "
-                           f"timeout: {current_timeout:.0f}ms")
-                
-                attempt_start = time.time()
-                
-                # Fetch info and stats in parallel with adaptive timeout
-                info_task = asyncio.create_task(get_docker_info(docker_name))
-                stats_task = asyncio.create_task(get_docker_stats(docker_name))
-                
-                info, stats = await asyncio.wait_for(
-                    asyncio.gather(info_task, stats_task, return_exceptions=True),
-                    timeout=current_timeout / 1000.0  # Convert to seconds
-                )
-                
-                attempt_time = (time.time() - attempt_start) * 1000
-                
-                # Update performance history
-                self._update_container_performance(docker_name, attempt_time, True)
-                
-                total_time = (time.time() - start_time) * 1000
-                if attempt > 0:
-                    logger.info(f"Successfully fetched {docker_name} on attempt {attempt + 1} "
-                              f"(attempt: {attempt_time:.1f}ms, total: {total_time:.1f}ms)")
-                
-                return docker_name, info, stats
-                
-            except asyncio.TimeoutError as e:
-                last_exception = e
-                attempt_time = (time.time() - attempt_start) * 1000 if 'attempt_start' in locals() else current_timeout
-                
-                logger.warning(f"Timeout for {docker_name} on attempt {attempt + 1}/{config['retry_attempts']} "
-                             f"after {attempt_time:.1f}ms")
-                
-                if attempt < config['retry_attempts'] - 1:
-                    # Short delay before retry
-                    await asyncio.sleep(0.5)
-                    
-            except Exception as e:
-                last_exception = e
-                logger.error(f"Error fetching {docker_name} on attempt {attempt + 1}: {e}")
-                
-                if attempt < config['retry_attempts'] - 1:
-                    await asyncio.sleep(0.5)
-        
-        # All retries failed - try emergency fetch without timeout
-        logger.warning(f"All retries failed for {docker_name}, attempting emergency fetch")
-        return await self._emergency_full_fetch(docker_name, last_exception)
-    
-    async def _emergency_full_fetch(self, docker_name: str, last_exception: Exception) -> Tuple[str, Any, Any]:
-        """Emergency fetch with no timeout limits - last resort to get complete data."""
-        try:
-            logger.info(f"Emergency full fetch for {docker_name} - no timeout limit")
-            
-            # NO timeout - wait however long it takes
-            info_task = asyncio.create_task(get_docker_info(docker_name))
-            stats_task = asyncio.create_task(get_docker_stats(docker_name))
-            
-            start_emergency = time.time()
-            info, stats = await asyncio.gather(info_task, stats_task, return_exceptions=True)
-            emergency_time = (time.time() - start_emergency) * 1000
-            
-            # Mark as slow container for future reference
-            profile = self._get_container_performance_profile(docker_name)
-            profile['is_slow'] = True
-            self._update_container_performance(docker_name, emergency_time, True)
-            
-            logger.info(f"Emergency fetch successful for {docker_name} after {emergency_time:.1f}ms")
-            return docker_name, info, stats
-            
-        except Exception as e:
-            # Even emergency fetch failed - update performance and return error
-            self._update_container_performance(docker_name, 0, False)
-            logger.error(f"Emergency fetch failed for {docker_name}: {e}")
-            return docker_name, last_exception, None
-    
-    def _get_cached_translations(self, lang: str) -> dict:
-        """Cached translations for better performance."""
-        if not hasattr(self, 'cached_translations'):
-            self.cached_translations = {}
-        
-        cache_key = f"translations_{lang}"
-        
-        if cache_key not in self.cached_translations:
-            self.cached_translations[cache_key] = {
-                'online_text': _("**Online**"),
-                'offline_text': _("**Offline**"),
-                'cpu_text': _("CPU"),
-                'ram_text': _("RAM"),
-                'uptime_text': _("Uptime"),
-                'detail_denied_text': _("Detailed status not allowed."),
-                'last_update_text': _("Last update")
-            }
-            logger.debug(f"Cached translations for language: {lang}")
-        
-        return self.cached_translations[cache_key]
-    
-    def _get_cached_box_elements(self, display_name: str, BOX_WIDTH: int = 28) -> dict:
-        """Cached box elements for better performance."""
-        if not hasattr(self, 'cached_box_elements'):
-            self.cached_box_elements = {}
-            
-        cache_key = f"box_{display_name}_{BOX_WIDTH}"
-        
-        if cache_key not in self.cached_box_elements:
-            header_text = f"── {display_name} "
-            max_name_len = BOX_WIDTH - 4
-            if len(header_text) > max_name_len:
-                header_text = header_text[:max_name_len-1] + "… "
-            padding_width = max(1, BOX_WIDTH - 1 - len(header_text))
-            
-            self.cached_box_elements[cache_key] = {
-                'header_line': f"┌{header_text}{'─' * padding_width}",
-                'footer_line': f"└{'─' * (BOX_WIDTH - 1)}"
-            }
-            logger.debug(f"Cached box elements for: {display_name}")
-        
-        return self.cached_box_elements[cache_key]
-    
-    async def bulk_fetch_container_status(self, container_names: List[str]) -> Dict[str, Tuple]:
+
+    async def bulk_fetch_container_status(self, container_names: List[str]) -> Dict[str, ContainerStatusResult]:
         """
         Intelligent bulk fetch with adaptive performance learning and complete data collection.
         Uses performance history to optimize timeouts and batching while always collecting full details.
-        
+
         Args:
             container_names: List of Docker container names to fetch
-            
+
         Returns:
-            Dict mapping container_name -> (display_name, is_running, cpu, ram, uptime, details_allowed)
+            Dict mapping container_name -> ContainerStatusResult
         """
         if not container_names:
             return {}
-        
+
+        # DOCKER CONNECTIVITY CHECK: Abort early if Docker is not accessible
+        from services.infrastructure.docker_connectivity_service import get_docker_connectivity_service, DockerConnectivityRequest
+
+        connectivity_service = get_docker_connectivity_service()
+        connectivity_request = DockerConnectivityRequest(timeout_seconds=5.0)
+        connectivity_result = await connectivity_service.check_connectivity(connectivity_request)
+
+        if not connectivity_result.is_connected:
+            logger.error(f"[INTELLIGENT_BULK_FETCH] Docker connectivity failed: {connectivity_result.error_message}")
+
+            # Return error status for all requested containers
+            error_results = {}
+            for docker_name in container_names:
+                # Create an exception with the connectivity error details
+                error_exception = RuntimeError(f"Docker connectivity error: {connectivity_result.error_message}")
+                error_results[docker_name] = ContainerStatusResult.error_result(
+                    docker_name=docker_name,
+                    error=error_exception,
+                    error_type='connectivity'
+                )
+
+            return error_results
+
         start_time = time.time()
         logger.info(f"[INTELLIGENT_BULK_FETCH] Starting adaptive bulk fetch for {len(container_names)} containers")
-        
-        # Initialize performance system
-        self._ensure_performance_system()
-        
+
         # Classify containers by performance history for intelligent batching
-        fast_containers, slow_containers = self._classify_containers_by_performance(container_names)
-        
+        perf_service = get_performance_service()
+        classification = perf_service.classify_containers(container_names)
+        fast_containers = classification.fast_containers
+        slow_containers = classification.slow_containers
+        unknown_containers = classification.unknown_containers
+
+        # Treat unknown containers as fast (parallel processing) since we don't have perf data yet
+        if unknown_containers:
+            logger.info(f"[INTELLIGENT_BULK_FETCH] {len(unknown_containers)} containers have no performance history - treating as fast")
+            fast_containers.extend(unknown_containers)
+
         if fast_containers and slow_containers:
             logger.info(f"[INTELLIGENT_BULK_FETCH] Smart batching: {len(fast_containers)} fast, {len(slow_containers)} slow containers")
         elif slow_containers:
@@ -322,12 +108,13 @@ class StatusHandlersMixin:
             logger.debug(f"[INTELLIGENT_BULK_FETCH] Phase 1: Processing {len(fast_containers)} fast containers in parallel")
             
             # Use semaphore for controlled concurrency
-            MAX_CONCURRENT_FAST = min(5, len(fast_containers))  # Max 5 concurrent for fast containers
+            MAX_CONCURRENT_FAST = min(3, len(fast_containers))  # Max 3 concurrent to match Docker pool capacity
             semaphore = asyncio.Semaphore(MAX_CONCURRENT_FAST)
             
             async def fetch_fast_container(container_name):
                 async with semaphore:
-                    return await self._fetch_container_with_retries(container_name)
+                    fetch_service = get_fetch_service()
+                    return await fetch_service.fetch_with_retries(container_name)
             
             fast_tasks = [fetch_fast_container(name) for name in fast_containers]
             fast_results = await asyncio.gather(*fast_tasks, return_exceptions=True)
@@ -340,36 +127,36 @@ class StatusHandlersMixin:
         if slow_containers:
             phase2_start = time.time()
             logger.debug(f"[INTELLIGENT_BULK_FETCH] Phase 2: Processing {len(slow_containers)} slow containers individually")
-            
+
             for i, container_name in enumerate(slow_containers):
-                container_start = time.time()
-                logger.debug(f"[INTELLIGENT_BULK_FETCH] Processing slow container {i+1}/{len(slow_containers)}: {container_name}")
-                
-                result = await self._fetch_container_with_retries(container_name)
+                fetch_service = get_fetch_service()
+                result = await fetch_service.fetch_with_retries(container_name)
                 all_results.append(result)
-                
-                container_time = (time.time() - container_start) * 1000
-                logger.debug(f"[INTELLIGENT_BULK_FETCH] Slow container {container_name} completed in {container_time:.1f}ms")
+                # No per-container logging - only log phase completion to avoid spam
             
             slow_time = (time.time() - phase2_start) * 1000
             logger.info(f"[INTELLIGENT_BULK_FETCH] Phase 2 completed: {len(slow_containers)} slow containers in {slow_time:.1f}ms")
         
+        # PERFORMANCE: Cache server configs before processing - avoid repeated lookups
+        server_config_service = get_server_config_service()
+        servers = server_config_service.get_all_servers()
+        servers_by_docker_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
+
         # Process all results into status tuples - ALWAYS WITH COMPLETE DATA
         status_results = {}
         successful_fetches = 0
         failed_fetches = 0
-        
+
         for result in all_results:
             if isinstance(result, Exception):
                 logger.error(f"[INTELLIGENT_BULK_FETCH] Exception in fetch result: {result}")
                 failed_fetches += 1
                 continue
-                
+
             docker_name, info, stats = result
-            
-            # Find server config for this container
-            servers = self.config.get('servers', [])
-            server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
+
+            # Find server config for this container (cached lookup)
+            server_config = servers_by_docker_name.get(docker_name)
             
             if not server_config:
                 logger.warning(f"[INTELLIGENT_BULK_FETCH] No server config found for {docker_name}")
@@ -383,7 +170,11 @@ class StatusHandlersMixin:
             if isinstance(info, Exception) or info is None:
                 # Container offline or error - still provide complete status structure
                 logger.debug(f"[INTELLIGENT_BULK_FETCH] {docker_name} appears offline or error: {info}")
-                status_results[docker_name] = (display_name, False, 'N/A', 'N/A', 'N/A', details_allowed)
+                status_results[docker_name] = ContainerStatusResult.offline_result(
+                    docker_name=docker_name,
+                    display_name=display_name,
+                    details_allowed=details_allowed
+                )
                 successful_fetches += 1  # Still a successful status determination
                 continue
             
@@ -418,17 +209,48 @@ class StatusHandlersMixin:
                         uptime = "Error"
                 
                 # Process stats - ALWAYS COLLECT IF ALLOWED (never skip for performance)
-                if details_allowed and not isinstance(stats, Exception) and stats:
-                    cpu_stat, ram_stat = stats
-                    # We waited for real values - use them!
-                    cpu = cpu_stat if cpu_stat is not None else 'N/A'
-                    ram = ram_stat if ram_stat is not None else 'N/A'
+                if details_allowed:
+                    # Try to get computed values from new SERVICE FIRST format first
+                    if info and '_computed' in info:
+                        computed = info['_computed']
+                        cpu = f"{computed['cpu_percent']:.1f}%" if computed['cpu_percent'] is not None else 'N/A'
+                        ram = f"{computed['memory_usage_mb']:.0f}MB" if computed['memory_usage_mb'] is not None else 'N/A'
+                        # Use uptime from SERVICE FIRST if available
+                        if computed['uptime_seconds'] > 0:
+                            uptime_sec = computed['uptime_seconds']
+                            days = uptime_sec // 86400
+                            hours = (uptime_sec % 86400) // 3600
+                            minutes = (uptime_sec % 3600) // 60
+                            uptime_parts = []
+                            if days > 0:
+                                uptime_parts.append(f"{days}d")
+                            if hours > 0:
+                                uptime_parts.append(f"{hours}h")
+                            if minutes > 0 or (days == 0 and hours == 0):
+                                uptime_parts.append(f"{minutes}m")
+                            uptime = " ".join(uptime_parts) if uptime_parts else "< 1m"
+                    # Fallback to old stats method if SERVICE FIRST data not available
+                    elif not isinstance(stats, Exception) and stats:
+                        cpu_stat, ram_stat = stats
+                        cpu = cpu_stat if cpu_stat is not None else 'N/A'
+                        ram = ram_stat if ram_stat is not None else 'N/A'
+                    else:
+                        # No stats available
+                        pass  # Keep N/A values set above
                 elif not details_allowed:
                     cpu = _("Hidden")
                     ram = _("Hidden")
                 # If details allowed but stats failed, keep N/A (we tried!)
-            
-            status_results[docker_name] = (display_name, is_running, cpu, ram, uptime, details_allowed)
+
+            status_results[docker_name] = ContainerStatusResult.success_result(
+                docker_name=docker_name,
+                display_name=display_name,
+                is_running=is_running,
+                cpu=cpu,
+                ram=ram,
+                uptime=uptime,
+                details_allowed=details_allowed
+            )
             successful_fetches += 1
         
         total_elapsed = (time.time() - start_time) * 1000
@@ -446,7 +268,7 @@ class StatusHandlersMixin:
         else:
             logger.info(f"[INTELLIGENT_BULK_FETCH] Fast adaptive fetch completed in {total_elapsed:.1f}ms: "
                        f"{successful_fetches}/{len(container_names)} containers with complete data")
-        
+
         return status_results
 
     async def bulk_update_status_cache(self, container_names: List[str]):
@@ -462,67 +284,84 @@ class StatusHandlersMixin:
         now = datetime.now(timezone.utc)
         containers_needing_update = []
         
+        # Pre-process server configurations
+        # SERVICE FIRST: Use ServerConfigService instead of direct config access
+        server_config_service = get_server_config_service()
+        servers = server_config_service.get_all_servers()
+        servers_by_docker_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
+        
         for docker_name in container_names:
-            # Find display name
-            servers = self.config.get('servers', [])
-            server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
+            server_config = servers_by_docker_name.get(docker_name)
             if not server_config:
                 continue
-                
-            display_name = server_config.get('name', docker_name)
-            cached_entry = self.status_cache.get(display_name)
-            
+
+            # CRITICAL: Use docker_name as cache key (not display_name!)
+            cached_entry = self.status_cache_service.get(docker_name)
+
             # ONLY update if cache is completely missing (not just stale)
             # Background loop handles regular updates every 30s
             if not cached_entry:
                 containers_needing_update.append(docker_name)
-                logger.debug(f"[BULK_UPDATE] {display_name} has no cache entry, scheduling update")
-            else:
-                # Cache exists - let background loop handle updates
-                cache_age = (now - cached_entry['timestamp']).total_seconds()
-                logger.debug(f"[BULK_UPDATE] {display_name} has cache (age: {cache_age:.1f}s), background loop handles updates")
-        
+
         if not containers_needing_update:
-            logger.debug(f"[BULK_UPDATE] All {len(container_names)} containers have cache entries - background loop provides updates")
+            # All containers cached - silent return (this is the expected happy path)
             return
         
         logger.info(f"[BULK_UPDATE] Updating cache for {len(containers_needing_update)}/{len(container_names)} containers with missing cache")
         
-        # Bulk fetch only the containers with no cache
-        bulk_results = await self.bulk_fetch_container_status(containers_needing_update)
-        
-        # Update cache with results
-        for docker_name, status_tuple in bulk_results.items():
-            # Find display name
-            servers = self.config.get('servers', [])
-            server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
-            if server_config:
-                display_name = server_config.get('name', docker_name)
-                self.status_cache[display_name] = {
-                    'data': status_tuple,
-                    'timestamp': now
-                }
-                logger.debug(f"[BULK_UPDATE] Updated missing cache for {display_name}")
+        try:
+            # Bulk fetch only the containers with no cache
+            bulk_results = await self.bulk_fetch_container_status(containers_needing_update)
+            
+            # Update cache with results
+            for docker_name, result in bulk_results.items():
+                server_config = servers_by_docker_name.get(docker_name)
+                if server_config:
+                    display_name = server_config.get('name', docker_name)
+                    if result.success:
+                        # CRITICAL: Cache with docker_name as key (not display_name!)
+                        self.status_cache_service.set(docker_name, result, now)
+                    else:
+                        # CRITICAL: Cache error with docker_name as key (not display_name!)
+                        self.status_cache_service.set_error(docker_name, result.error or Exception(result.error_message))
+                        logger.warning(f"[BULK_UPDATE] Failed to update {display_name}: {result.error_message}")
+        except (RuntimeError, asyncio.CancelledError, KeyError, TypeError) as e:
+            logger.error(f"[BULK_UPDATE] Error during bulk update: {e}", exc_info=True)
 
-    async def get_status(self, server_config: Dict[str, Any]) -> Union[Tuple[str, bool, str, str, str, bool], Exception]:
+    async def get_status(self, server_config: Dict[str, Any]) -> ContainerStatusResult:
         """
         Gets the status of a server.
-        Returns: (display_name, is_running, cpu, ram, uptime, details_allowed) or Exception
+        Returns: ContainerStatusResult object with all status information
         """
         docker_name = server_config.get('docker_name')
-        display_name = server_config.get('name', docker_name)
+
+        # Handle display_name - could be a string or list (legacy format)
+        display_name_raw = server_config.get('display_name', docker_name)
+        if isinstance(display_name_raw, list):
+            display_name = display_name_raw[0] if len(display_name_raw) > 0 else docker_name
+        else:
+            display_name = display_name_raw if display_name_raw else docker_name
+
         details_allowed = server_config.get('allow_detailed_status', True) # Default to True if not set
 
         if not docker_name:
-            return ValueError(_("Missing docker_name in server configuration"))
+            return ContainerStatusResult.error_result(
+                docker_name="unknown",
+                error=ValueError(_("Missing docker_name in server configuration")),
+                error_type='config_error'
+            )
 
         try:
-            info = await get_docker_info(docker_name)
+            info = await get_docker_info_dict_service_first(docker_name)
 
             if not info:
                 # Container does not exist or Docker daemon is unreachable
                 logger.warning(f"Container info not found for {docker_name}. Assuming offline.")
-                return (display_name, False, 'N/A', 'N/A', 'N/A', details_allowed)
+                return ContainerStatusResult.offline_result(
+                    docker_name=docker_name,
+                    display_name=display_name,
+                    details_allowed=details_allowed
+                )
 
             is_running = info.get('State', {}).get('Running', False)
             uptime = "N/A"
@@ -548,35 +387,52 @@ class StatusHandlersMixin:
                         if hours > 0:
                             uptime_parts.append(f"{hours}h")
                         if minutes > 0 or (days == 0 and hours == 0):
-                             uptime_parts.append(f"{minutes}m")
+                            uptime_parts.append(f"{minutes}m")
                         uptime = " ".join(uptime_parts) if uptime_parts else "< 1m"
 
                     except ValueError as e:
                         logger.error(f"Could not parse StartedAt timestamp '{started_at_str}' for {docker_name}: {e}")
                         uptime = "Error"
 
-                # Fetch CPU and RAM only if allowed
+                # Fetch CPU and RAM only if allowed (SERVICE FIRST)
                 if details_allowed:
-                    stats_tuple = await get_docker_stats(docker_name)
-                    if stats_tuple and isinstance(stats_tuple, tuple) and len(stats_tuple) == 2:
-                         cpu_stat, ram_stat = stats_tuple
-                         cpu = cpu_stat if cpu_stat is not None else 'N/A'
-                         ram = ram_stat if ram_stat is not None else 'N/A'
+                    stats_dict = await get_docker_stats_service_first(docker_name)
+                    if stats_dict and isinstance(stats_dict, dict):
+                        cpu_percent = stats_dict.get('cpu_percent', 0.0)
+                        memory_mb = stats_dict.get('memory_usage_mb', 0.0)
+                        cpu = f"{cpu_percent:.1f}%" if cpu_percent is not None else 'N/A'
+                        ram = f"{memory_mb:.1f} MB" if memory_mb is not None else 'N/A'
                     else:
-                         logger.warning(f"Could not retrieve valid stats tuple for running container {docker_name}")
-                         cpu = "N/A"
-                         ram = "N/A"
+                        logger.warning(f"Could not retrieve valid stats dict for running container {docker_name}")
+                        cpu = "N/A"
+                        ram = "N/A"
                 else:
                     cpu = _("Hidden")
                     ram = _("Hidden")
 
-            return (display_name, is_running, cpu, ram, uptime, details_allowed)
+            return ContainerStatusResult.success_result(
+                docker_name=docker_name,
+                display_name=display_name,
+                is_running=is_running,
+                cpu=cpu,
+                ram=ram,
+                uptime=uptime,
+                details_allowed=details_allowed
+            )
 
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError) as e:
             logger.error(f"Error getting status for {docker_name}: {e}", exc_info=True)
-            return e # Return the exception itself
+            return ContainerStatusResult.error_result(
+                docker_name=docker_name,
+                error=e,
+                error_type=type(e).__name__.lower()
+            )
     
-    async def _generate_status_embed_and_view(self, channel_id: int, display_name: str, server_conf: dict, current_config: dict, allow_toggle: bool, force_collapse: bool) -> tuple[Optional[discord.Embed], Optional[discord.ui.View], bool]:
+    async def _generate_status_embed_and_view(self, channel_id: int, display_name: str,
+                                       server_conf: Dict[str, Any], current_config: Dict[str, Any],
+                                       allow_toggle: bool = True,
+                                       force_collapse: bool = False,
+                                       show_cache_age: bool = False) -> Tuple[discord.Embed, Optional[discord.ui.View], bool]:
         """
         Generates the status embed and view based on cache and settings.
         Returns: (embed, view, running_status)
@@ -588,34 +444,43 @@ class StatusHandlersMixin:
         - current_config: The full bot configuration
         - allow_toggle: Whether to allow the toggle button in the view
         - force_collapse: Whether to force the status to be collapsed
+        - show_cache_age: Whether to show cache age indicator (for debug/serverstatus)
         """
         lang = current_config.get('language', 'de')
-        timezone_str = current_config.get('timezone')
-        all_servers_config = current_config.get('servers', [])
+        # Get timezone from config (format_datetime_with_timezone will handle fallbacks)
+        timezone_str = current_config.get('timezone_str', 'Europe/Berlin')
+        # SERVICE FIRST: Use ServerConfigService instead of direct config access
+        server_config_service = get_server_config_service()
+        all_servers_config = server_config_service.get_all_servers()
 
-        logger.debug(f"[_GEN_EMBED] Generating embed for '{display_name}' in channel {channel_id}, lang={lang}, allow_toggle={allow_toggle}, force_collapse={force_collapse}")
-        if not allow_toggle or force_collapse:
-             logger.debug(f"[_GEN_EMBED_FLAGS] '{display_name}': allow_toggle={allow_toggle}, force_collapse={force_collapse}. ToggleButton/Expanded view should be suppressed.")
-            
+        # Silent embed generation - this is called very frequently
         embed = None
         view = None
         running = False # Default running state
         status_result = None
-        cached_entry = self.status_cache.get(display_name)
+
+        # IMPORTANT: Use docker_name for all internal lookups (cache, pending_actions, etc.)
+        # display_name is ONLY for display purposes!
+        docker_name = server_conf.get('docker_name') or server_conf.get('name')
+        if not docker_name:
+            logger.error(f"[_GEN_EMBED] No docker_name found in server_conf for display_name '{display_name}'!")
+            docker_name = display_name  # Fallback to display_name if no docker_name available
+
+        cached_entry = self.status_cache_service.get(docker_name)
         now = datetime.now(timezone.utc)
 
         # --- Check for pending action first --- (Moved before status_result processing)
-        if display_name in self.pending_actions:
-            pending_data = self.pending_actions[display_name]
+        if docker_name in self.pending_actions:
+            pending_data = self.pending_actions[docker_name]
             pending_timestamp = pending_data['timestamp']
             pending_action = pending_data['action']
             pending_duration = (now - pending_timestamp).total_seconds()
-            
+
             # IMPROVED: Longer timeout and smarter pending logic
             PENDING_TIMEOUT_SECONDS = 120  # 2 minutes timeout instead of 15 seconds
-            
+
             if pending_duration < PENDING_TIMEOUT_SECONDS:
-                logger.debug(f"[_GEN_EMBED] '{display_name}' is in pending state (action: {pending_action} at {pending_timestamp}, duration: {pending_duration:.1f}s)")
+                # Silent pending state - this is expected behavior
                 embed = _get_pending_embed(display_name) # Uses a standardized pending embed
                 return embed, None, False # No view, running status is effectively false for pending display
             else:
@@ -623,11 +488,11 @@ class StatusHandlersMixin:
                 logger.info(f"[_GEN_EMBED] '{display_name}' pending timeout reached ({pending_duration:.1f}s). Checking if {pending_action} action succeeded...")
                 
                 # Try to get current container status to see if it changed
-                current_server_conf_for_check = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), None)
+                current_server_conf_for_check = next((s for s in all_servers_config if s.get('docker_name') == docker_name), None)
                 if current_server_conf_for_check:
                     fresh_status = await self.get_status(current_server_conf_for_check)
-                    if not isinstance(fresh_status, Exception) and isinstance(fresh_status, tuple) and len(fresh_status) >= 2:
-                        current_running_state = fresh_status[1]  # is_running is second element
+                    if fresh_status.success:
+                        current_running_state = fresh_status.is_running
                         
                         # ACTION-AWARE SUCCESS DETECTION
                         action_succeeded = False
@@ -643,19 +508,19 @@ class StatusHandlersMixin:
                         
                         if action_succeeded:
                             logger.info(f"[_GEN_EMBED] '{display_name}' {pending_action} action succeeded - clearing pending state")
-                            del self.pending_actions[display_name]
-                            # Update cache with fresh status
-                            self.status_cache[display_name] = {'data': fresh_status, 'timestamp': now}
+                            del self.pending_actions[docker_name]
+                            # Update cache with fresh status (ContainerStatusResult)
+                            self.status_cache_service.set(docker_name, fresh_status, now)
                         else:
                             # Action might have failed or container takes very long
                             logger.warning(f"[_GEN_EMBED] '{display_name}' {pending_action} action did not succeed after {pending_duration:.1f}s timeout - clearing pending state")
-                            del self.pending_actions[display_name]
+                            del self.pending_actions[docker_name]
                     else:
                         logger.warning(f"[_GEN_EMBED] '{display_name}' pending timeout - could not get fresh status, clearing pending state")
-                        del self.pending_actions[display_name]
+                        del self.pending_actions[docker_name]
                 else:
                     logger.warning(f"[_GEN_EMBED] '{display_name}' pending timeout - no server config found, clearing pending state")
-                    del self.pending_actions[display_name]
+                    del self.pending_actions[docker_name]
 
         # --- Determine status_result (from cache or live) ---
         if cached_entry:
@@ -663,10 +528,8 @@ class StatusHandlersMixin:
             # PATIENT APPROACH: ALWAYS use cache if available - background collects fresh data
             # Show cache age when data is older so user knows freshness
             if cache_age < self.cache_ttl_seconds:
-                logger.debug(f"[_GEN_EMBED] Using fresh cached status for '{display_name}' (age: {cache_age:.1f}s)")
                 cache_age_indicator = ""  # No indicator for fresh data
             else:
-                logger.debug(f"[_GEN_EMBED] Using cached status for '{display_name}' (age: {cache_age:.1f}s) - background updating...")
                 # Add age indicator for older data
                 if cache_age < 120:  # Less than 2 minutes
                     cache_age_indicator = f" ({int(cache_age)}s ago)"
@@ -681,8 +544,8 @@ class StatusHandlersMixin:
             embed_cache_indicator = cache_age_indicator
         else:
             # ONLY fetch directly if absolutely no cache exists (rare case during startup)
-            logger.info(f"[_GEN_EMBED] No cache entry for '{display_name}'. This should be rare - background loop will populate cache...")
-            current_server_conf_for_fetch = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), None)
+            logger.info(f"[_GEN_EMBED] No cache entry for '{docker_name}' (display: '{display_name}'). This should be rare - background loop will populate cache...")
+            current_server_conf_for_fetch = next((s for s in all_servers_config if s.get('docker_name') == docker_name), None)
             if current_server_conf_for_fetch:
                 # EMERGENCY FALLBACK: Show loading status instead of blocking UI
                 logger.info(f"[_GEN_EMBED] Showing loading status for '{display_name}' while background fetches data")
@@ -696,13 +559,19 @@ class StatusHandlersMixin:
                 embed_cache_indicator = " (config error)"
 
         # --- Process status_result and generate embed ---
+        # Cache now stores ContainerStatusResult objects
         if status_result is None:
-            logger.debug(f"[_GEN_EMBED] Status result for '{display_name}' is None. Showing loading or error status.")
             # Check if we have cache age indicator to determine type of message
             if 'embed_cache_indicator' in locals() and 'loading' in embed_cache_indicator:
                 # Loading status
                 embed = discord.Embed(
-                    description="```\n┌── Loading Status ───────────\n│ 🔄 Fetching container data...\n│ ⏱️ Background process running\n│ 📊 Please wait for fresh data\n└─────────────────────────────\n```",
+                    description=_("""```
+┌── Loading Status ───────────
+│ 🔄 Fetching container data...
+│ ⏱️ Background process running
+│ 📊 Please wait for fresh data
+└─────────────────────────────
+```"""),
                     color=0x3498db
                 )
                 embed.set_footer(text="Background data collection in progress • https://ddc.bot")
@@ -715,11 +584,104 @@ class StatusHandlersMixin:
                 )
             # running remains False, view remains None
 
+        elif isinstance(status_result, ContainerStatusResult):
+            # --- Handle ContainerStatusResult objects (new cache format) ---
+            if not status_result.success:
+                logger.error(f"[_GEN_EMBED] Status for '{display_name}' failed: {status_result.error_message}", exc_info=False)
+                embed = discord.Embed(
+                    title=f"⚠️ {display_name}",
+                    description=_("Error: An exception occurred while fetching status. Background process will retry."),
+                    color=discord.Color.red()
+                )
+                # running remains False, view remains None
+            else:
+                # Successful result - extract fields for embed generation
+                display_name_from_status = status_result.display_name
+                running = status_result.is_running
+                cpu = status_result.cpu
+                ram = status_result.ram
+                uptime = status_result.uptime
+                details_allowed = status_result.details_allowed
+                status_color = 0x00b300 if running else 0xe74c3c
+
+                # Continue with box embed generation (same as tuple case)
+                # PERFORMANCE OPTIMIZATION: Use cached translations
+                embed_helper = get_embed_helper_service()
+                cached_translations = embed_helper.get_translations(lang)
+                online_text = cached_translations['online_text']
+                offline_text = cached_translations['offline_text']
+                status_text = online_text if running else offline_text
+                current_emoji = "🟢" if running else "🔴"
+
+                # Check if we should always collapse
+                is_expanded = self.expanded_states.get(display_name, False) and not force_collapse
+
+                # PERFORMANCE OPTIMIZATION: Use cached translations
+                cpu_text = cached_translations['cpu_text']
+                ram_text = cached_translations['ram_text']
+                uptime_text = cached_translations['uptime_text']
+                detail_denied_text = cached_translations['detail_denied_text']
+
+                # PERFORMANCE OPTIMIZATION: Use cached box elements
+                BOX_WIDTH = 28
+                embed_helper = get_embed_helper_service()
+                cached_box = embed_helper.get_box_elements(display_name, BOX_WIDTH)
+                header_line = cached_box['header_line']
+                footer_line = cached_box['footer_line']
+
+                # String builder for description - more efficient than multiple concatenations
+                description_parts = [
+                    "```\n",
+                    header_line,
+                    f"\n│ {current_emoji} {status_text}"
+                ]
+
+                # Add cache age indicator if data is older (only if show_cache_age is True)
+                if show_cache_age and 'embed_cache_indicator' in locals() and embed_cache_indicator:
+                    description_parts.append(embed_cache_indicator)
+
+                description_parts.append("\n")
+
+                # Build status box content
+                if running and details_allowed:
+                    if is_expanded:
+                        description_parts.extend([
+                            f"│ {cpu_text}: {cpu}\n",
+                            f"│ {ram_text}: {ram}\n",
+                            f"│ {uptime_text}: {uptime}\n"
+                        ])
+                    else:
+                        description_parts.append(f"│ \u2022 ▼ Expand for details\n")
+                elif running and not details_allowed:
+                    description_parts.append(f"│ {detail_denied_text}\n")
+                elif not running:
+                    description_parts.append(f"│ {uptime_text}: N/A\n")
+
+                description_parts.extend([
+                    footer_line,
+                    "\n```"
+                ])
+
+                embed = discord.Embed(
+                    description="".join(description_parts),
+                    color=status_color
+                )
+                embed.set_footer(text="https://ddc.bot")
+
+                # Create view with toggle button only if allowed and container is running and has details
+                if allow_toggle and running and details_allowed:
+                    view = ControlView(
+                        self, server_conf, is_running=running,
+                        channel_has_control_permission=_channel_has_permission(channel_id, server_conf)
+                    )
+                else:
+                    view = None
+
         elif isinstance(status_result, Exception):
-            logger.error(f"[_GEN_EMBED] Status for '{display_name}' is an exception: {status_result}", exc_info=False) 
+            logger.error(f"[_GEN_EMBED] Status for '{display_name}' is an exception: {status_result}", exc_info=False)
             embed = discord.Embed(
-                title=f"⚠️ {display_name}", 
-                description=_("Error: An exception occurred while fetching status. Background process will retry."), 
+                title=f"⚠️ {display_name}",
+                description=_("Error: An exception occurred while fetching status. Background process will retry."),
                 color=discord.Color.red()
             )
             # running remains False, view remains None
@@ -729,8 +691,9 @@ class StatusHandlersMixin:
             display_name_from_status, running, cpu, ram, uptime, details_allowed = status_result # 'running' is updated here
             status_color = 0x00b300 if running else 0xe74c3c
             
-            # PERFORMANCE OPTIMIZATION: Verwende gecachte Übersetzungen
-            cached_translations = self._get_cached_translations(lang)
+            # PERFORMANCE OPTIMIZATION: Use cached translations
+            embed_helper = get_embed_helper_service()
+            cached_translations = embed_helper.get_translations(lang)
             online_text = cached_translations['online_text']
             offline_text = cached_translations['offline_text']
             status_text = online_text if running else offline_text
@@ -739,15 +702,16 @@ class StatusHandlersMixin:
             # Check if we should always collapse
             is_expanded = self.expanded_states.get(display_name, False) and not force_collapse
 
-            # PERFORMANCE OPTIMIZATION: Verwende gecachte Übersetzungen
+            # PERFORMANCE OPTIMIZATION: Use cached translations
             cpu_text = cached_translations['cpu_text']
             ram_text = cached_translations['ram_text']
             uptime_text = cached_translations['uptime_text']
             detail_denied_text = cached_translations['detail_denied_text']
             
-            # PERFORMANCE OPTIMIZATION: Verwende gecachte Box-Elemente
+            # PERFORMANCE OPTIMIZATION: Use cached box elements
             BOX_WIDTH = 28
-            cached_box = self._get_cached_box_elements(display_name, BOX_WIDTH)
+            embed_helper = get_embed_helper_service()
+            cached_box = embed_helper.get_box_elements(display_name, BOX_WIDTH)
             header_line = cached_box['header_line']
             footer_line = cached_box['footer_line']
             
@@ -758,8 +722,8 @@ class StatusHandlersMixin:
                 f"\n│ {current_emoji} {status_text}"
             ]
 
-            # Add cache age indicator if data is older
-            if 'embed_cache_indicator' in locals() and embed_cache_indicator:
+            # Add cache age indicator if data is older (only if show_cache_age is True)
+            if show_cache_age and 'embed_cache_indicator' in locals() and embed_cache_indicator:
                 description_parts.append(embed_cache_indicator)
 
             # Add different lines depending on status and state
@@ -799,11 +763,12 @@ class StatusHandlersMixin:
             embed = discord.Embed(description=description, color=status_color)
             now_footer = datetime.now(timezone.utc)
             last_update_text = cached_translations['last_update_text']
-            current_time = format_datetime_with_timezone(now_footer, timezone_str, fmt="%H:%M:%S")
+            # Get formatted time using the new time_only parameter
+            current_time = format_datetime_with_timezone(now_footer, timezone_str, time_only=True)
             
             # Enhanced timestamp with cache age info
             if 'embed_cache_age' in locals() and embed_cache_age > self.cache_ttl_seconds:
-                timestamp_line = f"{last_update_text}: {current_time} (data: {int(embed_cache_age)}s ago)"
+                timestamp_line = f"{last_update_text}: {current_time} (data: {int(embed_cache_age)}s alt)"
             else:
                 timestamp_line = f"{last_update_text}: {current_time}"
             
@@ -834,11 +799,33 @@ class StatusHandlersMixin:
             # For now, ControlView handles 'running' status to show appropriate buttons. If view is problematic for errors, adjust here.
             pass # Let ControlView decide based on 'running' status for now.
 
-        # Only create ControlView if we have a valid server_conf for it and not a critical error embed
+        # SMART STATUS INFO INTEGRATION: Determine view type based on channel permissions
         if embed and server_conf and not (embed.title and embed.title.startswith("🆘")):
             channel_has_control = _channel_has_permission(channel_id, 'control', current_config)
-            actual_server_conf = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), server_conf)
-            view = ControlView(self, actual_server_conf, running, channel_has_control_permission=channel_has_control, allow_toggle=allow_toggle)
+
+            # REMOVED unnecessary config reload - just use the passed server_conf
+            # This avoids losing temporary flags like _is_admin_control
+            # actual_server_conf = next((s for s in all_servers_config if s.get('name', s.get('docker_name')) == display_name), server_conf)
+
+            # Import here to avoid circular imports
+            from .status_info_integration import should_show_info_in_status_channel, StatusInfoView, create_enhanced_status_embed
+
+            # Check if this is a status-only channel that should show info integration
+            # Skip info integration for admin control messages
+            is_admin_control = server_conf.get('_is_admin_control', False)
+
+            show_info_integration = should_show_info_in_status_channel(channel_id, current_config) and not is_admin_control
+
+            if show_info_integration and not channel_has_control:
+                # STATUS-ONLY CHANNEL: Use StatusInfoView and enhance embed
+                view = StatusInfoView(self, server_conf, running)
+
+                # Enhance embed with info indicators if info is available
+                embed = create_enhanced_status_embed(embed, server_conf, info_indicator=True)
+
+            else:
+                # CONTROL CHANNEL: Use standard ControlView
+                view = ControlView(self, server_conf, running, channel_has_control_permission=channel_has_control, allow_toggle=allow_toggle)
         else:
             view = None # Ensure view is None if server_conf is missing or critical error
 
@@ -848,14 +835,14 @@ class StatusHandlersMixin:
         """
         Sends or updates status information for a server in a channel.
         ALWAYS reads from the cache and respects pending status.
-        
+
         Parameters:
         - channel: The Discord text channel to send the message to
         - server_conf: Configuration for the specific server
         - current_config: The full bot configuration
         - allow_toggle: Whether to allow toggle button in the view
         - force_collapse: Whether to force the status to be collapsed
-        
+
         Returns:
         - The sent/edited Discord message, or None if no message was sent/edited
         """
@@ -863,10 +850,75 @@ class StatusHandlersMixin:
         if not display_name:
              logger.error("[SEND_STATUS] Server config missing name or docker_name.")
              return None
-        logger.debug(f"[SEND_STATUS] Processing server '{display_name}' for channel {channel.id}, allow_toggle={allow_toggle}, force_collapse={force_collapse}")
+
+        # DOCKER CONNECTIVITY CHECK: Check before attempting to get/send status
+        from services.infrastructure.docker_connectivity_service import get_docker_connectivity_service, DockerConnectivityRequest, DockerErrorEmbedRequest
+
+        connectivity_service = get_docker_connectivity_service()
+        connectivity_request = DockerConnectivityRequest(timeout_seconds=5.0)
+        connectivity_result = await connectivity_service.check_connectivity(connectivity_request)
+
+        if not connectivity_result.is_connected:
+            logger.warning(f"[SEND_STATUS] Docker connectivity failed for '{display_name}': {connectivity_result.error_message}")
+
+            # Create Docker connectivity error embed using service
+            lang = current_config.get('language', 'de')
+            embed_request = DockerErrorEmbedRequest(
+                error_message=connectivity_result.error_message,
+                language=lang,
+                context='individual_container'
+            )
+            embed_result = connectivity_service.create_error_embed_data(embed_request)
+
+            if not embed_result.success:
+                logger.error(f"Failed to create Docker connectivity error embed: {embed_result.error}")
+                return None
+
+            # Create Discord embed from service result
+            embed = discord.Embed(
+                title=embed_result.title,
+                description=embed_result.description,
+                color=embed_result.color
+            )
+            embed.set_footer(text=embed_result.footer_text)
+            view = None  # No controls available during connectivity issues
+
+            # Send/edit with connectivity error embed
+            msg = None
+            try:
+                existing_msg_id = None
+                if channel.id in self.channel_server_message_ids:
+                     existing_msg_id = self.channel_server_message_ids[channel.id].get(display_name)
+                should_edit = existing_msg_id is not None
+
+                if should_edit:
+                    try:
+                        existing_message = channel.get_partial_message(existing_msg_id)
+                        await existing_message.edit(embed=embed, view=None)
+                        msg = existing_message
+                        logger.info(f"[SEND_STATUS] Updated message {existing_msg_id} with Docker connectivity error for '{display_name}'")
+                    except discord.NotFound:
+                        logger.warning(f"[SEND_STATUS] Message {existing_msg_id} not found, sending new connectivity error message")
+                        existing_msg_id = None
+                    except (discord.HTTPException, discord.Forbidden, RuntimeError) as e:
+                        logger.error(f"[SEND_STATUS] Failed to edit connectivity error message: {e}", exc_info=True)
+                        existing_msg_id = None
+
+                if not existing_msg_id:
+                    msg = await channel.send(embed=embed, view=None)
+                    if channel.id not in self.channel_server_message_ids:
+                        self.channel_server_message_ids[channel.id] = {}
+                    self.channel_server_message_ids[channel.id][display_name] = msg.id
+                    logger.info(f"[SEND_STATUS] Sent new Docker connectivity error message {msg.id} for '{display_name}'")
+
+            except (discord.HTTPException, discord.Forbidden, RuntimeError, KeyError) as e:
+                logger.error(f"[SEND_STATUS] Failed to send Docker connectivity error message for '{display_name}': {e}", exc_info=True)
+
+            return msg
+
         msg = None
         try:
-            embed, view, _ = await self._generate_status_embed_and_view(channel.id, display_name, server_conf, current_config, allow_toggle, force_collapse)
+            embed, view, _ = await self._generate_status_embed_and_view(channel.id, display_name, server_conf, current_config, allow_toggle, force_collapse, show_cache_age=False)
 
             if embed:
                 existing_msg_id = None
@@ -874,32 +926,24 @@ class StatusHandlersMixin:
                      existing_msg_id = self.channel_server_message_ids[channel.id].get(display_name)
                 should_edit = existing_msg_id is not None
 
-                is_pending_check = display_name in self.pending_actions
-                if is_pending_check:
-                    logger.debug(f"[SEND_STATUS_PENDING_CHECK] Server '{display_name}' is marked as pending. Trying to { 'edit' if should_edit else 'send' } message.")
-
                 if should_edit:
                     try:
                         # PERFORMANCE OPTIMIZATION: Use partial message instead of fetch
                         existing_message = channel.get_partial_message(existing_msg_id)  # No API call
                         await existing_message.edit(embed=embed, view=view if view and view.children else None)
                         msg = existing_message
-                        logger.debug(f"[SEND_STATUS] Edited message {existing_msg_id} for '{display_name}' in channel {channel.id}")
-                        
+
                         # Update last edit time
                         if channel.id not in self.last_message_update_time:
                             self.last_message_update_time[channel.id] = {}
                         self.last_message_update_time[channel.id][display_name] = datetime.now(timezone.utc)
-                        
-                        if is_pending_check: logger.debug(f"[SEND_STATUS_PENDING_CHECK] Successfully edited pending message for '{display_name}'.")
                     except discord.NotFound:
                          logger.warning(f"[SEND_STATUS] Message {existing_msg_id} for '{display_name}' not found. Will send new.")
                          if channel.id in self.channel_server_message_ids and display_name in self.channel_server_message_ids[channel.id]:
                               del self.channel_server_message_ids[channel.id][display_name]
                          existing_msg_id = None
-                    except Exception as e:
+                    except (discord.HTTPException, discord.Forbidden, RuntimeError, KeyError) as e:
                          logger.error(f"[SEND_STATUS] Failed to edit message {existing_msg_id} for '{display_name}': {e}", exc_info=True)
-                         if is_pending_check: logger.error(f"[SEND_STATUS_PENDING_CHECK] Failed to EDIT pending message for '{display_name}'. Error: {e}")
                          existing_msg_id = None
 
                 if not existing_msg_id:
@@ -914,15 +958,12 @@ class StatusHandlersMixin:
                           if channel.id not in self.last_message_update_time:
                               self.last_message_update_time[channel.id] = {}
                           self.last_message_update_time[channel.id][display_name] = datetime.now(timezone.utc)
-                          
-                          if is_pending_check: logger.debug(f"[SEND_STATUS_PENDING_CHECK] Successfully sent new pending message for '{display_name}'.")
-                     except Exception as e:
+                     except (discord.HTTPException, discord.Forbidden, RuntimeError, KeyError) as e:
                           logger.error(f"[SEND_STATUS] Failed to send new message for '{display_name}' in channel {channel.id}: {e}", exc_info=True)
-                          if is_pending_check: logger.error(f"[SEND_STATUS_PENDING_CHECK] Failed to SEND new pending message for '{display_name}'. Error: {e}")
             else:
                 logger.warning(f"[SEND_STATUS] No embed generated for '{display_name}' (likely error in helper?), cannot send/edit.")
 
-        except Exception as e:
+        except (RuntimeError, asyncio.CancelledError, KeyError, TypeError) as e:
             logger.error(f"[SEND_STATUS] Outer error processing server '{display_name}' for channel {channel.id}: {e}", exc_info=True)
         return msg
 
@@ -934,7 +975,6 @@ class StatusHandlersMixin:
             if channel_id not in self.last_message_update_time:
                 self.last_message_update_time[channel_id] = {}
             self.last_message_update_time[channel_id][display_name] = now
-            logger.debug(f"Updated last_message_update_time for '{display_name}' in {channel_id} to {now}")
         return result
 
     # =============================================================================
@@ -944,11 +984,14 @@ class StatusHandlersMixin:
     async def _edit_single_message(self, channel_id: int, display_name: str, message_id: int, current_config: dict) -> Union[bool, Exception, None]:
         """Edits a single status message based on cache and Pending-Status with conditional updates."""
         start_time = time.time()
+
+        # Get conditional cache service
+        cache_service = get_conditional_cache_service()
         
-        # Initialize conditional cache
-        self._ensure_conditional_cache()
-        
-        server_conf = next((s for s in current_config.get('servers', []) if s.get('name', s.get('docker_name')) == display_name), None)
+        # SERVICE FIRST: Use ServerConfigService instead of direct config access
+        server_config_service = get_server_config_service()
+        servers = server_config_service.get_all_servers()
+        server_conf = next((s for s in servers if s.get('name', s.get('docker_name')) == display_name), None)
         if not server_conf:
             logger.warning(f"[_EDIT_SINGLE] Config for '{display_name}' not found during edit.")
             if channel_id in self.channel_server_message_ids and display_name in self.channel_server_message_ids[channel_id]:
@@ -962,7 +1005,7 @@ class StatusHandlersMixin:
             force_collapse = not channel_has_control_permission # Force collapse in non-control channels
 
             # Pass flags to the generation function
-            embed, view, _ = await self._generate_status_embed_and_view(channel_id, display_name, server_conf, current_config, allow_toggle=allow_toggle, force_collapse=force_collapse)
+            embed, view, _ = await self._generate_status_embed_and_view(channel_id, display_name, server_conf, current_config, allow_toggle=allow_toggle, force_collapse=force_collapse, show_cache_age=False)
 
             if not embed:
                 logger.warning(f"_edit_single_message: No embed generated for '{display_name}', cannot edit.")
@@ -970,7 +1013,7 @@ class StatusHandlersMixin:
 
             # ✨ CONDITIONAL UPDATE CHECK - Only edit if content changed
             cache_key = f"{channel_id}:{display_name}"
-            
+
             # Create a comparable content hash from embed + view
             current_content = {
                 'description': embed.description,
@@ -978,47 +1021,18 @@ class StatusHandlersMixin:
                 'footer': embed.footer.text if embed.footer else None,
                 'view_children_count': len(view.children) if view else 0
             }
-            
+
             # Check if content actually changed
-            last_content = self.last_sent_content.get(cache_key)
-            if last_content and last_content == current_content:
-                # Content unchanged - skip Discord API call
-                self.update_stats['skipped'] += 1
-                elapsed_time = (time.time() - start_time) * 1000
-                # Enhanced logging for offline containers
-                cached_status = getattr(self, 'status_cache', {}).get(server_conf.get('docker_name'))
-                is_offline = False
-                if cached_status:
-                    try:
-                        # Handle both cache formats: direct tuple or {'data': tuple, 'timestamp': datetime}
-                        if isinstance(cached_status, dict) and 'data' in cached_status:
-                            status_data = cached_status['data']
-                        else:
-                            status_data = cached_status
-                        
-                        # Check if status_data is valid and has enough elements
-                        if (hasattr(status_data, '__getitem__') and hasattr(status_data, '__len__') and 
-                            len(status_data) >= 2):
-                            is_offline = not status_data[1]  # Second value is is_running
-                    except (TypeError, IndexError, KeyError):
-                        pass  # Ignore cache format issues for logging
-                status_info = " [OFFLINE]" if is_offline else ""
-                logger.debug(f"_edit_single_message: SKIPPED edit for '{display_name}'{status_info} - content unchanged ({elapsed_time:.1f}ms)")
-                
-                # Log performance stats every 50 skipped updates
-                if self.update_stats['skipped'] % 50 == 0:
-                    total_operations = self.update_stats['skipped'] + self.update_stats['sent']
-                    skip_percentage = (self.update_stats['skipped'] / total_operations * 100) if total_operations > 0 else 0
-                    logger.info(f"UPDATE_STATS: Skipped {self.update_stats['skipped']} / Sent {self.update_stats['sent']} ({skip_percentage:.1f}% saved)")
-                
+            if not cache_service.has_content_changed(cache_key, current_content):
+                # Content unchanged - skip Discord API call (silent skip, no logging)
+                # This is the HAPPY PATH and happens very frequently - don't spam logs
                 return True  # Return success without actual edit
             
             # Content changed or first time - proceed with edit
             # PERFORMANCE OPTIMIZATION: Use cached channel object instead of fetch
             channel = self.bot.get_channel(channel_id)  # Uses bot's internal cache, no API call
             if not channel:
-                # Fallback to fetch if not in cache (rare case)
-                logger.debug(f"_edit_single_message: Channel {channel_id} not in cache, fetching...")
+                # Fallback to fetch if not in cache (rare case - no logging needed)
                 channel = await self.bot.fetch_channel(channel_id)
             
             if not isinstance(channel, discord.TextChannel):
@@ -1041,33 +1055,19 @@ class StatusHandlersMixin:
                 elapsed_time = (time.time() - start_time) * 1000
                 logger.error(f"_edit_single_message: TIMEOUT for '{display_name}' after 5000ms (total time: {elapsed_time:.1f}ms)")
                 # For timeout cases, still update the cache to prevent immediate retry
-                self.last_sent_content[cache_key] = current_content
-                self.update_stats['sent'] += 1  # Count as attempt even if timeout
+                cache_service.update_content(cache_key, current_content)
                 return False  # Return failure but don't crash
-            
+
             # Store the new content for future comparison
-            self.last_sent_content[cache_key] = current_content
-            self.update_stats['sent'] += 1
-            
-            # Prevent cache from growing too large (cleanup every 100 operations)
-            total_ops = self.update_stats['skipped'] + self.update_stats['sent']
-            if total_ops % 100 == 0 and len(self.last_sent_content) > 50:
-                # Keep only the most recent 25 entries
-                sorted_items = list(self.last_sent_content.items())[-25:]
-                self.last_sent_content = dict(sorted_items)
-                logger.debug(f"Cleaned conditional update cache: kept {len(self.last_sent_content)} entries")
-            
+            cache_service.update_content(cache_key, current_content)
+
+            # Performance logging - only log slow operations to avoid spam
             elapsed_time = (time.time() - start_time) * 1000
-            
-            # Smart performance logging
             if elapsed_time > 1000:  # Over 1 second - critical
                 logger.error(f"_edit_single_message: CRITICAL SLOW edit for '{display_name}' took {elapsed_time:.1f}ms")
             elif elapsed_time > 500:  # Over 500ms - warning
                 logger.warning(f"_edit_single_message: SLOW edit for '{display_name}' took {elapsed_time:.1f}ms")
-            elif elapsed_time < 100:  # Under 100ms - excellent
-                logger.info(f"_edit_single_message: FAST edit for '{display_name}' in {elapsed_time:.1f}ms")
-            else:
-                logger.info(f"_edit_single_message: Updated '{display_name}' in {elapsed_time:.1f}ms")
+            # Fast/normal operations (<500ms) are silent - this is the expected behavior
             
             # REMOVED: await asyncio.sleep(0.2) - This was blocking true parallelization
             # Discord API rate limiting is handled by py-cord internally
@@ -1081,7 +1081,7 @@ class StatusHandlersMixin:
         except discord.Forbidden:
             logger.error(f"_edit_single_message: Missing permissions to fetch/edit message {message_id} in channel {channel_id}.")
             return discord.Forbidden(f"Permissions error for {message_id}")
-        except Exception as e:
+        except (discord.HTTPException, RuntimeError, asyncio.CancelledError, KeyError, TypeError, ValueError) as e:
             elapsed_time = (time.time() - start_time) * 1000
             logger.error(f"_edit_single_message: Failed to edit message {message_id} for '{display_name}' after {elapsed_time:.1f}ms: {e}", exc_info=True)
             return e 

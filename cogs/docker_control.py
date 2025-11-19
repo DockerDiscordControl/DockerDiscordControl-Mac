@@ -2,7 +2,7 @@
 # ============================================================================ #
 # DockerDiscordControl (DDC)                                                  #
 # https://ddc.bot                                                              #
-# Copyright (c) 2023-2025 MAX                                                  #
+# Copyright (c) 2025 MAX                                                  #
 # Licensed under the MIT License                                               #
 # ============================================================================ #
 
@@ -13,23 +13,30 @@ from datetime import datetime, timedelta, timezone
 import os
 import logging
 import time
-import threading
 from typing import Dict, Any, List, Optional, Tuple, Union
+from io import BytesIO
+from pathlib import Path
 
 # Import app_commands using central utility
 from utils.app_commands_helper import get_app_commands, get_discord_option
 app_commands = get_app_commands()
 DiscordOption = get_discord_option()
 
+# Discord services
+from services.discord.channel_cleanup_service import get_channel_cleanup_service
+
 # Import our utility functions
-from utils.config_loader import load_config, DEFAULT_CONFIG
-from utils.docker_utils import get_docker_info, get_docker_stats, docker_action
+from services.config.config_service import load_config, get_config_service
+from services.config.server_config_service import get_server_config_service
+# SERVICE FIRST: docker_action moved to docker_action_service.py
+
 from utils.time_utils import format_datetime_with_timezone
 from utils.logging_utils import setup_logger
-from utils.server_order import load_server_order, save_server_order
+from services.docker_service.server_order import load_server_order, save_server_order
+from services.docker_service.status_cache_runtime import get_docker_status_cache_runtime
 
 # Import scheduler module
-from utils.scheduler import (
+from services.scheduling.scheduler import (
     ScheduledTask, add_task, delete_task, update_task, load_tasks,
     get_tasks_for_container, get_next_week_tasks, get_tasks_in_timeframe,
     VALID_CYCLES, VALID_ACTIONS, DAYS_OF_WEEK,
@@ -42,63 +49,219 @@ from utils.scheduler import (
 # Import outsourced parts
 from .translation_manager import _, get_translations
 from .control_helpers import get_guild_id, container_select, _channel_has_permission, _get_pending_embed
-from .control_ui import ActionButton, ToggleButton, ControlView, TaskDeletePanelView
+from .control_ui import ActionButton, ToggleButton, ControlView
 
 # Import the autocomplete handlers that have been moved to their own module
-from .autocomplete_handlers import (
-    schedule_container_select, schedule_action_select, schedule_cycle_select,
-    schedule_time_select, schedule_month_select, schedule_weekday_select,
-    schedule_day_select, schedule_info_period_select, schedule_year_select,
-    schedule_task_id_select
-)
+# Note: Task-related autocomplete handlers removed as commands are now UI-based
 
-# Import the schedule commands mixin that contains schedule command handlers
-from .scheduler_commands import ScheduleCommandsMixin
+# Schedule commands mixin removed - task scheduling now handled through UI
 
 # Import the status handlers mixin that contains status-related functionality
 from .status_handlers import StatusHandlersMixin
 
 # Import the command handlers mixin that contains Docker action command functionality 
-from .command_handlers import CommandHandlersMixin
+# Command handlers removed - using UI buttons for all container control
 
 # Import central logging function
-from utils.action_logger import log_user_action
+from services.infrastructure.action_logger import log_user_action
 
-# Configure logger for the cog using utility
-logger = setup_logger('ddc.docker_control', level=logging.DEBUG)
+# Configure logger for the cog using utility (INFO for release)
+logger = setup_logger('ddc.docker_control', level=logging.INFO)
 
-# Global variable for Docker status cache to allow access from other modules
-docker_status_cache = {}
-docker_status_cache_lock = threading.Lock()  # Thread safety for global status cache
+# DonationView will be defined in this file
 
-class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin, CommandHandlersMixin):
+# CRITICAL DEBUG: Log at module load time to verify new code is being executed
+logger.info("=" * 80)
+logger.info("[MODULE LOAD DEBUG] docker_control.py module is being loaded - NEW CODE VERSION e214386")
+logger.info("=" * 80)
+
+class DockerControlCog(commands.Cog, StatusHandlersMixin):
     """Cog for DockerDiscordControl container management via Discord."""
 
     def __init__(self, bot: commands.Bot, config: dict):
         """Initializes the DockerDiscordControl Cog."""
         logger.info("Initializing DockerControlCog... [DDC-SETUP]")
+        
+        # Basic initialization
         self.bot = bot
         self.config = config
-        self.expanded_states = {} 
+        
+        # Check if donations are disabled and remove donation commands
+        try:
+            from services.donation.donation_utils import is_donations_disabled
+            if is_donations_disabled():
+                logger.info("Donations are disabled - removing donation commands")
+                # Remove donate and donatebroadcast commands after cog is initialized
+                self.donations_disabled = True
+        except (ImportError, AttributeError, RuntimeError) as e:
+            logger.debug(f"Error checking donation status: {e}")
+            self.donations_disabled = False
+        
+        # Initialize Mech State Manager for persistence
+        from services.mech.mech_state_manager import get_mech_state_manager
+        self.mech_state_manager = get_mech_state_manager()
+        
+        # Member count updates moved to on-demand (during donations with level-ups)
+        
+        # Load persisted states
+        logger.info("[DEBUG INIT] Step 1: Loading mech state...")
+        try:
+            state_data = self.mech_state_manager.load_state()
+            logger.info("[DEBUG INIT] Step 1a: Mech state loaded successfully")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 1 FAILED: {e}", exc_info=True)
+            raise
+
+        # Safe int conversion with error handling
+        self.mech_expanded_states = {}
+        for k, v in state_data.get("mech_expanded_states", {}).items():
+            try:
+                self.mech_expanded_states[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid channel ID in mech_expanded_states: {k}")
+
+        self.last_glvl_per_channel = {}
+        for k, v in state_data.get("last_glvl_per_channel", {}).items():
+            try:
+                self.last_glvl_per_channel[int(k)] = v
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid channel ID in last_glvl_per_channel: {k}")
+        logger.info(f"Loaded persisted Mech states: {len(self.mech_expanded_states)} expanded, {len(self.last_glvl_per_channel)} Glvl tracked")
+        
+        self.expanded_states = {}  # For container expand/collapse
         self.channel_server_message_ids: Dict[int, Dict[str, int]] = {}
         self.last_message_update_time: Dict[int, Dict[str, datetime]] = {}
         self.initial_messages_sent = False
         self.last_channel_activity: Dict[int, datetime] = {}
-        self.status_cache = {}
-        self.cache_ttl_seconds = 75
+        
+        # Cache configuration - SERVICE FIRST: Use StatusCacheService
+        # Initialize StatusCacheService instead of local cache
+        logger.info("[DEBUG INIT] Step 2: Initializing StatusCacheService...")
+        try:
+            from services.status.status_cache_service import get_status_cache_service
+            self.status_cache_service = get_status_cache_service()
+            logger.info("[DEBUG INIT] Step 2 complete: StatusCacheService initialized for DockerControlCog")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 2 FAILED: {e}", exc_info=True)
+            raise
+
+        # Share the cache snapshot through the dedicated runtime helper so other
+        # components can inspect the data without importing the cog directly.
+        logger.info("[DEBUG INIT] Step 3: Getting docker status cache runtime...")
+        try:
+            self._status_cache_runtime = get_docker_status_cache_runtime()
+            logger.info("[DEBUG INIT] Step 3 complete: Docker status cache runtime initialized")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 3 FAILED: {e}", exc_info=True)
+            raise
+
+        # Keep cache_ttl_seconds for compatibility (some code might still reference it)
+        cache_duration = int(os.environ.get('DDC_DOCKER_CACHE_DURATION', '30'))
+        self.cache_ttl_seconds = int(cache_duration * 2.5)
+
         self.pending_actions: Dict[str, Dict[str, Any]] = {}
-        self.ordered_server_names = load_server_order()
-        logger.info(f"[Cog Init] Loaded server order from persistent file: {self.ordered_server_names}")
-        if not self.ordered_server_names:
-            if 'server_order' in config:
-                logger.info("[Cog Init] Using server_order from config")
-                self.ordered_server_names = config.get('server_order', [])
-            else:
-                logger.info("[Cog Init] No server_order found, using all server names from config")
-                self.ordered_server_names = [s.get('docker_name') for s in config.get('servers', []) if s.get('docker_name')]
-            save_server_order(self.ordered_server_names)
-            logger.info(f"[Cog Init] Saved default server order: {self.ordered_server_names}")
-        self.translations = get_translations()
+
+        # Initialize services
+        logger.info("[DEBUG INIT] Step 4: Initializing cleanup service...")
+        try:
+            self.cleanup_service = get_channel_cleanup_service(bot)
+            logger.info("[DEBUG INIT] Step 4 complete: Cleanup service initialized")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 4 FAILED: {e}", exc_info=True)
+            raise
+
+        # Initialize Mech Status Cache Service
+        logger.info("[DEBUG INIT] Step 5: Initializing MechStatusCacheService...")
+        try:
+            from services.mech.mech_status_cache_service import get_mech_status_cache_service
+            self.mech_status_cache_service = get_mech_status_cache_service()
+            logger.info("[DEBUG INIT] Step 5 complete: MechStatusCacheService initialized")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 5 FAILED: {e}", exc_info=True)
+            raise
+
+        # Setup event listeners for Discord updates
+        logger.info("[DEBUG INIT] Step 6: Setting up Discord event listeners...")
+        try:
+            self._setup_discord_event_listeners()
+            logger.info("[DEBUG INIT] Step 6 complete: Discord event listeners setup")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 6 FAILED: {e}", exc_info=True)
+            raise
+
+        # Docker query cooldown tracking
+        self.last_docker_query = {}  # Track last query time per container
+        self.docker_query_cooldown = int(os.environ.get('DDC_DOCKER_QUERY_COOLDOWN', '2'))
+        
+        # Load server order
+        logger.info("[DEBUG INIT] Step 7: Loading server order...")
+        try:
+            self.ordered_server_names = load_server_order()
+            logger.info(f"[DEBUG INIT] Step 7a: Loaded server order from persistent file: {self.ordered_server_names}")
+            if not self.ordered_server_names:
+                if 'server_order' in config:
+                    logger.info("[DEBUG INIT] Step 7b: Using server_order from config")
+                    self.ordered_server_names = config.get('server_order', [])
+                else:
+                    logger.info("[DEBUG INIT] Step 7c: No server_order found, using all server names from config")
+                    # SERVICE FIRST: Use ServerConfigService instead of direct config access
+                    server_config_service = get_server_config_service()
+                    servers = server_config_service.get_all_servers()
+                    self.ordered_server_names = [s.get('docker_name') for s in servers if s.get('docker_name')]
+                save_server_order(self.ordered_server_names)
+                logger.info(f"[DEBUG INIT] Step 7d: Saved default server order: {self.ordered_server_names}")
+            logger.info("[DEBUG INIT] Step 7 complete: Server order loaded")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 7 FAILED: {e}", exc_info=True)
+            raise
+        
+        # Register persistent views for mech buttons
+        logger.info("[DEBUG INIT] Step 8: Registering persistent mech views...")
+        try:
+            self._register_persistent_mech_views()
+            logger.info("[DEBUG INIT] Step 8 complete: Persistent mech views registered")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 8 FAILED: {e}", exc_info=True)
+            raise
+            
+        # Initialize translations
+        logger.info("[DEBUG INIT] Step 9: Initializing translations...")
+        try:
+            self.translations = get_translations()
+            logger.info("[DEBUG INIT] Step 9 complete: Translations initialized")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 9 FAILED: {e}", exc_info=True)
+            raise
+        
+        # Initialize self as status handler
+        self.status_handlers = self
+        
+        # Initialize performance monitoring
+        self._loop_stats = {
+            'status_update': {'runs': 0, 'errors': 0, 'last_duration': 0},
+            'message_edit': {'runs': 0, 'errors': 0, 'last_duration': 0},
+            'inactivity': {'runs': 0, 'errors': 0, 'last_duration': 0},
+            'cache_clear': {'runs': 0, 'errors': 0, 'last_duration': 0},
+            'heartbeat': {'runs': 0, 'errors': 0, 'last_duration': 0}
+        }
+        
+        # Initialize task tracking
+        logger.info("[DEBUG INIT] Step 10: Initializing asyncio locks...")
+        try:
+            self._active_tasks = set()
+            self._task_lock = asyncio.Lock()
+
+            # Initialize interaction lock to prevent race conditions between button clicks and auto-updates
+            self._interaction_lock = asyncio.Lock()
+            self._active_interactions = set()  # Track active button interactions per channel
+            logger.info("[DEBUG INIT] Step 10 complete: Asyncio locks initialized")
+        except Exception as e:
+            logger.error(f"[DEBUG INIT] Step 10 FAILED: {e}", exc_info=True)
+            raise
+        
+        # NOTE: Background loops are started in cog_load() hook, not in __init__
+        # This is because __init__ runs before bot.loop is available
+        logger.info("DockerControlCog __init__ phase 1 complete. Background loops will start in cog_load().")
 
         # PERFORMANCE OPTIMIZATION: Initialize embed cache for StatusHandlersMixin
         self._embed_cache = {
@@ -113,39 +276,222 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         if hasattr(self, 'status_update_loop') and self.status_update_loop.is_running(): self.status_update_loop.cancel()
         if hasattr(self, 'inactivity_check_loop') and self.inactivity_check_loop.is_running(): self.inactivity_check_loop.cancel()
 
-        # Set up the various background loops
-        logger.info("Setting up and starting background loops...")
+        # Track if background loops have been started (to avoid double-start on reconnect)
+        self._background_loops_started = False
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """
+        Called when the bot is ready. This is the correct place to start background loops in PyCord.
+
+        NOTE: PyCord 2.x does NOT support cog_load() hook (only discord.py 2.0+).
+        on_ready() is called after bot connects and event loop is available.
+        """
+        # Only start loops once (on_ready can be called multiple times on reconnect)
+        if self._background_loops_started:
+            logger.info("[on_ready] Background loops already started, skipping")
+            return
+
+        logger.info("=== on_ready() called - Starting background loops ===")
+
+        # Ensure clean loop state
+        logger.info("Ensuring clean loop state...")
+        self._cancel_existing_loops()
+
+        # Initialize background loops with proper error handling
+        logger.info("Setting up background loops...")
+        self._setup_background_loops()
+
+        self._background_loops_started = True
+        logger.info("=== on_ready() complete - Background loops started ===")
+
+    def _setup_discord_event_listeners(self):
+        """Set up event listeners for Discord status message updates."""
+        try:
+            from services.infrastructure.event_manager import get_event_manager
+            event_manager = get_event_manager()
+
+            # Register listener for Discord update events from cache service
+            event_manager.register_listener('discord_update_needed', self._handle_discord_update_event)
+
+            logger.info("Discord update event listener registered")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Failed to setup Discord event listeners: {e}", exc_info=True)
+
+    def _handle_discord_update_event(self, event_data):
+        """Handle discord_update_needed events for automatic status message refresh."""
+        try:
+            # Extract relevant data from event
+            event_info = event_data.data
+            reason = event_info.get('reason', 'unknown')
+            trigger_source = event_info.get('trigger_source', 'unknown')
+
+            logger.info(f"Discord update event received: reason={reason}, source={trigger_source}")
+
+            # Schedule async updates using the bot's event loop
+            if self.bot and hasattr(self.bot, 'loop'):
+                # Update /ss messages (overview messages are updated automatically via event)
+                # NOTE: _auto_update_ss_messages already handles overview message updates
+                # No need to call _update_all_overview_messages_after_donation separately
+                asyncio.run_coroutine_threadsafe(
+                    self._auto_update_ss_messages(f"Event: {reason}", force_recreate=True),
+                    self.bot.loop
+                )
+
+                logger.info(f"Discord status message updates scheduled for: {reason}")
+            else:
+                logger.warning("Cannot schedule Discord updates: bot loop not available")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error handling Discord update event: {e}", exc_info=True)
+
+    def _cancel_existing_loops(self):
+        """Cancel any existing background loops."""
+        loops_to_check = [
+            'heartbeat_send_loop',
+            'status_update_loop',
+            'periodic_message_edit_loop',
+            'inactivity_check_loop',
+            'performance_cache_clear_loop'
+        ]
         
-        # Start status update loop (30 seconds interval)
-        self.bot.loop.create_task(self._start_loop_safely(self.status_update_loop, "Status Update Loop"))
-        
-        # Start periodic message edit loop (1 minute interval)
-        logger.info("Scheduling controlled start of DIRECTLY DEFINED periodic_message_edit_loop...")
-        self.bot.loop.create_task(self._start_periodic_message_edit_loop_safely())
-        
-        # Start inactivity check loop (1 minute interval)
-        self.bot.loop.create_task(self._start_loop_safely(self.inactivity_check_loop, "Inactivity Check Loop"))
-        
-        # PERFORMANCE OPTIMIZATION: Start cache clear loop (5 minute interval)
-        self.bot.loop.create_task(self._start_loop_safely(self.performance_cache_clear_loop, "Performance Cache Clear Loop"))
-        
-        # Start heartbeat loop if enabled (1 minute interval, configurable)
-        heartbeat_config = self.config.get('heartbeat', {})
-        if heartbeat_config.get('enabled', False):
-            self.bot.loop.create_task(self._start_loop_safely(self.heartbeat_send_loop, "Heartbeat Loop"))
-        
-        # Schedule initial status send with a delay
-        logger.info("Re-activating AUTOMATIC INITIAL STATUS SEND.")
-        self.bot.loop.create_task(self.send_initial_status_after_delay_and_ready(10))
+        for loop_name in loops_to_check:
+            if hasattr(self, loop_name):
+                loop = getattr(self, loop_name)
+                if loop.is_running():
+                    logger.info(f"Cancelling existing {loop_name}")
+                    loop.cancel()
+    
+    async def _track_task(self, task: asyncio.Task):
+        """Track an active task and remove it when done."""
+        async with self._task_lock:
+            self._active_tasks.add(task)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Task error: {e}", exc_info=True)
+        finally:
+            async with self._task_lock:
+                self._active_tasks.discard(task)
+
+    async def _start_interaction(self, channel_id: int) -> bool:
+        """Mark the start of a button interaction for a channel.
+
+        Returns:
+            bool: True if interaction started successfully, False if already active
+        """
+        async with self._interaction_lock:
+            if channel_id in self._active_interactions:
+                logger.debug(f"Interaction already active for channel {channel_id}")
+                return False
+            self._active_interactions.add(channel_id)
+            logger.debug(f"Started interaction for channel {channel_id}")
+            return True
+
+    async def _end_interaction(self, channel_id: int):
+        """Mark the end of a button interaction for a channel."""
+        async with self._interaction_lock:
+            self._active_interactions.discard(channel_id)
+            logger.debug(f"Ended interaction for channel {channel_id}")
+
+    async def _is_channel_interacting(self, channel_id: int) -> bool:
+        """Check if a channel currently has an active button interaction."""
+        async with self._interaction_lock:
+            return channel_id in self._active_interactions
+
+    def _setup_background_loops(self):
+        """Initialize and start all background loops with proper tracking."""
+        try:
+            # Start status update loop (30 seconds interval)
+            status_task = self.bot.loop.create_task(
+                self._start_loop_safely(self.status_update_loop, "Status Update Loop")
+            )
+            self.bot.loop.create_task(self._track_task(status_task))
+            
+            # Start periodic message edit loop (1 minute interval)
+            logger.info("Scheduling controlled start of periodic_message_edit_loop...")
+            edit_task = self.bot.loop.create_task(
+                self._start_periodic_message_edit_loop_safely()
+            )
+            self.bot.loop.create_task(self._track_task(edit_task))
+            
+            # Start inactivity check loop (1 minute interval)
+            inactivity_task = self.bot.loop.create_task(
+                self._start_loop_safely(self.inactivity_check_loop, "Inactivity Check Loop")
+            )
+            self.bot.loop.create_task(self._track_task(inactivity_task))
+            
+            # Start cache clear loop (5 minute interval)
+            cache_task = self.bot.loop.create_task(
+                self._start_loop_safely(self.performance_cache_clear_loop, "Performance Cache Clear Loop")
+            )
+            self.bot.loop.create_task(self._track_task(cache_task))
+            
+            # Member count updates moved to on-demand (during level-ups only)
+            
+            # Start heartbeat loop if enabled (supports legacy and new config)
+            heartbeat_enabled = False
+            try:
+                # Prefer latest cached config (reflects Web UI changes)
+                latest_config = load_config() or {}
+            except (OSError, KeyError, ValueError):
+                latest_config = {}
+
+            # New format
+            heartbeat_cfg_obj = latest_config.get('heartbeat') if isinstance(latest_config, dict) else None
+            if isinstance(heartbeat_cfg_obj, dict):
+                heartbeat_enabled = bool(heartbeat_cfg_obj.get('enabled', False))
+
+            # Legacy enable if a numeric channel id exists at root
+            legacy_channel_id = (latest_config or self.config).get('heartbeat_channel_id')
+            if not heartbeat_enabled and legacy_channel_id is not None:
+                legacy_str = str(legacy_channel_id)
+                if legacy_str.isdigit():
+                    heartbeat_enabled = True
+
+            if heartbeat_enabled:
+                heartbeat_task = self.bot.loop.create_task(
+                    self._start_loop_safely(self.heartbeat_send_loop, "Heartbeat Loop")
+                )
+                self.bot.loop.create_task(self._track_task(heartbeat_task))
+            
+            # Schedule initial status send with simple delay
+            logger.info("Scheduling initial status send...")
+            
+            async def send_initial_after_delay():
+                try:
+                    await self.bot.wait_until_ready()
+                    logger.info("Bot ready - waiting 10 seconds before initial status send")
+                    await asyncio.sleep(10)
+                    logger.info("Starting initial status send")
+                    await self.send_initial_status()
+                    logger.info("Initial status send completed")
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"Error in initial status send: {e}", exc_info=True)
+            
+            self.bot.loop.create_task(send_initial_after_delay())
+            
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error setting up background loops: {e}", exc_info=True)
+            raise
 
         # Initialize global status cache
         self.update_global_status_cache()
-        
-        logger.info("DockerControlCog __init__ complete. Background loops and initial status send scheduled.")
+
+        logger.info("Background loops setup complete. Initial status send scheduled.")
 
     # --- PERIODIC MESSAGE EDIT LOOP (FULL LOGIC, MOVED DIRECTLY INTO COG) ---
     @tasks.loop(minutes=1, reconnect=True)
     async def periodic_message_edit_loop(self):
+        """Periodically checks and edits messages in channels that require updates."""
+        config = load_config()
+        if not config:
+            logger.error("Periodic Edit Loop: Could not load configuration. Skipping cycle.")
+            return
+        
         logger.info("--- DIRECT COG periodic_message_edit_loop cycle --- Starting Check --- ")
         if not self.initial_messages_sent:
              logger.debug("Direct Cog Periodic edit loop: Initial messages not sent yet, skipping.")
@@ -158,12 +504,15 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         tasks_to_run = []
         now_utc = datetime.now(timezone.utc)
         
-        channel_permissions_config = self.config.get('channel_permissions', {})
-        # Ensure DEFAULT_CONFIG is accessible here if not already a class/instance variable
-        # It was imported at the top of the file: from utils.config_loader import DEFAULT_CONFIG
-        default_perms = DEFAULT_CONFIG.get('default_channel_permissions', {})
+        channel_permissions_config = config.get('channel_permissions', {})
+        # Get default permissions from config
+        default_perms = {}
 
-        for channel_id in list(self.channel_server_message_ids.keys()):
+        # Create snapshot to avoid TOCTOU issues with concurrent dict modifications
+        channel_ids_snapshot = list(self.channel_server_message_ids.keys())
+
+        for channel_id in channel_ids_snapshot:
+            # Re-check existence after snapshot (dict may have changed)
             if channel_id not in self.channel_server_message_ids or not self.channel_server_message_ids[channel_id]:
                 logger.debug(f"Direct Cog Periodic Edit Loop: Skipping channel {channel_id}, no server messages tracked or channel entry removed.")
                 continue
@@ -184,7 +533,11 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 self.last_message_update_time[channel_id] = {}
                 logger.info(f"Direct Cog Periodic Edit Loop: Initialized last_message_update_time for channel {channel_id}.")
 
-            for display_name in list(server_messages_in_channel.keys()):
+            # Create snapshot to avoid TOCTOU issues
+            display_names_snapshot = list(server_messages_in_channel.keys())
+
+            for display_name in display_names_snapshot:
+                # Re-check existence after snapshot
                 if display_name not in server_messages_in_channel:
                     logger.debug(f"Direct Cog Periodic Edit Loop: Server '{display_name}' no longer tracked in channel {channel_id}. Skipping.")
                     continue
@@ -192,87 +545,75 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 message_id = server_messages_in_channel[display_name]
                 last_update_time = self.last_message_update_time[channel_id].get(display_name)
 
-                should_update = False
-                if last_update_time is None:
-                    should_update = True
-                    logger.info(f"Direct Cog Periodic Edit Loop: Scheduling edit for '{display_name}' in channel {channel_id} (Message ID: {message_id}). Reason: No previous update time recorded.")
-                elif (now_utc - last_update_time) >= update_interval_delta:
-                    should_update = True
-                    logger.info(f"Direct Cog Periodic Edit Loop: Scheduling edit for '{display_name}' in channel {channel_id} (Message ID: {message_id}). Reason: Interval passed (Last: {last_update_time}, Now: {now_utc}, Interval: {update_interval_delta}).")
-                else:
-                    time_since_last_update = now_utc - last_update_time
-                    time_to_next_update = update_interval_delta - time_since_last_update
-                    logger.debug(f"Direct Cog Periodic Edit Loop: Skipping edit for '{display_name}' in channel {channel_id} (Message ID: {message_id}). Interval not passed. Time since last: {time_since_last_update}. Next update in: {time_to_next_update}.")
+                # EARLY CHECK: Special case for overview or admin_overview messages
+                if display_name == "overview":
+                    # SERVICE FIRST: Use StatusOverviewService for overview update decisions
+                    try:
+                        from services.discord.status_overview_service import get_status_overview_service
+                        overview_service = get_status_overview_service()
 
-                if should_update:
-                    # IMPROVED: Skip refresh for containers in pending state
-                    if display_name in self.pending_actions:
-                        pending_timestamp = self.pending_actions[display_name]['timestamp']
-                        pending_duration = (now_utc - pending_timestamp).total_seconds()
-                        if pending_duration < 120:  # Same timeout as in status_handlers.py
-                            logger.info(f"Direct Cog Periodic Edit Loop: Skipping edit for '{display_name}' - container is pending (duration: {pending_duration:.1f}s)")
-                            continue  # Skip this container
-                    
-                    # PERFORMANCE OPTIMIZATION: Smart offline container handling
-                    current_server_conf = next((s for s in self.config.get('servers', []) if s.get('name', s.get('docker_name')) == display_name), None)
-                    if current_server_conf and display_name != "overview":
-                        docker_name = current_server_conf.get('docker_name')
-                        if docker_name:
-                                                         # Check if container is offline from status cache
-                             cached_status = self.status_cache.get(docker_name)
-                             if cached_status:
-                                 try:
-                                     # Handle both cache formats: direct tuple or {'data': tuple, 'timestamp': datetime}
-                                     if isinstance(cached_status, dict) and 'data' in cached_status:
-                                         # New format: extract data from dict
-                                         status_data = cached_status['data']
-                                     else:
-                                         # Old format: direct tuple
-                                         status_data = cached_status
-                                     
-                                     # Ensure status_data is subscriptable (list, tuple, etc.)
-                                     if not hasattr(status_data, '__getitem__') or not hasattr(status_data, '__len__'):
-                                         logger.debug(f"Cache data for {docker_name} is not subscriptable: {type(status_data)}")
-                                         continue
-                                     
-                                     # Handle different tuple formats: (display_name, is_running, cpu, ram, uptime, details_allowed)
-                                     if len(status_data) >= 6:
-                                         _, is_running, _, _, _, _ = status_data
-                                     elif len(status_data) >= 2:
-                                         _, is_running = status_data[:2]  # Take only first 2 values
-                                     else:
-                                         logger.debug(f"Unexpected cache data format for {docker_name}: {len(status_data)} values")
-                                         continue
-                                 except (ValueError, TypeError, KeyError, IndexError) as e:
-                                     logger.debug(f"Error unpacking cache for {docker_name}: {e}")
-                                     continue
-                                 
-                                 if not is_running:
-                                    # For offline containers, use reduced update interval (5 minutes instead of 1)
-                                    offline_interval_minutes = 5
-                                    last_offline_update = self.last_message_update_time.get(channel_id, {}).get(display_name)
-                                    if last_offline_update:
-                                        time_since_offline_update = now_utc - last_offline_update
-                                        offline_threshold = timedelta(minutes=offline_interval_minutes)
-                                        
-                                        if time_since_offline_update < offline_threshold:
-                                            logger.debug(f"Direct Cog Periodic Edit Loop: Skipping offline container '{display_name}' - last update {time_since_offline_update} ago (offline interval: {offline_interval_minutes}m)")
-                                            continue  # Skip offline container update
-                    
-                    allow_toggle_for_channel = _channel_has_permission(channel_id, 'control', self.config)
-                    # Special case for overview message
-                    if display_name == "overview":
-                        tasks_to_run.append(self._update_overview_message(channel_id, message_id))
-                    else:
-                        # ULTRA-PERFORMANCE: Collect container names for bulk fetching
-                        current_server_conf = next((s for s in self.config.get('servers', []) if s.get('name', s.get('docker_name')) == display_name), None)
-                        if current_server_conf:
-                            docker_name = current_server_conf.get('docker_name')
-                            if docker_name:
-                                all_container_names.add(docker_name)
-                        
-                        # Regular server message
-                        tasks_to_run.append(self._edit_single_message_wrapper(channel_id, display_name, message_id, self.config, allow_toggle_for_channel))
+                        last_activity = self.last_channel_activity.get(channel_id)
+                        decision = overview_service.make_update_decision(
+                            channel_id=channel_id,
+                            global_config=config,
+                            last_update_time=last_update_time,
+                            reason="periodic_overview_check",
+                            last_channel_activity=last_activity
+                        )
+
+                        if decision.should_update:
+                            logger.debug(f"SERVICE_FIRST: Overview update approved - {decision.reason}")
+                            tasks_to_run.append(self._update_overview_message(channel_id, message_id, "overview"))
+                        else:
+                            logger.debug(f"SERVICE_FIRST: Overview update skipped - {decision.skip_reason}")
+
+                    except (ImportError, AttributeError, RuntimeError) as service_error:
+                        logger.warning(f"SERVICE_FIRST: Error in overview decision service: {service_error}")
+                        # Fallback to original logic on service error
+                        tasks_to_run.append(self._update_overview_message(channel_id, message_id, "overview"))
+
+                    continue  # Overview message handled, move to next message
+
+                # EARLY CHECK: Special case for admin_overview message - uses same update logic
+                if display_name == "admin_overview":
+                    # Admin overview uses the same update logic as standard overview
+                    try:
+                        from services.discord.status_overview_service import get_status_overview_service
+                        overview_service = get_status_overview_service()
+
+                        last_activity = self.last_channel_activity.get(channel_id)
+                        decision = overview_service.make_update_decision(
+                            channel_id=channel_id,
+                            global_config=config,
+                            last_update_time=last_update_time,
+                            reason="periodic_admin_overview_check",
+                            last_channel_activity=last_activity
+                        )
+
+                        if decision.should_update:
+                            logger.debug(f"SERVICE_FIRST: Admin Overview update approved - {decision.reason}")
+                            tasks_to_run.append(self._update_overview_message(channel_id, message_id, "admin_overview"))
+                        else:
+                            logger.debug(f"SERVICE_FIRST: Admin Overview update skipped - {decision.skip_reason}")
+
+                    except (ImportError, AttributeError, RuntimeError) as service_error:
+                        logger.warning(f"SERVICE_FIRST: Error in admin overview decision service: {service_error}")
+                        # Fallback to simple update interval check
+                        if last_update_time is None or (now_utc - last_update_time) >= update_interval_delta:
+                            tasks_to_run.append(self._update_overview_message(channel_id, message_id, "admin_overview"))
+
+                    continue  # Admin overview message handled, move to next message
+
+                # CRITICAL FIX: Skip individual server messages - we only use overview messages now
+                # Individual container messages are now private per architecture change
+                logger.debug(f"Skipping individual server message for '{display_name}' - only overview messages are supported")
+
+                # Clean up the phantom entry from tracking
+                if display_name not in ["overview", "admin_overview"]:
+                    logger.warning(f"Removing phantom individual server entry '{display_name}' from channel {channel_id} tracking")
+                    del server_messages_in_channel[display_name]
+                    if display_name in self.last_message_update_time.get(channel_id, {}):
+                        del self.last_message_update_time[channel_id][display_name]
             
         if tasks_to_run:
             # ULTRA-PERFORMANCE: Bulk update status cache before processing tasks
@@ -315,8 +656,10 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                                 slow_tasks.append(task)
                             else:
                                 fast_tasks.append(task)
-                        except:
-                            fast_tasks.append(task)  # Default to fast if we can't determine
+                        except (AttributeError, ValueError, KeyError) as frame_error:
+                            # Default to fast if we can't determine container type from frame inspection
+                            logger.debug(f"Failed to extract container name from task frame, defaulting to fast batch: {frame_error}")
+                            fast_tasks.append(task)
                     else:
                         fast_tasks.append(task)  # Default to fast if we can't determine
                 
@@ -382,7 +725,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 else:  # Over 8 seconds - needs investigation
                     logger.warning(f"Direct Cog Periodic Edit Loop: SLOW batched processing took {batch_time:.1f}ms")
                 
-            except Exception as e:
+            except (discord.errors.DiscordException, RuntimeError, OSError, KeyError) as e:
                 logger.error(f"Critical error during batched message edit processing: {e}", exc_info=True)
                 error_count = total_tasks  # Assume all failed
 
@@ -433,8 +776,8 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             """
             channel_permissions = current_config.get('channel_permissions', {})
             channel_config_specific = channel_permissions.get(str(channel_id))
-            default_recreate_enabled = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('recreate_messages_on_inactivity', True)
-            default_timeout_minutes = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('inactivity_timeout_minutes', 10)
+            default_recreate_enabled = True
+            default_timeout_minutes = 10
             recreate_enabled = default_recreate_enabled
             timeout_minutes = default_timeout_minutes
             if channel_config_specific:
@@ -464,11 +807,31 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 if not loop_task.is_running():
                     loop_task.start()
                     logger.info(f"{loop_name} re-started successfully via _start_loop_safely after check.")
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
             logger.error(f"Error starting {loop_name} via _start_loop_safely: {e}", exc_info=True)
 
     async def _start_periodic_message_edit_loop_safely(self):
         await self._start_loop_safely(self.periodic_message_edit_loop, "Periodic Message Edit Loop (Direct Cog)")
+
+    async def _clean_sweep_bot_messages(self, channel, reason: str):
+        """Clean sweep: Delete all bot messages in channel using ChannelCleanupService."""
+        try:
+            result = await self.cleanup_service.clean_sweep_bot_messages(
+                channel=channel,
+                reason=reason,
+                message_limit=100
+            )
+
+            if result.success:
+                logger.info(f"✅ CLEAN SWEEP SUCCESS: Cleaned {result.messages_deleted}/{result.messages_found} "
+                           f"bot messages from channel {channel.id} in {result.execution_time_ms:.1f}ms")
+            else:
+                logger.warning(f"⚠️ CLEAN SWEEP PARTIAL: Cleaned {result.messages_deleted}/{result.messages_found} "
+                              f"messages from channel {channel.id} (error: {result.error})")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"❌ CLEAN SWEEP FAILED for channel {channel.id}: {e}", exc_info=True)
+            # Don't raise - clean sweep failure shouldn't stop recovery
 
     async def send_initial_status_after_delay_and_ready(self, delay_seconds: int):
         """Waits for bot readiness, then delays, then sends initial status."""
@@ -478,7 +841,7 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             await asyncio.sleep(delay_seconds)
             logger.info(f"Executing send_initial_status from __init__ after delay.")
             await self.send_initial_status()
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
             logger.error(f"Error in send_initial_status_after_delay_and_ready: {e}", exc_info=True)
 
     @commands.Cog.listener()
@@ -491,10 +854,9 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
 
         channel_id = message.channel.id
         channel_permissions = self.config.get('channel_permissions', {})
-        # Need to access DEFAULT_CONFIG correctly, it might not be directly available as self.DEFAULT_CONFIG
-        # It's imported in this module
-        default_perms_inactivity = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('recreate_messages_on_inactivity', True)
-        default_perms_timeout = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('inactivity_timeout_minutes', 10)
+        # Use direct default values since DEFAULT_CONFIG was removed
+        default_perms_inactivity = True
+        default_perms_timeout = 10
 
         channel_config = channel_permissions.get(str(channel_id))
 
@@ -515,208 +877,189 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
     # - send_server_status
 
     # Send helpers (remain here as they interact closely with Cog state)
-    async def _send_control_panel_and_statuses(self, channel: discord.TextChannel):
-        """Sends the main control panel and all server statuses to a channel."""
-        config = self.config
-        servers = config.get('servers', [])
-        lang = config.get('language', 'de')
-        logger.info(f"Sending control panel and statuses to channel {channel.name} ({channel.id})")
-        # Optional: Send an initial "Control Panel" message if desired
-        # await channel.send(_("**Docker Control Panel**"))
-
-        # Get ordered server names directly from the class attribute (loaded from persistent file)
-        ordered_docker_names = self.ordered_server_names
-        logger.debug(f"Using ordered_server_names from class attribute: {ordered_docker_names}")
-        
-        # Create a dictionary for quick server lookup by docker_name
-        servers_by_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
-        
-        # Create an ordered list of server configurations
-        ordered_servers = []
-        seen_docker_names = set()
-        
-        # First add servers in the defined order
-        for docker_name in ordered_docker_names:
-            if docker_name in servers_by_name:
-                ordered_servers.append(servers_by_name[docker_name])
-                seen_docker_names.add(docker_name)
-        
-        # Add any servers that weren't in the ordered list
-        for server in servers:
-            docker_name = server.get('docker_name')
-            if docker_name and docker_name not in seen_docker_names:
-                ordered_servers.append(server)
-                seen_docker_names.add(docker_name)
-        
-        # Fallback: If ordered_servers is empty, use all servers
-        if not ordered_servers:
-            ordered_servers = servers
-            logger.debug("No server order found, using default order from servers list")
-        
-        logger.debug(f"Final ordered server list: {[s.get('name', s.get('docker_name')) for s in ordered_servers]}")
-
-        results = []
-        for server_conf in ordered_servers:
-            try:
-                result = await self.send_server_status(channel, server_conf, config, allow_toggle=True, force_collapse=False)
-                results.append(result)
-            except Exception as e:
-                results.append(e)
-                logger.error(f"Exception while sending status for {server_conf.get('name', server_conf.get('docker_name'))} to {channel.id}: {e}", exc_info=True)
-
-        # Logging results (optional)
-        success_count = 0
-        fail_count = 0
-        for i, result_item in enumerate(results):
-            server_conf_log = ordered_servers[i] # Get corresponding server_conf for logging
-            name = server_conf_log.get('name', server_conf_log.get('docker_name', 'Unknown'))
-            if isinstance(result_item, Exception):
-                fail_count += 1
-                # Error already logged above if it was caught directly
-            elif isinstance(result_item, discord.Message):
-                success_count += 1
-            else: # None or other unexpected type
-                fail_count += 1
-                logger.warning(f"No message object or exception returned for {name} in {channel.id}, result type: {type(result_item)}")
-
-        logger.info(f"Finished sending initial statuses to {channel.name}: {success_count} success, {fail_count} failure.")
-
-    async def _send_all_server_statuses(self, channel: discord.TextChannel, allow_toggle: bool = True, force_collapse: bool = False):
-        """Sends or updates status messages for ALL configured servers in a channel.
-        Uses send_server_status, which only reads from the cache.
-        Accepts allow_toggle to control the display of the toggle button.
-        """
-        config = self.config
-        servers = config.get('servers', [])
-        lang = config.get('language', 'de')
-        logger.info(f"Sending all server statuses to channel {channel.name} ({channel.id}), allow_toggle={allow_toggle}, force_collapse={force_collapse}")
-
-        # Get ordered server names directly from the class attribute (loaded from persistent file)
-        ordered_docker_names = self.ordered_server_names
-        logger.debug(f"Using ordered_server_names from class attribute: {ordered_docker_names}")
-        
-        # Create a dictionary for quick server lookup by docker_name
-        servers_by_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
-        
-        # Create an ordered list of server configurations
-        ordered_servers = []
-        seen_docker_names = set()
-        
-        # First add servers in the defined order
-        for docker_name in ordered_docker_names:
-            if docker_name in servers_by_name:
-                ordered_servers.append(servers_by_name[docker_name])
-                seen_docker_names.add(docker_name)
-        
-        # Add any servers that weren't in the ordered list
-        for server in servers:
-            docker_name = server.get('docker_name')
-            if docker_name and docker_name not in seen_docker_names:
-                ordered_servers.append(server)
-                seen_docker_names.add(docker_name)
-        
-        # Fallback: If ordered_servers is empty, use all servers
-        if not ordered_servers:
-            ordered_servers = servers
-            logger.debug("No server order found, using default order from servers list")
-        
-        logger.debug(f"Final ordered server list: {[s.get('name', s.get('docker_name')) for s in ordered_servers]}")
-
-        results = []
-        for server_conf in ordered_servers:
-            try:
-                result = await self.send_server_status(channel, server_conf, config, allow_toggle, force_collapse)
-                results.append(result)
-            except Exception as e:
-                results.append(e)
-                logger.error(f"Exception while sending/updating status for {server_conf.get('name', server_conf.get('docker_name'))} to {channel.id}: {e}", exc_info=True)
-
-        # Logging results (optional)
-        success_count = 0
-        fail_count = 0
-        for i, result_item in enumerate(results):
-            server_conf_log = ordered_servers[i] # Get corresponding server_conf for logging
-            name = server_conf_log.get('name', server_conf_log.get('docker_name', 'Unknown'))
-            if isinstance(result_item, Exception):
-                fail_count += 1
-                # Error already logged above
-            elif isinstance(result_item, discord.Message):
-                success_count += 1
-            elif result_item is None:
-                 logger.debug(f"Status for {name} likely unchanged or failed fetch, no message sent/edited.") # Adjusted log
-            else:
-                fail_count += 1
-                logger.warning(f"Received unexpected result type {type(result_item)} for {name} in {channel.id}") # Adjusted log
-
-        logger.info(f"Finished sending/updating statuses to {channel.name}: {success_count} success, {fail_count} failure.")
-
-    async def _regenerate_channel(self, channel: discord.TextChannel, mode: str):
-        """Deletes old bot messages and resends according to the mode."""
+    async def _send_control_panel_and_statuses(self, channel: discord.TextChannel) -> None:
+        """Send Admin Overview to control channels."""
         try:
-            logger.info(f"Regenerating channel {channel.name} ({channel.id}) in mode '{mode}'")
-            
-            # Clear message ID cache for this channel
-            if channel.id in self.channel_server_message_ids:
-                # If we're in status mode, only clear the "overview" key
-                if mode == 'status' and "overview" in self.channel_server_message_ids[channel.id]:
-                    # Only clear the overview message tracking
-                    del self.channel_server_message_ids[channel.id]["overview"]
-                    logger.info(f"Cleared 'overview' message ID cache for channel {channel.id}")
-                else:
-                    # Clear all tracking for this channel
-                    del self.channel_server_message_ids[channel.id]
-                    logger.info(f"Cleared all message ID cache for channel {channel.id}")
-            
-            await self.delete_bot_messages(channel, limit=300)
-            await asyncio.sleep(1.0)
-            if mode == 'control':
-                await self._send_control_panel_and_statuses(channel)
-            elif mode == 'status':
-                # Use serverstatus format (overview message) instead of individual messages
-                config = self.config
-                servers = config.get('servers', [])
-                
-                # Sort servers using ordered_server_names
-                ordered_docker_names = self.ordered_server_names
-                servers_by_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
-                
-                # Create ordered list of servers
-                ordered_servers = []
-                seen_docker_names = set()
-                
-                # First add servers in defined order
-                for docker_name in ordered_docker_names:
-                    if docker_name in servers_by_name:
-                        ordered_servers.append(servers_by_name[docker_name])
-                        seen_docker_names.add(docker_name)
-                
-                # Add any remaining servers
-                for server in servers:
-                    docker_name = server.get('docker_name')
-                    if docker_name and docker_name not in seen_docker_names:
-                        ordered_servers.append(server)
-                        seen_docker_names.add(docker_name)
-                
-                # Create the overview embed
-                embed = await self._create_overview_embed(ordered_servers, config)
-                
-                # Send the embed
-                overview_message = await channel.send(embed=embed)
-                
-                # Store message ID for later updates
+            current_config = load_config()
+            if not current_config:
+                logger.error(f"Send Control Panel: Could not load configuration for channel {channel.id}.")
+                return
+
+            logger.info(f"Sending admin overview to control channel {channel.name} ({channel.id})")
+
+            # CACHE WARMUP: Populate cache BEFORE creating admin overview
+            # This prevents showing 🔄 loading icons during channel regeneration
+            logger.info("Starting cache population for admin overview (blocking to ensure data availability)")
+
+            # Ensure semaphore exists
+            if not hasattr(self, '_status_update_semaphore'):
+                self._status_update_semaphore = asyncio.Semaphore(1)
+
+            # Wait for cache to be populated before creating embed
+            await self._background_cache_population()
+            logger.info("Cache population complete for admin overview - proceeding with embed creation")
+
+            # Get all server configurations
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+            if not servers:
+                logger.warning(f"No servers configured for channel {channel.id}")
+                return
+
+            # Sort servers by order
+            ordered_servers = sorted(servers, key=lambda s: s.get('order', 999))
+
+            # Create Admin Overview embed with CPU and RAM info
+            embed, _, has_running = await self._create_admin_overview_embed(ordered_servers, current_config, force_refresh=True)
+
+            # Import AdminOverviewView from admin_overview module
+            from .admin_overview import AdminOverviewView
+
+            # Create the Admin Overview view with buttons
+            view = AdminOverviewView(self, channel.id, has_running)
+
+            # Send the Admin Overview message
+            try:
+                message = await channel.send(embed=embed, view=view)
+
+                # Track the message for automatic updates
                 if channel.id not in self.channel_server_message_ids:
                     self.channel_server_message_ids[channel.id] = {}
-                self.channel_server_message_ids[channel.id]["overview"] = overview_message.id
-                
-                # Set last update time
+                self.channel_server_message_ids[channel.id]['admin_overview'] = message.id
+
+                # Initialize update time tracking
                 if channel.id not in self.last_message_update_time:
                     self.last_message_update_time[channel.id] = {}
+                self.last_message_update_time[channel.id]['admin_overview'] = datetime.now(timezone.utc)
+
+                logger.info(f"Successfully sent Admin Overview to control channel {channel.name}")
+            except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                logger.error(f"Error sending Admin Overview to channel: {e}", exc_info=True)
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in _send_control_panel_and_statuses: {e}", exc_info=True)
+
+    async def _send_all_server_statuses(self, channel: discord.TextChannel, allow_toggle: bool = True, force_collapse: bool = False):
+        """Sends only the overview embed to a status channel (no individual server messages)."""
+        try:
+            config = load_config()
+            if not config:
+                logger.error(f"Send All Statuses: Could not load configuration for channel {channel.id}.")
+                return
+                
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+            if not servers:
+                logger.warning(f"No servers configured to send status in channel {channel.name}")
+                return
+
+            logger.info(f"Sending overview embed to status channel {channel.name} ({channel.id})")
+
+            # CACHE WARMUP: Populate cache BEFORE creating overview embed
+            # This prevents showing 🔄 loading icons during channel regeneration
+            logger.info("Starting cache population for overview embed (blocking to ensure data availability)")
+
+            # Ensure semaphore exists
+            if not hasattr(self, '_status_update_semaphore'):
+                self._status_update_semaphore = asyncio.Semaphore(1)
+
+            # Wait for cache to be populated before creating embed
+            await self._background_cache_population()
+            logger.info("Cache population complete for overview embed - proceeding with embed creation")
+
+            # Send ONLY the overview embed (status channels don't need individual server messages)
+            try:
+                # Sort servers by the 'order' field from container configurations
+                ordered_servers = sorted(servers, key=lambda s: s.get('order', 999))
+                        
+                # Set collapsed state (force_collapse overrides)
+                channel_id = channel.id
+                if force_collapse:
+                    self.mech_expanded_states[channel_id] = False
+                    self.mech_state_manager.set_expanded_state(channel_id, False)
+                
+                embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config)
+                
+                # Create MechView with expand/collapse buttons for mech status
+                from .control_ui import MechView
+                view = MechView(self, channel_id)
+                
+                # Send with animation and button if available
+                if animation_file:
+                    logger.info(f"✅ Sending overview message with animation and Mech buttons to {channel.name}")
+                    message = await self._send_message_with_files(channel, embed, animation_file, view)
+                else:
+                    logger.warning(f"⚠️ Sending overview message WITHOUT animation to {channel.name}")
+                    message = await self._send_message_with_files(channel, embed, None, view)
+                
+                # Track ONLY the overview message for status channels
+                # Clear any existing server message tracking (status channels only have overview)
+                if channel.id not in self.channel_server_message_ids:
+                    self.channel_server_message_ids[channel.id] = {}
+                else:
+                    # Clear all previous tracking except for overview
+                    self.channel_server_message_ids[channel.id].clear()
+                
+                self.channel_server_message_ids[channel.id]["overview"] = message.id
+                
+                # Initialize update time tracking for overview only
+                if channel.id not in self.last_message_update_time:
+                    self.last_message_update_time[channel.id] = {}
+                else:
+                    # Clear all previous time tracking except for overview
+                    self.last_message_update_time[channel.id].clear()
+                    
                 self.last_message_update_time[channel.id]["overview"] = datetime.now(timezone.utc)
                 
-                logger.info(f"Created overview message for channel {channel.id} during regeneration")
-            logger.info(f"Regeneration for channel {channel.name} completed.")
-        except Exception as e:
-            logger.error(f"Error regenerating channel {channel.name}: {e}", exc_info=True)
+                logger.info(f"✅ Successfully sent overview embed to status channel {channel.name}")
+                
+            except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                logger.error(f"Error sending overview embed to {channel.name}: {e}", exc_info=True)
+            
+            # NOTE: Individual server status messages removed for status channels
+            # Status channels only show the overview embed with all servers
+            
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in _send_all_server_statuses: {e}", exc_info=True)
+
+    async def _regenerate_channel(self, channel: discord.TextChannel, mode: str, config: dict):
+        """Deletes all bot messages and posts a fresh control panel and status messages."""
+        if not config:
+            logger.error(f"Regenerate Channel: Could not load configuration. Aborting.")
+            raise ValueError("Configuration not available for channel regeneration")
+
+        if mode not in ['control', 'status']:
+            logger.error(f"Invalid regeneration mode '{mode}' for channel {channel.name}. Must be 'control' or 'status'.")
+            raise ValueError(f"Invalid regeneration mode: {mode}")
+
+        logger.info(f"Regenerating channel {channel.name} ({channel.id}) in mode '{mode}'")
+
+        # --- Delete old messages ---
+        try:
+            logger.info(f"Deleting old bot messages in {channel.name}...")
+            await self.delete_bot_messages(channel, limit=300) # Limit adjustable
+            await asyncio.sleep(1.0) # Short pause after deleting
+            logger.info(f"Finished deleting messages in {channel.name}.")
+        except (discord.errors.HTTPException, discord.errors.NotFound) as e_delete:
+            logger.error(f"Error deleting messages in {channel.name}: {e_delete}", exc_info=True)
+            # Continue even if deletion fails - regeneration might still work
+
+        # --- Send new messages based on mode ---
+        try:
+            if mode == 'control':
+                logger.debug(f"Sending control panel and statuses to {channel.name}")
+                await self._send_control_panel_and_statuses(channel)
+            elif mode == 'status':
+                logger.debug(f"Sending status-only messages to {channel.name}")
+                await self._send_all_server_statuses(channel, allow_toggle=False, force_collapse=True)
+
+            logger.info(f"✅ Regeneration for channel {channel.name} completed successfully.")
+
+        except (discord.errors.HTTPException, discord.errors.Forbidden) as e_send:
+            logger.error(f"❌ Error sending new messages to {channel.name} in mode '{mode}': {e_send}", exc_info=True)
+            raise RuntimeError(f"Failed to send new messages during regeneration: {e_send}") from e_send
 
     async def send_initial_status(self):
         """Sends the initial status messages after a short delay."""
@@ -725,260 +1068,831 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         try:
             await self.bot.wait_until_ready() # Ensure bot is ready before fetching channels
             
-            # Directly update the cache before waiting for loops
-            logger.info("Running status update once to populate the cache")
-            await self.status_update_loop()
-            logger.info("Initial cache update completed")
+            # CACHE WARMUP: Populate cache BEFORE sending initial messages
+            # This prevents showing 🔄 loading icons on first display
+            logger.info("Starting cache population (blocking to ensure data availability)")
 
-            # --- Added: 5-second delay ---
-            wait_seconds = 5
-            logger.info(f"Waiting {wait_seconds} seconds for cache loop to potentially run")
-            await asyncio.sleep(wait_seconds)
-            logger.info("Wait finished. Proceeding with initial status send")
-            # --- End delay ---
+            # Ensure semaphore exists
+            if not hasattr(self, '_status_update_semaphore'):
+                self._status_update_semaphore = asyncio.Semaphore(1)
 
-            current_config = self.config
-            initial_post_channels = []
+            # Wait for cache to be populated before sending messages
+            await self._background_cache_population()
+
+            logger.info("Cache population complete - proceeding with status send")
+
+            logger.info("Proceeding with initial status send")
+
+            current_config = load_config()
+            if not current_config:
+                logger.error("Could not load configuration for initial status send.")
+                return
+                
+            # Get channel permissions from config
             channel_permissions = current_config.get('channel_permissions', {})
-            logger.debug("Searching for channels with initial posting enabled")
-
-            tasks = []
-            for channel_id_str, data in channel_permissions.items():
-                if channel_id_str.isdigit():
+            logger.info(f"Found {len(channel_permissions)} channels in config")
+            
+            # Process each channel
+            for channel_id_str, channel_config in channel_permissions.items():
+                try:
+                    # Convert channel ID to int
+                    if not channel_id_str.isdigit():
+                        logger.warning(f"Invalid channel ID: {channel_id_str}")
+                        continue
                     channel_id = int(channel_id_str)
-                    # Check if initial posting is enabled for this channel (default to False if key missing)
-                    if data.get('post_initial', False):
-                        # Check permissions and determine mode
-                        has_control_perm = _channel_has_permission(channel_id, 'control', current_config)
-                        has_status_perm = _channel_has_permission(channel_id, 'serverstatus', current_config)
-                        mode_to_regenerate = None
+                    
+                    # Check if initial posting is enabled
+                    if not channel_config.get('post_initial', False):
+                        logger.debug(f"Channel {channel_id}: post_initial is disabled")
+                        continue
                         
-                        if has_control_perm:
-                            mode_to_regenerate = 'control'
-                            logger.debug(f"Channel {channel_id} has 'control' and 'post_initial'. Mode: control.")
-                        elif has_status_perm:
-                            mode_to_regenerate = 'status'
-                            logger.debug(f"Channel {channel_id} has 'serverstatus' and 'post_initial'. Mode: status.")
+                    # Get channel permissions
+                    channel_commands = channel_config.get('commands', {})
+                    has_control = channel_commands.get('control', False)
+                    has_status = channel_commands.get('serverstatus', False)
+                    
+                    logger.info(f"Channel {channel_id}: post_initial=True, control={has_control}, status={has_status}")
+                    
+                    # Determine mode
+                    mode = None
+                    if has_control:
+                        mode = 'control'
+                    elif has_status:
+                        mode = 'status'
+                    else:
+                        logger.warning(f"Channel {channel_id} has neither control nor status permissions")
+                        continue
                         
-                        # If a mode was determined, fetch channel and add task
-                        if mode_to_regenerate:
-                            try:
-                                channel = await self.bot.fetch_channel(channel_id)
-                                if isinstance(channel, discord.TextChannel):
-                                    logger.info(f"Found channel '{channel.name}' ({channel_id}) for initial post in '{mode_to_regenerate}' mode")
-                                    tasks.append(self._regenerate_channel(channel, mode_to_regenerate))
-                                else:
-                                    logger.warning(f"Channel ID {channel_id} is not a text channel")
-                            except discord.NotFound:
-                                logger.warning(f"Channel ID {channel_id} not found")
-                            except discord.Forbidden:
-                                logger.warning(f"Missing permissions to fetch channel {channel_id}")
-                            except Exception as e:
-                                logger.error(f"Error processing channel {channel_id}: {e}")
-                # else: post_initial is False or missing
+                    # Get channel
+                    try:
+                        channel = await self.bot.fetch_channel(channel_id)
+                        if not isinstance(channel, discord.TextChannel):
+                            logger.warning(f"Channel {channel_id} is not a text channel")
+                            continue
+                            
+                        logger.info(f"Regenerating channel {channel.name} ({channel_id}) in {mode} mode")
+                        
+                        # Delete old messages
+                        try:
+                            await self.delete_bot_messages(channel)
+                            await asyncio.sleep(1)  # Short pause after deletion
+                        except (discord.errors.DiscordException, RuntimeError) as e:
+                            logger.error(f"Error deleting messages in {channel.name}: {e}", exc_info=True)
+                            
+                        # Clear any leftover individual server message tracking from old architecture
+                        if channel.id in self.channel_server_message_ids:
+                            old_entries = list(self.channel_server_message_ids[channel.id].keys())
+                            for entry_key in old_entries:
+                                if entry_key not in ["overview", "admin_overview"]:
+                                    logger.info(f"Clearing leftover individual server entry '{entry_key}' from channel {channel.id}")
+                                    del self.channel_server_message_ids[channel.id][entry_key]
 
-            if tasks:
-                logger.info(f"Regenerating {len(tasks)} channels")
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                # Check results for errors
-                error_count = 0
-                for result in results:
-                    if isinstance(result, Exception):
-                        error_count += 1
-                        logger.error(f"Error during channel regeneration: {result}")
-                if error_count == 0:
-                    initial_send_successful = True
-                    logger.info("All initial channel regenerations completed successfully")
-                else:
-                    logger.warning(f"Completed initial channel regenerations with {error_count} errors")
-                await asyncio.sleep(0.2) # Sleep if regenerations happened
-            else:
-                logger.info("No channels configured for initial posting")
+                        # Send new messages using consistent logic with _regenerate_channel
+                        if mode == 'control':
+                            await self._send_control_panel_and_statuses(channel)
+                        elif mode == 'status':
+                            # Use the same method as _regenerate_channel to ensure consistency
+                            await self._send_all_server_statuses(channel, allow_toggle=False, force_collapse=True)
+                            
+                        # Set initial channel activity time so inactivity tracking works
+                        self.last_channel_activity[channel.id] = datetime.now(timezone.utc)
+                        logger.info(f"Set initial channel activity time for {channel.name} ({channel.id})")
+                        
+                        logger.info(f"Successfully regenerated channel {channel.name}")
+                        initial_send_successful = True
+                    except discord.NotFound:
+                        logger.warning(f"Channel {channel_id} not found")
+                    except discord.Forbidden:
+                        logger.warning(f"Missing permissions for channel {channel_id}")
+                    except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                        logger.error(f"Error processing channel {channel_id}: {e}", exc_info=True)
+                        
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"Error processing channel config {channel_id_str}: {e}", exc_info=True)
 
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
             logger.error(f"Critical error during send_initial_status: {e}", exc_info=True)
         finally:
             self.initial_messages_sent = True
             logger.info(f"send_initial_status finished. Initial messages sent flag set to True. Success: {initial_send_successful}")
-            # ... (Logging at the end remains the same)
+
+    async def _background_cache_population(self):
+        """Perform background cache population without blocking initial status send."""
+        try:
+            logger.info("Starting background cache population")
+
+            # Load configuration
+            config = load_config()
+            if not config:
+                logger.error("Background cache population: Could not load configuration.")
+                return
+
+            # Get container names from servers
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+            if not servers:
+                logger.info("Background cache population: No servers configured")
+                return
+
+            container_names = [s.get('docker_name') for s in servers if s.get('docker_name')]
+            if not container_names:
+                logger.info("Background cache population: No containers found")
+                return
+
+            logger.info(f"Background cache population: Processing {len(container_names)} containers")
+            start_time = time.time()
+
+            # Use semaphore for race condition protection (same as status_update_loop)
+            async with self._status_update_semaphore:
+                # Bulk fetch container status (same logic as status_update_loop)
+                results = await self.bulk_fetch_container_status(container_names)
+
+                success_count = 0
+                error_count = 0
+
+                # Update cache with results (same logic as status_update_loop)
+                for name, result in results.items():
+                    if result.success:
+                        # Cache ContainerStatusResult directly
+                        self.status_cache_service.set(name, result, datetime.now(timezone.utc))
+                        success_count += 1
+                    else:
+                        logger.warning(f"Background cache population: Failed to fetch status for {name}. Error: {result.error_message}")
+                        error_count += 1
+
+                duration_ms = (time.time() - start_time) * 1000
+                logger.info(f"Background cache population completed: {success_count} success, {error_count} errors in {duration_ms:.1f}ms")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error during background cache population: {e}", exc_info=True)
 
     # _update_single_message WAS REMOVED
     # _update_single_server_message_by_name WAS REMOVED
 
     async def delete_bot_messages(self, channel: discord.TextChannel, limit: int = 200):
-        """Deletes all bot messages in a channel up to the specified limit."""
+        """Delete bot messages while preserving Live Log messages using ChannelCleanupService."""
         if not isinstance(channel, discord.TextChannel):
             logger.error(f"Attempted to delete messages in non-text channel: {channel}")
             return
-        logger.info(f"Deleting up to {limit} bot messages in channel {channel.name} ({channel.id})")
+
         try:
-            # Define a check function
-            def is_me(m):
-                return m.author == self.bot.user
+            result = await self.cleanup_service.delete_bot_messages_preserve_live_logs(
+                channel=channel,
+                reason="initial status cleanup",
+                message_limit=limit
+            )
 
-            deleted_count = 0
-            async for message in channel.history(limit=limit):
-                 if is_me(message):
-                     try:
-                         await message.delete()
-                         deleted_count += 1
-                         await asyncio.sleep(0.1) # Small delay for rate limiting
-                     except discord.Forbidden:
-                         logger.error(f"Missing permissions to delete message {message.id} in {channel.name}.")
-                         break # No permission, further attempts are pointless
-                     except discord.NotFound:
-                         logger.warning(f"Message {message.id} already deleted in {channel.name}.")
-                     except Exception as e:
-                         logger.error(f"Error deleting message {message.id} in {channel.name}: {e}")
+            if result.success:
+                logger.info(f"✅ CLEANUP SUCCESS: Deleted {result.messages_deleted} bot messages in {channel.name} "
+                           f"via {result.method_used} (Preserved: {result.messages_preserved} Live Logs) "
+                           f"in {result.execution_time_ms:.1f}ms")
+            else:
+                logger.warning(f"⚠️ CLEANUP PARTIAL: Deleted {result.messages_deleted} messages in {channel.name} "
+                              f"(error: {result.error})")
 
-            # Alternative: channel.purge (can be faster, but less control/logging)
-            # try:
-            #     deleted = await channel.purge(limit=limit, check=is_me)
-            #     logger.info(f"Deleted {len(deleted)} bot messages in {channel.name} ({channel.id}) using purge.")
-            # except discord.Forbidden:
-            #     logger.error(f"Missing permissions to purge messages in {channel.name}.")
-            # except discord.HTTPException as e:
-            #     logger.error(f"HTTP error during purge in {channel.name}: {e}")
-
-            logger.info(f"Finished deleting bot messages in {channel.name}. Deleted {deleted_count} messages.")
-        except Exception as e:
-            logger.error(f"An error occurred during message deletion in {channel.name}: {e}", exc_info=True)
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"❌ CLEANUP FAILED for channel {channel.name}: {e}", exc_info=True)
 
     # --- Slash Commands ---
+    async def _check_spam_protection(self, ctx: discord.ApplicationContext, command_name: str) -> bool:
+        """Check spam protection for a command. Returns True if command can proceed, False if on cooldown."""
+        from services.infrastructure.spam_protection_service import get_spam_protection_service
+        spam_manager = get_spam_protection_service()
+        
+        if spam_manager.is_enabled():
+            cooldown_seconds = spam_manager.get_command_cooldown(command_name)
+            if cooldown_seconds > 0:
+                import time
+                current_time = time.time()
+                cooldown_key = f"cmd_{command_name}_{ctx.author.id}"
+                
+                # Check if user is on cooldown
+                if hasattr(spam_manager, '_command_cooldowns'):
+                    last_use = spam_manager._command_cooldowns.get(cooldown_key, 0)
+                    if current_time - last_use < cooldown_seconds:
+                        remaining = int(cooldown_seconds - (current_time - last_use))
+                        try:
+                            # Check if we need to use followup (for commands that defer early)
+                            if command_name in ['donate', 'donatebroadcast', 'serverstatus', 'ss']:
+                                await ctx.followup.send(_("❌ Command on cooldown. Try again in {remaining} seconds.").format(remaining=remaining))
+                            else:
+                                await ctx.respond(_("❌ Command on cooldown. Try again in {remaining} seconds.").format(remaining=remaining), ephemeral=True)
+                        except (discord.errors.HTTPException, discord.errors.NotFound):
+                            # If response fails, still prevent command execution
+                            pass
+                        return False
+                else:
+                    spam_manager._command_cooldowns = {}
+                
+                # Update cooldown
+                spam_manager._command_cooldowns[cooldown_key] = current_time
+        
+        return True
+
     @commands.slash_command(name="serverstatus", description=_("Shows the status of all containers"), guild_ids=get_guild_id())
     async def serverstatus(self, ctx: discord.ApplicationContext):
         """Shows an overview of all server statuses in a single message."""
-        # Import translation function locally to ensure it's accessible
-        from .translation_manager import _ as translate
-        
-        # Check if the channel has serverstatus permission
-        channel_has_status_perm = _channel_has_permission(ctx.channel.id, 'serverstatus', self.config)
-        if not channel_has_status_perm:
-            embed = discord.Embed(
-                title=translate("⚠️ Permission Denied"),
-                description=translate("You cannot use this command in this channel."),
-                color=discord.Color.red()
-            )
-            await ctx.respond(embed=embed, ephemeral=True)
-            return
-
-        # Respond directly without deferring first
-        await ctx.respond(translate("Generating overview..."), ephemeral=True)
-
-        config = self.config
-        servers = config.get('servers', [])
-        if not servers:
-            embed = discord.Embed(
-                title=translate("⚠️ No Servers"),
-                description=translate("No servers are configured for monitoring."),
-                color=discord.Color.orange()
-            )
-            await ctx.channel.send(embed=embed)
-            return
-
-        # --- Delete old messages --- #
         try:
-            logger.info(f"[/serverstatus] Deleting old bot messages in {ctx.channel.name}...")
-            await self.delete_bot_messages(ctx.channel, limit=300) # Limit adjustable
-            await asyncio.sleep(1.0) # Short pause after deleting
-            logger.info(f"[/serverstatus] Finished deleting messages in {ctx.channel.name}.")
-        except Exception as e_delete:
-            logger.error(f"[/serverstatus] Error deleting messages in {ctx.channel.name}: {e_delete}")
-            # Continue even if deletion fails
-        # --- End message deletion --- #
+            # CRITICAL: Defer FIRST to prevent Discord timeout (must respond within 3 seconds)
+            # ROBUST: Handle "Unknown interaction" gracefully (happens when bot is slow/overloaded)
+            try:
+                await ctx.defer()
+            except discord.NotFound as e:
+                if e.code == 10062:  # Unknown interaction
+                    logger.error(f"⚠️ Interaction expired before defer - bot was too slow! User needs to retry. Error: {e}")
+                    # Cannot respond anymore - interaction is dead. User needs to retry the command.
+                    return
+                else:
+                    raise  # Re-raise other NotFound errors
 
-        # Sort servers using ordered_server_names
-        ordered_docker_names = self.ordered_server_names
-        servers_by_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
-        
-        # Create an ordered list of server configurations
-        ordered_servers = []
-        seen_docker_names = set()
-        
-        # First add servers in the defined order
-        for docker_name in ordered_docker_names:
-            if docker_name in servers_by_name:
-                ordered_servers.append(servers_by_name[docker_name])
-                seen_docker_names.add(docker_name)
-        
-        # Add any servers that weren't in the ordered list
-        for server in servers:
-            docker_name = server.get('docker_name')
-            if docker_name and docker_name not in seen_docker_names:
-                ordered_servers.append(server)
-                seen_docker_names.add(docker_name)
-        
-        # Fallback: If ordered_servers is empty, use all servers
-        if not ordered_servers:
-            ordered_servers = servers
+            # Check spam protection after defer
+            if not await self._check_spam_protection(ctx, "serverstatus"):
+                return
 
-        # Create the overview embed
-        embed = await self._create_overview_embed(ordered_servers, config)
-        
-        # Send the embed directly to the channel instead of using followup
-        overview_message = await ctx.channel.send(embed=embed)
-        
-        # Store the message ID for later updates
-        if ctx.channel.id not in self.channel_server_message_ids:
-            self.channel_server_message_ids[ctx.channel.id] = {}
-        self.channel_server_message_ids[ctx.channel.id]["overview"] = overview_message.id
-        
-        # Set last update time for channel activity tracking
-        if ctx.channel.id not in self.last_message_update_time:
-            self.last_message_update_time[ctx.channel.id] = {}
-        self.last_message_update_time[ctx.channel.id]["overview"] = datetime.now(timezone.utc)
-        
-        # Also update channel activity for inactivity checks
-        self.last_channel_activity[ctx.channel.id] = datetime.now(timezone.utc)
-        
-        logger.info(f"[/serverstatus] Sent overview message {overview_message.id} in channel {ctx.channel.id}")
+            # Import translation function locally to ensure it's accessible
+            from .translation_manager import _ as translate
+
+            # Check if the channel has serverstatus permission
+            channel_has_status_perm = _channel_has_permission(ctx.channel.id, 'serverstatus', self.config)
+            if not channel_has_status_perm:
+                embed = discord.Embed(
+                    title=translate("⚠️ Permission Denied"),
+                    description=translate("You cannot use this command in this channel."),
+                    color=discord.Color.red()
+                )
+                await ctx.followup.send(embed=embed, ephemeral=True)
+                return
+
+            config = load_config()
+            if not config:
+                await ctx.followup.send(_("Error: Could not load configuration."), ephemeral=True)
+                return
+
+            # DOCKER CONNECTIVITY CHECK: Check before attempting to get container status
+            from services.infrastructure.docker_connectivity_service import get_docker_connectivity_service, DockerConnectivityRequest, DockerErrorEmbedRequest
+
+            connectivity_service = get_docker_connectivity_service()
+            connectivity_request = DockerConnectivityRequest(timeout_seconds=5.0)
+            connectivity_result = await connectivity_service.check_connectivity(connectivity_request)
+
+            if not connectivity_result.is_connected:
+                logger.warning(f"[SERVERSTATUS] Docker connectivity failed: {connectivity_result.error_message}")
+
+                # Create Docker connectivity error embed using service
+                lang = config.get('language', 'de')
+                embed_request = DockerErrorEmbedRequest(
+                    error_message=connectivity_result.error_message,
+                    language=lang,
+                    context='serverstatus'
+                )
+                embed_result = connectivity_service.create_error_embed_data(embed_request)
+
+                if not embed_result.success:
+                    logger.error(f"Failed to create Docker connectivity error embed: {embed_result.error}", exc_info=True)
+                    await ctx.followup.send(_("Error creating connectivity status message."), ephemeral=True)
+                    return
+
+                # Create Discord embed from service result
+                embed = discord.Embed(
+                    title=embed_result.title,
+                    description=embed_result.description,
+                    color=embed_result.color
+                )
+                embed.set_footer(text=embed_result.footer_text)
+
+                await ctx.followup.send(embed=embed)
+                return
+
+            # Get all servers and sort them by the 'order' field from container configurations
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+            ordered_servers = sorted(servers, key=lambda s: s.get('order', 999))
+            
+            # Determine which embed to create based on mech expansion state
+            channel_id = ctx.channel.id
+            is_mech_expanded = self.mech_expanded_states.get(channel_id, False)
+
+            # SERVICE FIRST: Log decision for manual /ss command (always proceeds but logs settings)
+            try:
+                from services.discord.status_overview_service import log_channel_update_decision
+                log_channel_update_decision(
+                    channel_id=channel_id,
+                    global_config=config,
+                    last_update_time=None,  # Manual commands ignore timing
+                    reason="manual_serverstatus_command"
+                )
+            except (ImportError, AttributeError, RuntimeError) as service_error:
+                logger.warning(f"SERVICE_FIRST: Error logging decision for manual /ss command: {service_error}")
+
+            if is_mech_expanded:
+                embed, animation_file = await self._create_overview_embed_expanded(ordered_servers, config, force_refresh=True)
+            else:
+                embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config, force_refresh=True)
+
+            # Create MechView with expand/collapse buttons for mech status
+            from .control_ui import MechView
+            view = MechView(self, channel_id)
+
+            # Delete old overview message if it exists (prevents duplicate messages)
+            if ctx.channel.id in self.channel_server_message_ids and "overview" in self.channel_server_message_ids[ctx.channel.id]:
+                old_message_id = self.channel_server_message_ids[ctx.channel.id]["overview"]
+                try:
+                    old_message = await ctx.channel.fetch_message(old_message_id)
+                    await old_message.delete()
+                    logger.debug(f"Deleted old overview message {old_message_id} in channel {ctx.channel.id}")
+                except discord.NotFound:
+                    logger.debug(f"Old overview message {old_message_id} not found (already deleted)")
+                except (discord.Forbidden, discord.HTTPException) as e:
+                    logger.warning(f"Could not delete old overview message {old_message_id}: {e}")
+
+            # EDGE CASE: Safely send embed with animation and button
+            try:
+                if animation_file:
+                    # Validate file before sending
+                    if hasattr(animation_file, 'fp') and animation_file.fp:
+                        message = await ctx.followup.send(embed=embed, file=animation_file, view=view)
+                        logger.info("✅ Sent /ss with animation and Mechonate button")
+                    else:
+                        logger.warning("Animation file invalid, sending without animation")
+                        message = await ctx.followup.send(embed=embed, view=view)
+                else:
+                    logger.warning("No animation file attached, sending embed only")
+                    message = await ctx.followup.send(embed=embed, view=view)
+            except discord.HTTPException as e:
+                logger.error(f"Discord error sending animation: {e}", exc_info=True)
+                # Fallback: Send without animation but with button
+                try:
+                    message = await ctx.followup.send(embed=embed, view=view)
+                except (RuntimeError, OSError, ValueError) as fallback_error:
+                    logger.error(f"Critical: Could not send embed at all: {fallback_error}")
+                    await ctx.followup.send(_("Error generating server status overview."), ephemeral=True)
+                    return
+            
+            # Update tracking information
+            now_utc = datetime.now(timezone.utc)
+            
+            # Update message update time
+            if ctx.channel.id not in self.last_message_update_time:
+                self.last_message_update_time[ctx.channel.id] = {}
+            self.last_message_update_time[ctx.channel.id]["overview"] = now_utc
+            
+            # Track the message ID
+            if ctx.channel.id not in self.channel_server_message_ids:
+                self.channel_server_message_ids[ctx.channel.id] = {}
+            self.channel_server_message_ids[ctx.channel.id]["overview"] = message.id
+            
+            # Set last channel activity
+            self.last_channel_activity[ctx.channel.id] = now_utc
+            
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in serverstatus command: {e}", exc_info=True)
+            try:
+                await ctx.followup.send(_("An error occurred while generating the overview."), ephemeral=True)
+            except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                logger.error(f"Error generating overview: {e}", exc_info=True)
 
     @commands.slash_command(name="ss", description=_("Shortcut: Shows the status of all containers"), guild_ids=get_guild_id())
     async def ss(self, ctx):
         """Shortcut for the serverstatus command."""
+        # Directly call serverstatus (it has its own spam protection check)
         await self.serverstatus(ctx)
 
-    async def command(self, ctx: discord.ApplicationContext, 
-                     container_name: str, 
-                     action: str):
-        """
-        Slash command to control a Docker container.
-        
-        The implementation logic has been moved to the CommandHandlersMixin class 
-        in command_handlers.py. This command delegates to the _impl_command method there.
-        """
-        # Simply delegate to the implementation in CommandHandlersMixin
-        await self._impl_command(ctx, container_name, action)
+    @commands.slash_command(name="control", description=_("Shows admin control overview for all containers"), guild_ids=get_guild_id())
+    async def control(self, ctx: discord.ApplicationContext):
+        """Show admin overview with all containers including CPU/RAM info and bulk actions."""
+        try:
+            # Check spam protection first
+            if not await self._check_spam_protection(ctx, "control"):
+                return
+
+            # Defer the response to prevent timeout
+            await ctx.defer(ephemeral=False)  # Not ephemeral, like /ss
+
+            # Load configuration
+            config = load_config()
+            if not config:
+                await ctx.followup.send(_("❌ Could not load configuration."))
+                return
+
+            # Get all server configurations
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+            if not servers:
+                await ctx.followup.send(_("❌ No servers configured."))
+                return
+
+            # Sort servers by order
+            ordered_servers = sorted(servers, key=lambda s: s.get('order', 999))
+
+            # Create Admin Overview embed with CPU and RAM info
+            embed, _, has_running = await self._create_admin_overview_embed(ordered_servers, config, force_refresh=True)
+
+            # Import AdminOverviewView from admin_overview module
+            from .admin_overview import AdminOverviewView
+
+            # Create the Admin Overview view with buttons
+            view = AdminOverviewView(self, ctx.channel_id, has_running)
+
+            # Send the Admin Overview message and track it for updates
+            message = await ctx.followup.send(embed=embed, view=view)
+
+            # Track message for automatic updates (like /ss)
+            channel_id = ctx.channel_id
+            if channel_id not in self.channel_server_message_ids:
+                self.channel_server_message_ids[channel_id] = {}
+            self.channel_server_message_ids[channel_id]['admin_overview'] = message.id
+
+            logger.info(f"Control command used by {ctx.author} in {ctx.channel.name}")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in control command: {e}", exc_info=True)
+            try:
+                if not ctx.response.is_done():
+                    await ctx.respond(_("❌ Error showing control overview."))
+                else:
+                    await ctx.followup.send(_("❌ Error showing control overview."))
+            except (discord.errors.DiscordException, RuntimeError):
+                pass
+
+    # Legacy command methods removed - all container control and info editing
+    # is now handled through Discord UI buttons for better user experience
+    
+    # /info_edit command removed - info editing now handled through UI buttons
+    
 
     # Decorator adjusted
     @commands.slash_command(name="help", description=_("Displays help for available commands"), guild_ids=get_guild_id())
     async def help_command(self, ctx: discord.ApplicationContext):
+        # IMMEDIATELY defer to prevent timeout - this MUST be first!
+        try:
+            await ctx.defer(ephemeral=True)
+        except:
+            # Interaction already expired - nothing we can do
+            return
+            
+        # Check spam protection after deferring
+        if not await self._check_spam_protection(ctx, "help"):
+            try:
+                await ctx.followup.send(".", delete_after=0.1)
+            except:
+                pass
+            return
         """Displays help information about available commands."""
         embed = discord.Embed(
-            title=_("DockerDiscordControl - Help"),
-            description=_("Here are the available commands:"),
+            title=_("DDC Help & Information"),
             color=discord.Color.blue()
         )
-        embed.add_field(name="`/serverstatus` or `/ss`", value=_("Displays the status of all configured Docker containers."), inline=False)
-        embed.add_field(name="`/command <container> <action>`", value=_("Controls a specific Docker container. Actions: `start`, `stop`, `restart`. Requires permissions."), inline=False)
-        embed.add_field(name="`/control`", value=_("(Re)generates the main control panel message in channels configured for it."), inline=False)
-        embed.add_field(name="`/help`", value=_("Shows this help message."), inline=False)
-        embed.add_field(name="`/ping`", value=_("Checks the bot's latency."), inline=False)
+        
+        # Tip as first field with spacing
+        embed.add_field(name=f"**{_('Tip')}**", value=f"{_('Use /info <servername> to get detailed information about containers with ℹ️ indicators.')}" + "\n\u200b", inline=False)
+        
+        # General Commands (work everywhere)
+        embed.add_field(name=f"**{_('General Commands')}**", value=f"`/help` - {_('Shows this help message.')}\n`/ping` - {_('Checks the bot latency.')}\n`/donate` - {_('Shows donation information to support the project.')}" + "\n\u200b", inline=False)
+        
+        # Status Channel Commands
+        embed.add_field(name=f"**{_('Status Channel Commands')}**", value=f"`/serverstatus` or `/ss` - {_('Displays the status of all configured Docker containers.')}\n`/info <container>` - {_('Shows detailed container information.')}" + "\n\u200b", inline=False)
+        
+        # Control Channel Commands  
+        embed.add_field(name=f"**{_('Control Channel Commands')}**", value=f"`/control` - {_('(Re)generates the main control panel message in channels configured for it.')}\n**Container Control:** {_('Click control buttons under container status panels to start, stop, or restart.')}\n**Task Management:** {_('Click ⏰ button under container control panels to add/delete scheduled tasks.')}" + "\n\u200b", inline=False)
+        
+        # Add status indicators explanation
+        embed.add_field(name=f"**{_('Status Indicators')}**", value=f"🟢 {_('Container is online')}\n🔴 {_('Container is offline')}\n🔄 {_('Container status loading')}" + "\n\u200b", inline=False)
+        
+        # Add info system explanation  
+        embed.add_field(name=f"**{_('Info System')}**", value=f"ℹ️ {_('Click for container details')}\n🔒 {_('Protected info (control channels only)')}\n🔓 {_('Public info available')}" + "\n\u200b", inline=False)
+        
+        # Add task management explanation
+        embed.add_field(name=f"**{_('Task Scheduling')}**", value=f"⏰ {_('Click to manage scheduled tasks')}\n➕ **Add Task** - {_('Schedule container actions (daily, weekly, monthly, yearly, once)')}\n❌ **Delete Tasks** - {_('Remove scheduled tasks for the container')}" + "\n\u200b", inline=False)
+        
+        # Add control buttons explanation (no spacing after last field)
+        embed.add_field(name=f"**{_('Control Buttons (Admin Channels)')}**", value=f"📝 {_('Edit container info text')}\n📋 {_('View container logs')}", inline=False)
         embed.set_footer(text="https://ddc.bot")
 
-        await ctx.respond(embed=embed, ephemeral=True)
+        try:
+            await ctx.followup.send(embed=embed, ephemeral=True)
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Failed to send help message: {e}", exc_info=True)
+            # Fallback - try to send minimal message
+            try:
+                await ctx.followup.send(_("Help information is temporarily unavailable."), ephemeral=True)
+            except:
+                pass
 
     @commands.slash_command(name="ping", description=_("Shows the bot's latency"), guild_ids=get_guild_id())
     async def ping_command(self, ctx: discord.ApplicationContext):
+        # Check spam protection first
+        if not await self._check_spam_protection(ctx, "ping"):
+            return
         latency = round(self.bot.latency * 1000)
         ping_message = _("Pong! Latency: {latency:.2f} ms").format(latency=latency)
         embed = discord.Embed(title="🏓", description=ping_message, color=discord.Color.blurple())
         await ctx.respond(embed=embed)
+    
+    @commands.slash_command(name="donate", description=_("Show donation information to support the project"), guild_ids=get_guild_id())
+    async def donate_command(self, ctx: discord.ApplicationContext):
+        """Show donation links to support DockerDiscordControl development."""
+        # IMMEDIATELY defer to prevent timeout - this MUST be first!
+        try:
+            await ctx.defer(ephemeral=True)
+        except:
+            # Interaction already expired - nothing we can do
+            return
+        
+        # NOW check if donations are disabled
+        try:
+            from services.donation.donation_utils import is_donations_disabled
+            if is_donations_disabled():
+                # Send minimal response via followup since we deferred
+                try:
+                    await ctx.followup.send(".", delete_after=0.1)
+                except (RuntimeError, ValueError, KeyError, OSError) as e:
+                    logger.debug(f"Followup cleanup failed: {e}")
+                return
+        except (ImportError, AttributeError, RuntimeError) as e:
+            logger.debug(f"Donation check failed: {e}")
+        
+        # Check spam protection
+        if not await self._check_spam_protection(ctx, "donate"):
+            return
+            
+        try:
+            # Donations enabled - show normal donation UI
+            # Check MechService availability
+            mech_service_available = False
+            try:
+                from services.mech.mech_service import get_mech_service
+                mech_service = get_mech_service()
+                mech_service_available = True
+            except:
+                pass
+            
+            # Create donation embed
+            embed = discord.Embed(
+                title=_('Support DockerDiscordControl'),
+                description=_(
+                    'If DDC helps you, please consider supporting ongoing development. '
+                    'Donations help cover hosting, CI, maintenance, and feature work.'
+                ),
+                color=0x00ff41
+            )
+            embed.add_field(
+                name=_('Choose your preferred method:'),
+                value=_('Click one of the buttons below to support DDC development'),
+                inline=False
+            )
+            embed.set_footer(text="https://ddc.bot")
+            
+            # Send with or without view (use followup since we deferred)
+            try:
+                view = DonationView(mech_service_available, bot=self.bot)
+                message = await ctx.followup.send(embed=embed, view=view)
+                # Update view with message reference and start auto-delete timer
+                view.message = message
+                view.auto_delete_task = asyncio.create_task(view.start_auto_delete_timer())
+            except:
+                await ctx.followup.send(embed=embed)
+                
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in donate command: {e}", exc_info=True)
 
-    async def _create_overview_embed(self, ordered_servers, config):
-        """Creates the server overview embed with the status of all servers."""
+    async def _handle_donate_interaction(self, interaction: discord.Interaction):
+        """Handle donation button interactions from mech UI."""
+        # This should never be called when donations are disabled
+        # (buttons shouldn't exist) but check anyway for safety
+        try:
+            from services.donation.donation_utils import is_donations_disabled
+            if is_donations_disabled():
+                # Silently ignore
+                return
+        except:
+            pass
+            
+        try:
+            # Immediately defer to prevent interaction expiry
+            await interaction.response.defer(ephemeral=True)
+            
+            # Donations enabled - show normal donation UI
+            
+            # Check MechService availability
+            mech_service_available = False
+            try:
+                from services.mech.mech_service import get_mech_service
+                mech_service = get_mech_service()
+                mech_service_available = True
+            except:
+                pass
+            
+            # Create donation embed
+            embed = discord.Embed(
+                title=_('Support DockerDiscordControl'),
+                description=_(
+                    'If DDC helps you, please consider supporting ongoing development. '
+                    'Donations help cover hosting, CI, maintenance, and feature work.'
+                ),
+                color=0x00ff41
+            )
+            embed.add_field(
+                name=_('Choose your preferred method:'),
+                value=_('Click one of the buttons below to support DDC development'),
+                inline=False
+            )
+            embed.set_footer(text="https://ddc.bot")
+            
+            # Send with or without view
+            try:
+                view = DonationView(mech_service_available, bot=self.bot)
+                # Note: Ephemeral messages don't need auto-delete as they're private
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            except:
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                
+        except discord.NotFound:
+            # Interaction expired - silently ignore
+            pass
+        except (discord.errors.DiscordException, RuntimeError) as e:
+            # Only log unexpected errors, not Discord timing issues
+            if "Unknown interaction" not in str(e):
+                logger.error(f"Unexpected error in donate interaction: {e}", exc_info=True)
+
+    @commands.slash_command(name="info", description=_("Show container information"), guild_ids=get_guild_id())
+    async def info_command(self, ctx: discord.ApplicationContext,
+                           container_name: str = discord.Option(description=_("The Docker container name"), autocomplete=container_select)):
+        """Shows container information with appropriate buttons based on channel permissions."""
+        # Log command invocation for debugging with unique tracking
+        import time
+        import uuid
+        call_id = str(uuid.uuid4())[:8]
+        timestamp = time.time()
+        logger.info(f"INFO COMMAND INVOKED: call_id={call_id}, container={container_name}, user={ctx.author.id}, channel={ctx.channel_id}, interaction_id={ctx.interaction.id if hasattr(ctx, 'interaction') else 'unknown'}, timestamp={timestamp}")
+        
+        try:
+            # Check spam protection first
+            if not await self._check_spam_protection(ctx, "info"):
+                return
+                
+            # Try to defer immediately, but handle timeout gracefully
+            deferred = False
+            try:
+                if not ctx.response.is_done():
+                    await ctx.response.defer(ephemeral=True)
+                    deferred = True
+                    logger.debug(f"Successfully deferred /info command for {container_name}")
+                else:
+                    logger.debug(f"Interaction response already done for /info command, will use followup")
+                    deferred = True  # We'll use followup
+            except discord.errors.NotFound:
+                # Interaction already timed out, but we can still try to respond
+                logger.debug(f"Interaction already timed out for /info command, attempting direct response")
+                deferred = False
+            except (discord.errors.DiscordException, RuntimeError) as e:
+                logger.warning(f"Failed to defer /info command: {e}")
+                deferred = False
+            
+            # Check if this channel has 'info' permission
+            from .control_helpers import _channel_has_permission
+            config = self.config
+            has_info_permission = _channel_has_permission(ctx.channel_id, 'info', config) if config else False
+            
+            if not has_info_permission:
+                if deferred:
+                    await ctx.followup.send(_("You do not have permission to use the info command in this channel."), ephemeral=True)
+                else:
+                    await ctx.respond(_("You do not have permission to use the info command in this channel."), ephemeral=True)
+                return
+            
+            # Check if container exists in config
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+            server_config = next((s for s in servers if s.get('docker_name') == container_name), None)
+            if not server_config:
+                if deferred:
+                    await ctx.followup.send(_("Container '{container}' not found in configuration.").format(container=container_name), ephemeral=True)
+                else:
+                    await ctx.respond(_("Container '{container}' not found in configuration.").format(container=container_name), ephemeral=True)
+                return
+            
+            # Load container info to check if info is enabled
+            from services.infrastructure.container_info_service import get_container_info_service
+            info_service = get_container_info_service()
+            info_result = info_service.get_container_info(container_name)
+            
+            # More robust checking with better error handling
+            if not info_result.success:
+                logger.warning(f"Failed to load container info for {container_name}: {info_result.error if hasattr(info_result, 'error') else 'Unknown error'}")
+                if deferred:
+                    await ctx.followup.send(_("Could not load container information for '{container}'.").format(container=container_name), ephemeral=True)
+                else:
+                    await ctx.respond(_("Could not load container information for '{container}'.").format(container=container_name), ephemeral=True)
+                return
+            
+            if not info_result.data:
+                logger.warning(f"No container info data found for {container_name}")
+                if deferred:
+                    await ctx.followup.send(_("Container information is not configured for '{container}'.").format(container=container_name), ephemeral=True)
+                else:
+                    await ctx.respond(_("Container information is not configured for '{container}'.").format(container=container_name), ephemeral=True)
+                return
+                
+            # Debug the enabled flag
+            enabled_value = info_result.data.enabled
+            logger.info(f"DEBUG INFO COMMAND: {call_id} - Container {container_name} enabled value: {enabled_value} (type: {type(enabled_value)})")
+            
+            if not enabled_value:
+                logger.info(f"Container info is disabled for {container_name} - call_id: {call_id}")
+                if deferred:
+                    await ctx.followup.send(_("Container information is not enabled for '{container}'.").format(container=container_name), ephemeral=True)
+                else:
+                    await ctx.respond(_("Container information is not enabled for '{container}'.").format(container=container_name), ephemeral=True)
+                return
+            
+            # Convert ContainerInfo to dict for compatibility
+            info_config = info_result.data.to_dict()
+            
+            # Check if this is a control channel
+            has_control = _channel_has_permission(ctx.channel_id, 'control', config) if config else False
+            
+            # Generate info embed using the same logic as StatusInfoButton
+            from .status_info_integration import StatusInfoButton
+            info_button = StatusInfoButton(self, server_config, info_config)
+            embed = await info_button._generate_info_embed(include_protected=has_control)
+            
+            # Create view with appropriate buttons based on channel type
+            view = None
+            if has_control:
+                # Control channel: Show admin buttons (Edit Info, Protected Info Edit, Debug)
+                from .status_info_integration import ContainerInfoAdminView
+                view = ContainerInfoAdminView(self, server_config, info_config)
+            else:
+                # Status channel: Show protected info button if enabled
+                if info_config.get('protected_enabled', False):
+                    from .status_info_integration import ProtectedInfoOnlyView
+                    view = ProtectedInfoOnlyView(self, server_config, info_config)
+            
+            # Send response - check for race condition with autocomplete first
+            try:
+                # Check if interaction has already been acknowledged (race condition with autocomplete)
+                if ctx.interaction.response.is_done():
+                    logger.warning(f"Interaction already acknowledged for /info {container_name} - call_id: {call_id}. Using followup instead.")
+                    if view:
+                        await ctx.followup.send(embed=embed, view=view, ephemeral=True)
+                    else:
+                        await ctx.followup.send(embed=embed, ephemeral=True)
+                elif deferred:
+                    logger.debug(f"Sending followup response for /info {container_name}")
+                    if view:
+                        await ctx.followup.send(embed=embed, view=view, ephemeral=True)
+                    else:
+                        await ctx.followup.send(embed=embed, ephemeral=True)
+                else:
+                    logger.debug(f"Sending direct response for /info {container_name}")
+                    if view:
+                        await ctx.respond(embed=embed, view=view, ephemeral=True)
+                    else:
+                        await ctx.respond(embed=embed, ephemeral=True)
+            except discord.errors.NotFound:
+                logger.warning(f"Interaction expired for /info {container_name}, cannot send response")
+                return
+            except discord.errors.HTTPException as e:
+                logger.error(f"HTTP error sending /info response for {container_name}: {e}", exc_info=True)
+                return
+            
+            logger.info(f"INFO COMMAND COMPLETED: call_id={call_id}, container={container_name}, user={ctx.author.id}, channel={ctx.channel_id}, info={has_info_permission}, control={has_control}, deferred={deferred}, timestamp={time.time()}")
+            return  # Important: Return here to prevent fall-through to error handling
+            
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in info command for {container_name}: {e}", exc_info=True)
+            # Try to send error message if possible
+            try:
+                if 'deferred' in locals() and deferred:
+                    await ctx.followup.send(_("An error occurred while retrieving container information."), ephemeral=True)
+                else:
+                    await ctx.respond(_("An error occurred while retrieving container information."), ephemeral=True)
+            except:
+                pass  # If we can't send error message, just log it
+
+    # NOTE: Old _create_overview_embed method was removed
+    # Use _create_overview_embed_expanded or _create_overview_embed_collapsed instead
+
+    async def _create_overview_embed_expanded(self, ordered_servers, config, force_refresh=False):
+        """Creates the server overview embed with EXPANDED mech status details.
+
+        Args:
+            ordered_servers: List of server configurations
+            config: Application configuration
+            force_refresh: If True, forces fresh data from cache (for manual commands)
+
+        Returns:
+            tuple: (embed, animation_file) where animation_file is None if no animation
+        """
         # Import translation function locally to ensure it's accessible
         from .translation_manager import _ as translate
+        
+        # Initialize animation file
+        animation_file = None
         
         # Create the overview embed
         embed = discord.Embed(
@@ -986,83 +1900,1078 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             color=discord.Color.blue()
         )
 
-        # Build server status lines
+        # Build server status lines (same logic as original)
         now_utc = datetime.now(timezone.utc)
-        timezone_str = config.get('timezone')
-        current_time = format_datetime_with_timezone(now_utc, timezone_str, fmt="%H:%M:%S")
+        fresh_config = load_config()
+        timezone_str = fresh_config.get('timezone') if fresh_config else config.get('timezone')
+        
+        current_time = format_datetime_with_timezone(now_utc, timezone_str, time_only=True)
         
         # Add timestamp at the top
         last_update_text = translate("Last update")
         
-        # Start building the content
+        # Start building the content (same server status logic as original)
         content_lines = [
             f"{last_update_text}: {current_time}",
             "┌── Status ─────────────────"
         ]
 
-        # Collect all server statuses
+        # Add server statuses (copy from original method)
         for server_conf in ordered_servers:
-            display_name = server_conf.get('name', server_conf.get('docker_name'))
+            display_name = server_conf.get('display_name', server_conf.get('docker_name'))
             docker_name = server_conf.get('docker_name')
             if not display_name or not docker_name:
                 continue
                 
-            # ULTRA-FAST OPTIMIZATION: Use ONLY cached data
-            # No more Docker queries - Background loop (every 30s) provides current data
-            cached_entry = self.status_cache.get(display_name)
+            # Use cached data only (same as original)
+            # Use docker_name as cache key (stable identifier)
+            cached_entry = self.status_cache_service.get(docker_name)
             status_result = None
             
             if cached_entry and cached_entry.get('data'):
-                # ✅ Cache available - use cached data
-                status_result = cached_entry['data']
+                import os
+                max_cache_age = int(os.environ.get('DDC_DOCKER_MAX_CACHE_AGE', '300'))
+                
+                if 'timestamp' in cached_entry:
+                    cache_age = (datetime.now(timezone.utc) - cached_entry['timestamp']).total_seconds()
+                    if cache_age > max_cache_age:
+                        logger.debug(f"Cache for {display_name} expired ({cache_age:.1f}s > {max_cache_age}s)")
+                        cached_entry = None
+                
+                if cached_entry and cached_entry.get('data'):
+                    status_result = cached_entry['data']
             else:
-                # ⚠️ NO cache available - show "Loading" status
                 logger.debug(f"[/serverstatus] No cache entry for '{display_name}' - Background loop will update")
                 status_result = None
             
-            # Process status result
-            if status_result and isinstance(status_result, tuple) and len(status_result) == 6:
-                _, is_running, _, _, _, _ = status_result
-                
-                # Determine status icon
-                if display_name in self.pending_actions:
-                    pending_timestamp = self.pending_actions[display_name]['timestamp']
+            # Check if container has info available (same as original)
+            info_indicator = ""
+            try:
+                from services.infrastructure.container_info_service import get_container_info_service
+                info_service = get_container_info_service()
+                info_result = info_service.get_container_info(docker_name)
+                if info_result.success and info_result.data.enabled:
+                    info_indicator = " ℹ️"
+            except (RuntimeError, ValueError, KeyError, OSError) as e:
+                logger.debug(f"Could not check info status for {docker_name}: {e}")
+            
+            # Process status result - NOW USING ContainerStatusResult Objects (not tuples)
+            # Check if we have a successful ContainerStatusResult
+            from services.docker_status.models import ContainerStatusResult
+
+            if status_result and isinstance(status_result, ContainerStatusResult) and status_result.success:
+                is_running = status_result.is_running
+
+                # Determine status icon (same logic as original)
+                # Check pending actions using docker_name as key
+                if docker_name in self.pending_actions:
+                    pending_timestamp = self.pending_actions[docker_name]['timestamp']
                     pending_duration = (now_utc - pending_timestamp).total_seconds()
-                    if pending_duration < 120:  # Same timeout as in status_handlers.py
-                        status_emoji = "🟡"  # Yellow for pending
-                        # Use "Pending" status text instead of Online/Offline
+                    if pending_duration < 120:
+                        status_emoji = "🟡"
                         status_text = translate("Pending")
                     else:
-                        # Clear stale pending state
-                        del self.pending_actions[display_name]
+                        del self.pending_actions[docker_name]
                         status_emoji = "🟢" if is_running else "🔴"
-                        # Normal status text based on is_running
-                        status_text = translate("Online") if is_running else translate("Offline")
                 else:
                     status_emoji = "🟢" if is_running else "🔴"
-                    # Normal status text based on is_running
-                    status_text = translate("Online") if is_running else translate("Offline")
-                
-                # Add status line with proper spacing
-                line = f"│ {status_emoji} {status_text:8} {display_name}"
+
+                # Truncate display name for mobile (max 20 chars)
+                truncated_name = display_name[:20] + "." if len(display_name) > 20 else display_name
+                # Add status line with proper spacing and info indicator (match original format)
+                line = f"│ {status_emoji} {truncated_name}{info_indicator}"
                 content_lines.append(line)
             else:
                 # No cache data available - show loading status
                 status_emoji = "🔄"
-                status_text = translate("Loading")
-                line = f"│ {status_emoji} {status_text:8} {display_name}"
+                # Truncate display name for mobile (max 20 chars)
+                truncated_name = display_name[:20] + "." if len(display_name) > 20 else display_name
+                line = f"│ {status_emoji} {truncated_name}{info_indicator}"
                 content_lines.append(line)
-
-        # Add footer line
+        
+        # Close server status box
         content_lines.append("└───────────────────────────")
         
         # Combine all lines into the description
         embed.description = "```\n" + "\n".join(content_lines) + "\n```"
         
-        # Add the footer with the website URL
-        embed.set_footer(text="https://ddc.bot")
+        # Check if any containers have info available
+        has_any_info = False
+        try:
+            from services.infrastructure.container_info_service import get_container_info_service
+            info_service = get_container_info_service()
+            for server_conf in ordered_servers:
+                docker_name = server_conf.get('docker_name')
+                if docker_name:
+                    info_result = info_service.get_container_info(docker_name)
+                    if info_result.success and info_result.data.enabled:
+                        has_any_info = True
+                        break
+        except (KeyError, AttributeError, ValueError) as e:
+            logger.debug(f"Could not check info availability: {e}")
         
-        return embed
+        # Help text removed - replaced with Help button in MechView
+        
+        # Check if donations are disabled by premium key
+        from services.donation.donation_utils import is_donations_disabled
+        donations_disabled = is_donations_disabled()
+        
+        # Add EXPANDED Mech Status with detailed information and progress bars (skip if donations disabled)
+        mechonate_button = None
+        if not donations_disabled:
+            try:
+                logger.info("DEBUG: Using Mech Status Cache Service")
+                import sys
+                import os
+                # Add project root to Python path for service imports
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+
+                # SERVICE FIRST: Use MechStatusCacheService for instant response
+                from services.mech.mech_status_cache_service import get_mech_status_cache_service, MechStatusCacheRequest
+                cache_service = get_mech_status_cache_service()
+                cache_request = MechStatusCacheRequest(include_decimals=True, force_refresh=force_refresh)
+                mech_cache_result = cache_service.get_cached_status(cache_request)
+
+                if not mech_cache_result.success:
+                    logger.error(f"Failed to get cached mech status: {mech_cache_result.error_message}")
+                    return
+
+                logger.info(f"CACHE: Using cached mech data (age: {mech_cache_result.cache_age_seconds:.1f}s)")
+
+                # Get clean data from CACHED result
+                current_Power = mech_cache_result.power  # Already includes decimals from request
+                total_donations_received = mech_cache_result.total_donated
+                logger.info(f"CACHE: Power=${current_Power:.2f}, total_donations=${total_donations_received}, level={mech_cache_result.level} ({mech_cache_result.name})")
+
+                # Evolution info from cached service with next_name for UI
+                from services.mech.mech_service import MECH_LEVELS
+                next_name = None
+                if mech_cache_result.threshold is not None and mech_cache_result.threshold > 0:
+                    # For Level 10 ONLY: use corrupted name (Level 11 should have no next_name)
+                    if mech_cache_result.level == 10:
+                        next_name = "ERR#R: [DATA_C0RR*PTED]"
+                    elif mech_cache_result.level < 10:
+                        # Find next level name from MECH_LEVELS for normal levels (1-9)
+                        for level_info in MECH_LEVELS:
+                            if level_info.threshold == mech_cache_result.threshold:
+                                next_name = level_info.name
+                                break
+                    # Level 11: next_name stays None -> "MAX EVOLUTION REACHED!"
+
+                evolution = {
+                    'name': mech_cache_result.name,
+                    'level': mech_cache_result.level,
+                    'current_threshold': 0,  # Will be calculated from level if needed
+                    'next_threshold': mech_cache_result.threshold,
+                }
+
+                # Only add next_name if it exists (Level 11 has no next evolution)
+                if next_name is not None:
+                    evolution['next_name'] = next_name
+                
+                # Speed info from CACHE - already computed!
+                speed = {
+                    'level': mech_cache_result.speed,
+                    'description': mech_cache_result.speed_description,
+                    'color': mech_cache_result.speed_color,
+                    'glvl': mech_cache_result.glvl,
+                    'glvl_max': mech_cache_result.glvl_max
+                }
+
+                logger.info(f"CACHE: evolution={evolution['name']}, glvl={mech_cache_result.glvl}/{mech_cache_result.glvl_max}")
+                
+                # Create mech animation with fallback
+                try:
+                    from services.mech.animation_cache_service import get_animation_cache_service
+                    from services.mech.speed_levels import get_combined_mech_status
+
+                    # Get animation cache service and use actual evolution level
+                    cache_service = get_animation_cache_service()
+                    # UNIFICATION: Use actual mech level instead of calculating from donations
+                    evolution_level = mech_cache_result.level
+
+                    # SPEED UNIFICATION: Calculate actual speed level from current power (same as MechWebService/Status Overview)
+                    # SPECIAL CASE: Level 11 is maximum level - always use Speed Level 100 (same logic as all other services)
+                    if evolution_level >= 11:
+                        actual_speed_level = 100  # Level 11 always has maximum speed (divine speed)
+                    else:
+                        speed_status = get_combined_mech_status(current_Power)
+                        actual_speed_level = speed_status['speed']['level']
+
+                    # Get animation bytes with power-based selection (REST if power=0, WALK if power>0)
+                    animation_bytes = cache_service.get_animation_with_speed_and_power(
+                        evolution_level=evolution_level,
+                        speed_level=actual_speed_level,  # Use actual speed level (unified with Big Mech)
+                        power_level=current_Power
+                    )
+
+                    # Convert to Discord File
+                    buffer = BytesIO(animation_bytes)
+                    animation_file = discord.File(buffer, filename=f"mech_status_expanded_{int(time.time())}.webp", spoiler=False)
+                except (RuntimeError, ValueError, KeyError, OSError) as e:
+                    logger.warning(f"Animation service failed (graceful degradation): {e}")
+                    animation_file = None
+                    # Add fallback visual indicator in embed
+                    if not embed.footer or not embed.footer.text:
+                        embed.set_footer(text="🎬 Animation service temporarily unavailable")
+                    else:
+                        embed.set_footer(text=f"{embed.footer.text} | 🎬 Animation unavailable")
+
+                # Use clean progress bar data from CACHE - NO MORE MANUAL CALCULATION! 🎯
+                # For Level 1, use decimal Power for accurate percentage
+                if mech_cache_result.level == 1:
+                    Power_current = current_Power  # Use decimal value for Level 1
+                else:
+                    Power_current = mech_cache_result.bars.Power_current  # Use integer for Level 2+
+                Power_max = mech_cache_result.bars.Power_max_for_level
+                evolution_current = mech_cache_result.bars.mech_progress_current
+                evolution_max = mech_cache_result.bars.mech_progress_max
+
+                # CRITICAL DEBUG: Log exact bars values
+                logger.critical(f"BARS DEBUG - mech_progress_current={mech_cache_result.bars.mech_progress_current} (type: {type(mech_cache_result.bars.mech_progress_current)})")
+                logger.critical(f"BARS DEBUG - mech_progress_max={mech_cache_result.bars.mech_progress_max} (type: {type(mech_cache_result.bars.mech_progress_max)})")
+                logger.info(f"CACHE BARS: Power={Power_current}/{Power_max}, evolution={evolution_current}/{evolution_max}")
+                
+                # Calculate percentages from clean data
+                if Power_max > 0:
+                    Power_percentage = min(100, max(0, (Power_current / Power_max) * 100))
+                    Power_bar = self._create_progress_bar(Power_percentage)
+                    logger.info(f"NEW SERVICE: Power bar {Power_percentage:.1f}% ({Power_current}/{Power_max})")
+                else:
+                    Power_bar = self._create_progress_bar(0)
+                    Power_percentage = 0
+                    logger.info(f"NEW SERVICE: Power bar 0% (max=0)")
+                
+                # Evolution bar from clean data
+                if evolution_max > 0:
+                    next_percentage = min(100, max(0, (evolution_current / evolution_max) * 100))
+                    next_bar = self._create_progress_bar(next_percentage)
+                    # CRITICAL DEBUG: Log exact values to find 100% bug
+                    logger.critical(f"EVOLUTION DEBUG - Raw values: evolution_current={evolution_current}, evolution_max={evolution_max}")
+                    logger.critical(f"EVOLUTION DEBUG - Types: evolution_current type={type(evolution_current)}, evolution_max type={type(evolution_max)}")
+                    logger.critical(f"EVOLUTION DEBUG - Calculation: ({evolution_current}/{evolution_max})*100 = {(evolution_current/evolution_max)*100:.2f}%")
+                    logger.critical(f"EVOLUTION DEBUG - Final: next_percentage={next_percentage:.1f}%")
+                    logger.info(f"NEW SERVICE: Evolution bar {next_percentage:.1f}% ({evolution_current}/{evolution_max})")
+                else:
+                    next_bar = self._create_progress_bar(0) 
+                    next_percentage = 0
+                    logger.info(f"NEW SERVICE: Evolution bar 0% (max level reached)")
+                
+                # Create EXPANDED mech status text with detailed information (no bold formatting)
+                evolution_name = translate(evolution['name'])
+                level_text = translate("Level")
+                mech_status = f"{evolution_name} ({level_text} {evolution['level']})\n"
+                speed_text = translate("Speed")
+                mech_status += f"{speed_text}: {speed['description']}\n\n"
+
+                # Special handling for Level 11 - corrupted power bar
+                if evolution['level'] == 11:
+                    # Heavily corrupted power bar - same characters as evolution bar, different distribution
+                    # Power bar: 23 chars with ░(10), #(5), %(2), !(2), &(2), @(2) - same count, different pattern
+                    corrupted_power_bar = "@#&░!░%#░░#!░%░&░#@░░#%"  # 23 characters: fuel/power bar
+                    corrupted_power_percentage = f"#{Power_percentage:.1f}%&"
+                    mech_status += f"⚡{current_Power:.2f}\n`{corrupted_power_bar}` {corrupted_power_percentage}\n"
+                else:
+                    mech_status += f"⚡{current_Power:.2f}\n`{Power_bar}` {Power_percentage:.1f}%\n"
+
+                # Get level-specific decay rate (SERVICE FIRST: unified evolution system)
+                from services.mech.mech_evolutions import get_evolution_level_info
+                evolution_info = get_evolution_level_info(mech_cache_result.level)
+                decay_per_day = evolution_info.decay_per_day if evolution_info else 1.0
+
+                Power_consumption_text = translate("Power Consumption")
+                if decay_per_day == 0:
+                    mech_status += f"{Power_consumption_text}: ⚡ {translate('No decay')}\n\n"
+                else:
+                    per_day_suffix = translate("per_day_suffix")
+                    mech_status += f"{Power_consumption_text}: 🔻 {decay_per_day}{per_day_suffix}\n\n"
+
+                if evolution.get('next_name'):
+                    next_evolution_name = translate(evolution['next_name'])
+
+                    # Special handling for Level 10 → Level 11 progression (ALWAYS show corrupted bar)
+                    if mech_cache_result.level == 10 or "ERR#R" in next_evolution_name or "DATA_C0RR*PTED" in next_evolution_name:
+                        # Create heavily corrupted progress bar with distorted characters
+                        # Evolution bar: 23 chars with ░(10), #(5), %(2), !(2), &(2), @(2)
+                        corrupted_bar = "░%#!░&░#░@░░#!#%░░&░#@░"  # 23 characters: evolution progression
+
+                        # For Level 10 → 11: Show REAL progression with corrupted display
+                        if mech_cache_result.level == 10:
+                            # Use actual percentage to Level 11, but display corrupted
+                            corrupted_percentage = f"#{next_percentage:.1f}%&"
+                            next_evolution_prefix = "ERR#R: [DATA_C0RR*PTED]"
+                        else:
+                            # For Level 11 itself: force 100% display (max evolution reached)
+                            corrupted_percentage = "#100.0%&"
+                            next_evolution_prefix = "⚠️"
+
+                        mech_status += f"{next_evolution_prefix}\n`{corrupted_bar}` {corrupted_percentage}"
+                    else:
+                        mech_status += f"⬆️ {next_evolution_name}\n`{next_bar}` {next_percentage:.1f}%"
+                else:
+                    max_evolution_text = translate("MAX EVOLUTION REACHED!")
+                    mech_status += f"🌟 {max_evolution_text}"
+                
+                # Glvl info is now included in speed description, no need for separate line
+                
+                embed.add_field(name=translate("Donation Engine"), value=mech_status, inline=False)
+
+                # For expanded view, use mech animation
+                if animation_file:
+                    # KEEP ORIGINAL EXTENSION for WebP embedding support
+                    original_ext = animation_file.filename.split('.')[-1]
+                    animation_file.filename = f"mech_animation.{original_ext}"
+                    embed.set_image(url=f"attachment://mech_animation.{original_ext}")
+                    logger.debug(f"Set expanded animation with extension: {original_ext}")
+                else:
+                    # For refreshes without animation file, reference existing with correct extension
+                    embed.set_image(url="attachment://mech_animation.webp")  # Assume WebP for new system
+                    
+            except (discord.errors.DiscordException, RuntimeError, OSError, KeyError) as e:
+                logger.error(f"Could not load expanded mech status for /ss: {e}", exc_info=True)
+        else:
+            # Donations disabled - no mech components
+            animation_files = None
+            logger.info("Donations disabled - skipping mech status for /ss")
+
+        # Add website URL as footer for better spacing
+        embed.set_footer(text="https://ddc.bot")
+
+        # Return tuple (embed, animation_file) - single file for expanded view
+        return embed, animation_file
+
+    async def _create_admin_overview_embed(self, ordered_servers, config, force_refresh=False):
+        """Creates the admin overview embed with CPU and RAM details for control channels.
+
+        NEW FORMAT: Clean grid layout using Discord fields (inline=true).
+        Each container gets a field with status emoji, name (max 14 chars), and CPU/RAM on one line.
+
+        Args:
+            ordered_servers: List of server configurations
+            config: Application configuration
+            force_refresh: If True, forces fresh data from cache
+
+        Returns:
+            tuple: (embed, None, has_running_containers) - No animation for admin overview
+        """
+        from .translation_manager import _ as translate
+        import discord
+        from datetime import datetime, timezone
+
+        # Get current time in local timezone
+        now_utc = datetime.now(timezone.utc)
+        fresh_config = load_config()
+        timezone_str = fresh_config.get('timezone') if fresh_config else config.get('timezone')
+        current_time = format_datetime_with_timezone(now_utc, timezone_str, time_only=True)
+
+        # Count containers by status
+        total_containers = len(ordered_servers)
+        online_count = 0
+        offline_count = 0
+
+        # Track if any containers are running for bulk actions
+        has_running_containers = False
+
+        # Create the embed with dark-mode friendly color
+        from .translation_manager import _ as translate
+        embed = discord.Embed(
+            title=translate("Admin Overview"),
+            color=0x2f3136  # Dark grey, dark-mode friendly
+        )
+
+        # Build description header
+        header_lines = [
+            translate("Last update") + f": {current_time}",
+            translate("Container: {total} • Online: {online} • Offline: {offline}").format(total=total_containers, online='{online}', offline='{offline}')
+        ]
+
+        # Collect container lines separately (will add spacing between them later)
+        container_lines = []
+
+        # Process each container and add line to list
+        for server_conf in ordered_servers:
+            display_name = server_conf.get('display_name', server_conf.get('docker_name'))
+            docker_name = server_conf.get('docker_name')
+            if not display_name or not docker_name:
+                continue
+
+            # Get cached status data
+            # Use docker_name as cache key (stable identifier)
+            cached_entry = self.status_cache_service.get(docker_name)
+            status_result = None
+
+            if cached_entry and cached_entry.get('data'):
+                import os
+                max_cache_age = int(os.environ.get('DDC_DOCKER_MAX_CACHE_AGE', '300'))
+
+                if 'timestamp' in cached_entry:
+                    cache_age = (datetime.now(timezone.utc) - cached_entry['timestamp']).total_seconds()
+                    if cache_age > max_cache_age:
+                        logger.debug(f"Cache for {display_name} expired")
+                        cached_entry = None
+
+                if cached_entry and cached_entry.get('data'):
+                    status_result = cached_entry['data']
+
+            # Check if container has info configured
+            has_info = False
+            try:
+                from services.infrastructure.container_info_service import get_container_info_service
+                info_service = get_container_info_service()
+                info_result = info_service.get_container_info(docker_name)
+                if info_result.success and info_result.data.enabled:
+                    has_info = True
+            except (discord.errors.DiscordException, RuntimeError):
+                pass
+
+            # Process status and build field
+            # NOW USING ContainerStatusResult Objects (not tuples)
+            from services.docker_status.models import ContainerStatusResult
+
+            if status_result and isinstance(status_result, ContainerStatusResult) and status_result.success:
+                # Extract data from ContainerStatusResult object
+                is_running = status_result.is_running
+                cpu_str = status_result.cpu
+                ram_str = status_result.ram
+
+                # Determine status emoji (EXACTLY same logic as Server Overview)
+                # Check pending actions using docker_name as key
+                if docker_name in self.pending_actions:
+                    pending_timestamp = self.pending_actions[docker_name]['timestamp']
+                    pending_duration = (now_utc - pending_timestamp).total_seconds()
+                    if pending_duration < 120:
+                        status_emoji = "🟡"
+                        status_text = translate("Pending")
+                    else:
+                        del self.pending_actions[docker_name]
+                        status_emoji = "🟢" if is_running else "🔴"
+                else:
+                    status_emoji = "🟢" if is_running else "🔴"
+
+                # Count online/offline
+                if is_running:
+                    has_running_containers = True
+                    online_count += 1
+                else:
+                    offline_count += 1
+
+                # Truncate name to max 12 characters (shorter for single-line format)
+                if len(display_name) > 12:
+                    truncated_name = display_name[:12] + "…"
+                else:
+                    truncated_name = display_name
+
+                # Build field name - EVERYTHING in one line
+                if is_running:
+                    # Format CPU: ensure 1 decimal place
+                    try:
+                        # cpu_str is like "0.4%" or "12%"
+                        if cpu_str and cpu_str != "N/A":
+                            cpu_value = float(cpu_str.replace('%', '').strip())
+                            cpu_formatted = f"{cpu_value:.1f}%"
+                        else:
+                            cpu_formatted = "—%"
+                    except (ValueError, AttributeError):
+                        cpu_formatted = "—%"
+
+                    # Format RAM: convert MB to GB with 1 decimal place
+                    try:
+                        # ram_str is like "2060 MB" or "2060MB"
+                        if ram_str and ram_str != "N/A":
+                            ram_mb = float(ram_str.replace('MB', '').replace(' ', '').strip())
+                            ram_gb = ram_mb / 1024
+                            ram_formatted = f"{ram_gb:.1f}GB"
+                        else:
+                            ram_formatted = "—GB"
+                    except (ValueError, AttributeError):
+                        ram_formatted = "—GB"
+
+                    # Build single-line: "🟢 Name · cpu% • ramGB ⓘ"
+                    # Use middot (·) as separator, smaller info icon (ⓘ)
+                    container_line = f"{status_emoji} {truncated_name} · {cpu_formatted} • {ram_formatted}"
+                    if has_info:
+                        container_line += " ⓘ"  # Small circled i
+                else:
+                    # Container is stopped: "🔴 Name · offline"
+                    container_line = f"{status_emoji} {truncated_name} · {translate('offline')}"
+
+                # Add to container lines list
+                container_lines.append(container_line)
+            else:
+                # No status data available - show loading status (same as Server Overview)
+                status_emoji = "🔄"
+                offline_count += 1
+
+                # Truncate name to max 12 characters
+                if len(display_name) > 12:
+                    truncated_name = display_name[:12] + "…"
+                else:
+                    truncated_name = display_name
+
+                # Single-line format: "🔄 Name"
+                container_line = f"{status_emoji} {truncated_name}"
+                if has_info:
+                    container_line += " ⓘ"  # Small circled i
+
+                # Add to container lines list
+                container_lines.append(container_line)
+
+        # Format the counts in the header line
+        header_lines[1] = translate("Container: {total} • Online: {online} • Offline: {offline}").format(total=total_containers, online=online_count, offline=offline_count)
+
+        # Build final description with spacing between container lines to handle ⓘ height differences
+        # Join container lines with double newline for consistent spacing (fixes mobile layout issue)
+        container_section = "\n\n".join(container_lines) if container_lines else ""
+
+        # Combine header and container section
+        embed.description = "\n".join(header_lines) + "\n\n" + container_section
+
+        # Add footer
+        embed.set_footer(text="https://ddc.bot")
+
+        return embed, None, has_running_containers
+
+    async def _create_overview_embed_collapsed(self, ordered_servers, config, force_refresh=False):
+        """Creates the server overview embed with COLLAPSED mech status (animation only).
+
+        Args:
+            ordered_servers: List of server configurations
+            config: Application configuration
+            force_refresh: If True, forces fresh data from cache (for manual commands)
+
+        Returns:
+            tuple: (embed, animation_file) where animation_file is None if no animation
+        """
+        # Import translation function locally to ensure it's accessible
+        from .translation_manager import _ as translate
+        import discord
+        import time
+        from io import BytesIO
+
+        # Initialize animation file
+        animation_file = None
+        
+        # Create the overview embed
+        embed = discord.Embed(
+            title=translate("Server Overview"),
+            color=discord.Color.blue()
+        )
+
+        # Build server status lines (same logic as original)
+        now_utc = datetime.now(timezone.utc)
+        fresh_config = load_config()
+        timezone_str = fresh_config.get('timezone') if fresh_config else config.get('timezone')
+        
+        current_time = format_datetime_with_timezone(now_utc, timezone_str, time_only=True)
+        
+        # Add timestamp at the top
+        last_update_text = translate("Last update")
+        
+        # Start building the content (same server status logic as original)
+        content_lines = [
+            f"{last_update_text}: {current_time}",
+            "┌── Status ─────────────────"
+        ]
+
+        # Add server statuses (copy from original method - same logic)
+        for server_conf in ordered_servers:
+            display_name = server_conf.get('display_name', server_conf.get('docker_name'))
+            docker_name = server_conf.get('docker_name')
+            if not display_name or not docker_name:
+                continue
+                
+            # Use cached data only (same as original)
+            # Use docker_name as cache key (stable identifier)
+            cached_entry = self.status_cache_service.get(docker_name)
+            status_result = None
+            
+            if cached_entry and cached_entry.get('data'):
+                import os
+                max_cache_age = int(os.environ.get('DDC_DOCKER_MAX_CACHE_AGE', '300'))
+                
+                if 'timestamp' in cached_entry:
+                    cache_age = (datetime.now(timezone.utc) - cached_entry['timestamp']).total_seconds()
+                    if cache_age > max_cache_age:
+                        logger.debug(f"Cache for {display_name} expired ({cache_age:.1f}s > {max_cache_age}s)")
+                        cached_entry = None
+                
+                if cached_entry and cached_entry.get('data'):
+                    status_result = cached_entry['data']
+            else:
+                logger.debug(f"[/serverstatus] No cache entry for '{display_name}' - Background loop will update")
+                status_result = None
+            
+            # Check if container has info available (same as original)
+            info_indicator = ""
+            try:
+                from services.infrastructure.container_info_service import get_container_info_service
+                info_service = get_container_info_service()
+                info_result = info_service.get_container_info(docker_name)
+                if info_result.success and info_result.data.enabled:
+                    info_indicator = " ℹ️"
+            except (RuntimeError, ValueError, KeyError, OSError) as e:
+                logger.debug(f"Could not check info status for {docker_name}: {e}")
+            
+            # Process status result - NOW USING ContainerStatusResult Objects (not tuples)
+            # Check if we have a successful ContainerStatusResult
+            from services.docker_status.models import ContainerStatusResult
+
+            if status_result and isinstance(status_result, ContainerStatusResult) and status_result.success:
+                is_running = status_result.is_running
+
+                # Determine status icon (same logic as original)
+                # Check pending actions using docker_name as key
+                if docker_name in self.pending_actions:
+                    pending_timestamp = self.pending_actions[docker_name]['timestamp']
+                    pending_duration = (now_utc - pending_timestamp).total_seconds()
+                    if pending_duration < 120:
+                        status_emoji = "🟡"
+                        status_text = translate("Pending")
+                    else:
+                        del self.pending_actions[docker_name]
+                        status_emoji = "🟢" if is_running else "🔴"
+                else:
+                    status_emoji = "🟢" if is_running else "🔴"
+
+                # Truncate display name for mobile (max 20 chars)
+                truncated_name = display_name[:20] + "." if len(display_name) > 20 else display_name
+                # Add status line with proper spacing and info indicator (match original format)
+                line = f"│ {status_emoji} {truncated_name}{info_indicator}"
+                content_lines.append(line)
+            else:
+                # No cache data available - show loading status
+                status_emoji = "🔄"
+                # Truncate display name for mobile (max 20 chars)
+                truncated_name = display_name[:20] + "." if len(display_name) > 20 else display_name
+                line = f"│ {status_emoji} {truncated_name}{info_indicator}"
+                content_lines.append(line)
+        
+        # Close server status box
+        content_lines.append("└───────────────────────────")
+        
+        # Combine all lines into the description
+        embed.description = "```\n" + "\n".join(content_lines) + "\n```"
+        
+        # Check if any containers have info available
+        has_any_info = False
+        try:
+            from services.infrastructure.container_info_service import get_container_info_service
+            info_service = get_container_info_service()
+            for server_conf in ordered_servers:
+                docker_name = server_conf.get('docker_name')
+                if docker_name:
+                    info_result = info_service.get_container_info(docker_name)
+                    if info_result.success and info_result.data.enabled:
+                        has_any_info = True
+                        break
+        except (KeyError, AttributeError, ValueError) as e:
+            logger.debug(f"Could not check info availability: {e}")
+        
+        # Help text removed - replaced with Help button in MechView
+        
+        # Check if donations are disabled by premium key
+        from services.donation.donation_utils import is_donations_disabled
+        donations_disabled = is_donations_disabled()
+        
+        # Add COLLAPSED Mech Status (animation only, no text details) (skip if donations disabled)
+        animation_file = None
+        if not donations_disabled:
+            try:
+                import sys
+                import os
+                # Add project root to Python path for service imports
+                project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+
+                # SERVICE FIRST: Use MechStatusCacheService for instant response
+                from services.mech.mech_status_cache_service import get_mech_status_cache_service, MechStatusCacheRequest
+                cache_service = get_mech_status_cache_service()
+                cache_request = MechStatusCacheRequest(include_decimals=True, force_refresh=force_refresh)
+                mech_cache_result = cache_service.get_cached_status(cache_request)
+
+                if not mech_cache_result.success:
+                    logger.error(f"Failed to get cached mech status for animation: {mech_cache_result.error_message}")
+                    return
+
+                current_Power = mech_cache_result.power
+                logger.info(f"CACHE (collapsed): Using cached power data: {current_Power} (age: {mech_cache_result.cache_age_seconds:.1f}s)")
+                
+                # Create mech animation with fallback
+                try:
+                    from services.mech.animation_cache_service import get_animation_cache_service
+                    from services.mech.speed_levels import get_combined_mech_status
+
+                    # Get animation cache service and use actual evolution level
+                    cache_service = get_animation_cache_service()
+                    # UNIFICATION: Use actual mech level instead of calculating from donations
+                    evolution_level = mech_cache_result.level
+
+                    # SPEED UNIFICATION: Calculate actual speed level from current power (same as MechWebService/Status Overview)
+                    # SPECIAL CASE: Level 11 is maximum level - always use Speed Level 100 (same logic as all other services)
+                    if evolution_level >= 11:
+                        actual_speed_level = 100  # Level 11 always has maximum speed (divine speed)
+                    else:
+                        speed_status = get_combined_mech_status(current_Power)
+                        actual_speed_level = speed_status['speed']['level']
+
+                    # Get animation bytes with power-based selection (REST if power=0, WALK if power>0)
+                    animation_bytes = cache_service.get_animation_with_speed_and_power(
+                        evolution_level=evolution_level,
+                        speed_level=actual_speed_level,  # Use actual speed level (unified with Big Mech)
+                        power_level=current_Power
+                    )
+
+                    # Convert to Discord File
+                    buffer = BytesIO(animation_bytes)
+                    animation_file = discord.File(buffer, filename=f"mech_status_collapsed_{int(time.time())}.webp", spoiler=False)
+                except (RuntimeError, ValueError, KeyError, OSError) as e:
+                    logger.warning(f"Animation service failed (graceful degradation): {e}")
+                    animation_file = None
+                    # Add fallback visual indicator in embed
+                    if not embed.footer or not embed.footer.text:
+                        embed.set_footer(text="🎬 Animation service temporarily unavailable")
+                    else:
+                        embed.set_footer(text=f"{embed.footer.text} | 🎬 Animation unavailable")
+
+                # For collapsed view, only add a simple field name (no detailed info)
+                embed.add_field(name=translate("Donation Engine"), value="*" + translate("Click + to view Mech details") + "*", inline=False)
+                
+                # For collapsed view, use mech animation
+                if animation_file:
+                    # KEEP ORIGINAL EXTENSION for WebP embedding support
+                    original_ext = animation_file.filename.split('.')[-1]
+                    animation_file.filename = f"mech_animation.{original_ext}"
+                    embed.set_image(url=f"attachment://mech_animation.{original_ext}")
+                    logger.debug(f"Set animation with extension: {original_ext}")
+                else:
+                    # For refreshes without animation file, reference existing with correct extension
+                    embed.set_image(url="attachment://mech_animation.webp")  # Assume WebP for new system
+                
+            except (discord.errors.DiscordException, RuntimeError, OSError, KeyError) as e:
+                logger.error(f"Could not load collapsed mech status for /ss: {e}", exc_info=True)
+        else:
+            # Donations disabled - no mech components
+            animation_files = None
+            logger.info("Donations disabled - skipping collapsed mech status for /ss")
+
+        # Add website URL as footer for better spacing
+        embed.set_footer(text="https://ddc.bot")
+
+        # Return tuple (embed, animation_file) - single file for collapsed view
+        return embed, animation_file
+
+    def _create_progress_bar(self, percentage: float, length: int = 30) -> str:
+        """Create a text progress bar with consistent character widths for monospace."""
+        filled = int((percentage / 100) * length)
+        empty = length - filled
+        # Use █ and ░ - these work best in monospace code blocks
+        bar = "█" * filled + "░" * empty
+        return bar
+
+    async def _send_message_with_files(self, target, embed, file, view=None):
+        """Helper to send messages with either single file or no files."""
+        if file:
+            # WEBP EMBEDDING SUCCESS: Use combined method (embed + file in same message)
+            # The fix was preserving .webp extension instead of forcing .gif
+            logger.debug(f"Sending combined message with WebP animation: {file.filename}")
+
+            # Combined method (single message with embed + file)
+            if view:
+                return await target.send(embed=embed, file=file, view=view)
+            else:
+                return await target.send(embed=embed, file=file)
+        else:
+            # No files
+            if view:
+                return await target.send(embed=embed, view=view)
+            else:
+                return await target.send(embed=embed)
+
+    async def _handle_donate_interaction(self, interaction):
+        """Handle Mechonate button interaction - shows donation options."""
+        try:
+            
+            # Check if MechService is available
+            try:
+                from services.mech.mech_service import get_mech_service
+                # Test if we can get the service
+                mech_service = get_mech_service()
+                mech_service_available = True
+                logger.info("MechService is available for donations")
+            except (ImportError, AttributeError, RuntimeError) as e:
+                mech_service_available = False
+                logger.warning(f"MechService not available: {e}")
+            
+            # Check if donations are disabled by premium key (now use config service)
+            try:
+                from services.config.config_service import get_config_service
+                config_service = get_config_service()
+                config = config_service.get_config()
+                donations_disabled = bool(config.get('donation_disable_key'))
+            except:
+                donations_disabled = False
+                
+            if donations_disabled:
+                embed = discord.Embed(
+                    title=_("🔐 Premium Features Active"),
+                    description=_("Donations are disabled via premium key. Thank you for supporting DDC!"),
+                    color=0xFFD700  # Gold color
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                return
+            
+            # Create donation embed (same as /donate command)
+            embed = discord.Embed(
+                title=_('Support DockerDiscordControl'),
+                description=_(
+                    'If DDC helps you, please consider supporting ongoing development. '
+                    'Donations help cover hosting, CI, maintenance, and feature work.'
+                ),
+                color=0x00ff41
+            )
+            embed.add_field(
+                name=_('Choose your preferred method:'),
+                value=_('Click one of the buttons below to support DDC development'),
+                inline=False
+            )
+            embed.set_footer(text="https://ddc.bot")
+            
+            # Create view with donation buttons
+            try:
+                view = DonationView(mech_service_available, bot=self.bot)
+                # Note: Ephemeral messages don't need auto-delete as they're private
+                await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+                logger.info(f"Mechonate button used by user {interaction.user.name} ({interaction.user.id})")
+            except (ImportError, AttributeError, RuntimeError) as view_error:
+                logger.error(f"Error creating DonationView: {view_error}", exc_info=True)
+                # Fallback without view
+                await interaction.response.send_message(embed=embed, ephemeral=True)
+                
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in _handle_donate_interaction: {e}", exc_info=True)
+            try:
+                error_embed = discord.Embed(
+                    title=_("❌ Error"),
+                    description=_("An error occurred while showing donation information. Please try again later."),
+                    color=discord.Color.red()
+                )
+                await interaction.response.send_message(embed=error_embed, ephemeral=True)
+            except:
+                # If we can't respond, it means the interaction was already responded to
+                pass
+
+    async def _auto_update_ss_messages(self, reason: str, force_recreate: bool = True):
+        """Auto-update all existing /ss messages in channels after donations
+        
+        Args:
+            reason: Reason for the update
+            force_recreate: If True, delete and recreate messages (for animation updates)
+                          If False, just edit the embed (for expand/collapse)
+        """
+        try:
+            logger.info(f"🔄 Auto-updating /ss messages: {reason}")
+            
+            # Get all channels with overview messages
+            updated_count = 0
+            for channel_id, messages in self.channel_server_message_ids.items():
+                if 'overview' in messages:
+                    try:
+                        channel = self.bot.get_channel(channel_id)
+                        if not channel:
+                            continue
+
+                        # Skip update if channel has active button interaction
+                        if await self._is_channel_interacting(channel_id):
+                            logger.debug(f"Skipping auto-update for channel {channel_id} - active interaction")
+                            continue
+
+                        message_id = messages['overview']
+                        message = await channel.fetch_message(message_id)
+                        if not message:
+                            continue
+
+                        # Get fresh server data
+                        config = load_config()
+                        if not config:
+                            continue
+
+                        # SERVICE FIRST: Check Web UI refresh/recreate settings before proceeding
+                        try:
+                            from services.discord.status_overview_service import get_status_overview_service
+                            overview_service = get_status_overview_service()
+
+                            # Get last update time for this channel
+                            last_update_time = None
+                            if channel_id in self.last_message_update_time and 'overview' in self.last_message_update_time[channel_id]:
+                                last_update_time = self.last_message_update_time[channel_id]['overview']
+
+                            # Make update decision based on Web UI settings
+                            last_activity = self.last_channel_activity.get(channel_id)
+                            decision = overview_service.make_update_decision(
+                                channel_id=channel_id,
+                                global_config=config,
+                                last_update_time=last_update_time,
+                                reason=reason,
+                                force_refresh=False,  # This is auto-update, not manual
+                                force_recreate=force_recreate,
+                                last_channel_activity=last_activity
+                            )
+
+                            # Skip if Service decides no update needed
+                            if not decision.should_update:
+                                logger.debug(f"SERVICE_FIRST: Skipping channel {channel_id} - {decision.skip_reason}")
+                                continue
+
+                            # Use Service decision for recreate logic
+                            if decision.should_recreate:
+                                force_recreate = True
+                                logger.debug(f"SERVICE_FIRST: Force recreate for channel {channel_id} - {decision.reason}")
+
+                            logger.debug(f"SERVICE_FIRST: Updating channel {channel_id} - {decision.reason}")
+
+                        except (ImportError, AttributeError, RuntimeError) as service_error:
+                            logger.warning(f"SERVICE_FIRST: Error in decision service for channel {channel_id}: {service_error}")
+                            # Continue with original logic if service fails (safe fallback)
+
+                        # SERVICE FIRST: Use ServerConfigService instead of direct config access
+                        server_config_service = get_server_config_service()
+                        servers = server_config_service.get_all_servers()
+                        ordered_servers = []
+                        seen_docker_names = set()
+                        
+                        # Apply server ordering
+                        from services.docker_service.server_order import load_server_order
+                        server_order = load_server_order()
+                        
+                        for server_name in server_order:
+                            for server in servers:
+                                docker_name = server.get('docker_name')
+                                if server.get('name') == server_name and docker_name and docker_name not in seen_docker_names:
+                                    ordered_servers.append(server)
+                                    seen_docker_names.add(docker_name)
+                        
+                        # Add remaining servers
+                        for server in servers:
+                            docker_name = server.get('docker_name')
+                            if docker_name and docker_name not in seen_docker_names:
+                                ordered_servers.append(server)
+                                seen_docker_names.add(docker_name)
+                        
+                        # Auto-detect Glvl changes for force_recreate decision
+                        current_glvl = None
+                        try:
+                            # Get current Power amount for Glvl calculation using CACHE
+                            from services.mech.mech_status_cache_service import get_mech_status_cache_service, MechStatusCacheRequest
+                            cache_service = get_mech_status_cache_service()
+                            cache_request = MechStatusCacheRequest(include_decimals=True)
+                            mech_cache_result = cache_service.get_cached_status(cache_request)
+
+                            if mech_cache_result.success:
+                                # Use cached glvl directly - no need for complex calculations
+                                current_glvl = mech_cache_result.glvl
+                                # BUGFIX: Extract current_Power from cache for power depletion check
+                                current_Power = mech_cache_result.power
+                            else:
+                                current_glvl = 0
+                                current_Power = 0.0
+                        except (KeyError, ValueError, AttributeError) as e:
+                            logger.debug(f"Could not get current Glvl: {e}")
+                            # BUGFIX: Set fallback values if cache fails
+                            current_glvl = 0
+                            current_Power = 0.0
+                        
+                        # Check if Glvl changed significantly (>= 1 level difference) or power reached 0
+                        glvl_changed = False
+                        power_depleted = False
+
+                        if current_glvl is not None:
+                            last_glvl = self.last_glvl_per_channel.get(channel_id, 0)
+
+                            # Special check: if power reached exactly 0, always force update
+                            if current_Power <= 0 and last_glvl > 0:
+                                power_depleted = True
+                                from .translation_manager import _
+                                logger.info(_("Mech power depleted - forcing animation update to show offline state"))
+                            if abs(current_glvl - last_glvl) >= 1:
+                                glvl_changed = True
+                                from .translation_manager import _
+                                glvl_change_text = _("Significant Glvl change detected")
+                                logger.info(f"{glvl_change_text}: {last_glvl} → {current_glvl}")
+                                self.last_glvl_per_channel[channel_id] = current_glvl
+                                self.mech_state_manager.set_last_glvl(channel_id, current_glvl)
+                            elif last_glvl == 0:  # First time tracking
+                                self.last_glvl_per_channel[channel_id] = current_glvl
+                                self.mech_state_manager.set_last_glvl(channel_id, current_glvl)
+                        
+                        # Override force_recreate if significant Glvl change or power depletion detected
+                        if (glvl_changed or power_depleted) and not force_recreate:
+                            # Check rate limit before allowing force_recreate
+                            if self.mech_state_manager.should_force_recreate(channel_id):
+                                force_recreate = True
+                                self.mech_state_manager.mark_force_recreate(channel_id)
+                                from .translation_manager import _
+                                if power_depleted:
+                                    upgrade_text = _("Upgrading to force_recreate=True due to power depletion (offline mech)")
+                                else:
+                                    upgrade_text = _("Upgrading to force_recreate=True due to significant Glvl change")
+                                logger.info(f"{upgrade_text}")
+                            else:
+                                logger.debug(f"Rate limited force_recreate for channel {channel_id} (Glvl change or power depletion)")
+                                force_recreate = False
+                        
+                        # Create updated embed based on expansion state
+                        is_mech_expanded = self.mech_expanded_states.get(channel_id, False)
+                        logger.info(f"AUTO-UPDATE: Channel {channel_id} is_expanded={is_mech_expanded}, force_recreate={force_recreate}")
+                        if is_mech_expanded:
+                            logger.info(f"AUTO-UPDATE: Creating expanded embed for channel {channel_id}")
+                            embed, animation_file = await self._create_overview_embed_expanded(ordered_servers, config)
+                        else:
+                            logger.info(f"AUTO-UPDATE: Creating collapsed embed for channel {channel_id}")
+                            embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config)
+                        
+                        if force_recreate:
+                            # Delete and recreate message with new animation
+                            await message.delete()
+                            
+                            # Create new view
+                            from .control_ui import MechView
+                            view = MechView(self, channel_id)
+                            
+                            # Send new message with fresh animation
+                            if animation_file:
+                                new_message = await self._send_message_with_files(channel, embed, animation_file, view)
+                            else:
+                                new_message = await self._send_message_with_files(channel, embed, None, view)
+                                
+                            # Update message tracking
+                            self.channel_server_message_ids[channel_id]['overview'] = new_message.id
+                            logger.info(f"🔄 AUTO-UPDATE: Successfully recreated /ss message in {channel.name} with new animation")
+                        else:
+                            # Just edit the embed (for expand/collapse - no new animation)
+                            from .control_ui import MechView
+                            view = MechView(self, channel_id)
+                            await message.edit(embed=embed, view=view)
+                            logger.info(f"✏️ AUTO-UPDATE: Successfully edited /ss message in {channel.name}")
+                        
+                        updated_count += 1
+                        
+                    except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                        logger.error(f"AUTO-UPDATE ERROR: Could not update /ss message in channel {channel_id}: {e}", exc_info=True)
+            
+            if updated_count > 0:
+                logger.info(f"✅ Auto-updated {updated_count} /ss messages after donation")
+            else:
+                logger.debug("No /ss messages found to update")
+                
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in _auto_update_ss_messages: {e}", exc_info=True)
+    
+    async def _edit_only_ss_messages(self, reason: str):
+        """Edit-only update for /ss messages (used for expand/collapse)"""
+        await self._auto_update_ss_messages(reason, force_recreate=False)
 
     # --- Heartbeat Loop ---
     @tasks.loop(minutes=1)
@@ -1077,21 +2986,23 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
         through the web UI.
         """
         try:
-            # Load the heartbeat configuration
+            # Load the heartbeat configuration from latest cache (fallback to initial config)
+            current_config = load_config() or self.config or {}
+
             # First check legacy format with 'heartbeat_channel_id' at root level
-            heartbeat_channel_id = self.config.get('heartbeat_channel_id')
-            
+            heartbeat_channel_id = current_config.get('heartbeat_channel_id')
+
             # Initialize heartbeat config with defaults
             heartbeat_config = {
-                'enabled': bool(heartbeat_channel_id),  # Enabled if channel ID exists
-                'method': 'channel',                    # Only channel method is implemented
-                'interval': 60,                         # Default: 60 minutes 
-                'channel_id': heartbeat_channel_id      # Channel ID from root config
+                'enabled': bool(str(heartbeat_channel_id).isdigit()) if heartbeat_channel_id is not None else False,
+                'method': 'channel',
+                'interval': 60,
+                'channel_id': heartbeat_channel_id
             }
-            
+
             # Override with nested config if it exists (new format)
-            if 'heartbeat' in self.config:
-                nested_config = self.config.get('heartbeat', {})
+            if 'heartbeat' in current_config:
+                nested_config = current_config.get('heartbeat', {})
                 if isinstance(nested_config, dict):
                     heartbeat_config.update(nested_config)
             
@@ -1102,15 +3013,19 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
     
             # Get the heartbeat method and interval
             method = heartbeat_config.get('method', 'channel')
-            interval_minutes = int(heartbeat_config.get('interval', 60))
+            try:
+                interval_minutes = int(heartbeat_config.get('interval', 60))
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid heartbeat interval, using default 60 minutes")
+                interval_minutes = 60
     
             # Dynamically change interval if needed
             if self.heartbeat_send_loop.minutes != interval_minutes:
                 try:
                     self.heartbeat_send_loop.change_interval(minutes=interval_minutes)
                     logger.info(f"[BETA] Heartbeat interval updated to {interval_minutes} minutes.")
-                except Exception as e:
-                    logger.error(f"[BETA] Failed to update heartbeat interval: {e}")
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"[BETA] Failed to update heartbeat interval: {e}", exc_info=True)
     
             logger.debug("[BETA] Heartbeat loop running.")
             
@@ -1147,14 +3062,14 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                     logger.error(f"[BETA] Missing permissions to send heartbeat message to channel {channel_id}.")
                 except discord.HTTPException as http_err:
                     logger.error(f"[BETA] HTTP error sending heartbeat to channel {channel_id}: {http_err}")
-                except Exception as e:
-                    logger.error(f"[BETA] Error sending heartbeat to channel {channel_id}: {e}")
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"[BETA] Error sending heartbeat to channel {channel_id}: {e}", exc_info=True)
             elif method == 'api':
                 # API method is not implemented yet
                 logger.warning("[BETA] API heartbeat method is not yet implemented.")
             else:
                 logger.warning(f"[BETA] Unknown heartbeat method specified in config: '{method}'. Supported methods: 'channel'")
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
             logger.error(f"[BETA] Error in heartbeat_send_loop: {e}", exc_info=True)
 
     @heartbeat_send_loop.before_loop
@@ -1166,128 +3081,213 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
     # --- Status Cache Update Loop ---
     @tasks.loop(seconds=30)
     async def status_update_loop(self):
-        """Periodically updates the internal status cache for all servers."""
+        """Periodically updates the cache with the latest container statuses."""
+        # Load configuration first
+        config = load_config()
+        if not config:
+            logger.error("Status Update Loop: Could not load configuration. Skipping cycle.")
+            return
+        
+        # Get cache duration from environment
+        cache_duration = int(os.environ.get('DDC_DOCKER_CACHE_DURATION', '30'))
+        
+        # Update cache TTL based on current interval
+        calculated_ttl = int(cache_duration * 2.5)
+        if self.cache_ttl_seconds != calculated_ttl:
+            self.cache_ttl_seconds = calculated_ttl
+            logger.info(f"[STATUS_LOOP] Cache TTL updated to {calculated_ttl} seconds (interval: {cache_duration}s)")
+        
+        # Dynamically change the loop interval if needed
+        if self.status_update_loop.seconds != cache_duration:
+            try:
+                self.status_update_loop.change_interval(seconds=cache_duration)
+                logger.info(f"[STATUS_LOOP] Cache update interval changed to {cache_duration} seconds")
+            except (discord.errors.DiscordException, RuntimeError, OSError, KeyError) as e:
+                logger.error(f"[STATUS_LOOP] Failed to change interval: {e}", exc_info=True)
+        
+        # Configuration already loaded and validated above
+        # SERVICE FIRST: Use ServerConfigService instead of direct config access
+        server_config_service = get_server_config_service()
+        servers = server_config_service.get_all_servers()
+        if not servers:
+            return # No servers to update
+            
+        container_names = [s.get('docker_name') for s in servers if s.get('docker_name')]
+            
+        logger.info(f"[STATUS_LOOP] Bulk updating cache for {len(container_names)} containers")
+        start_time = time.time()
+
         try:
-            if not self.bot.is_ready():
-                logger.warning("Bot is not ready yet, skipping status update loop iteration")
-                return
-                
-            logger.debug("Running status_update_loop to refresh Docker container status cache")
-            
-            # OPTIMIZATION: Use the cached config from self.config
-            # No need to reload config from disk, we use the instance variable
-            servers = self.config.get('servers', [])
-            if not servers:
-                logger.debug("No servers configured, status cache update skipped")
-                return
-            
-            # PERFORMANCE OPTIMIZATION: Use bulk fetching instead of individual calls
-            start_time = time.time()
-            now = datetime.now(timezone.utc)
-            
-            # Extract all container names for bulk fetching
-            container_names = []
-            for server_conf in servers:
-                docker_name = server_conf.get('docker_name')
-                if docker_name:
-                    container_names.append(docker_name)
-            
-            if not container_names:
-                logger.debug("No valid container names found in server configurations")
-                return
-            
-            logger.info(f"[STATUS_LOOP] Bulk updating cache for {len(container_names)} containers")
-            
-            # Use the optimized bulk fetch function
-            bulk_results = await self.bulk_fetch_container_status(container_names)
-            
-            # Update cache with bulk results
-            update_count = 0
-            error_count = 0
-            
-            for docker_name, status_tuple in bulk_results.items():
-                try:
-                    # Find the corresponding server config
-                    server_config = next((s for s in servers if s.get('docker_name') == docker_name), None)
-                    if not server_config:
-                        logger.warning(f"[STATUS_LOOP] No server config found for docker_name: {docker_name}")
+            # RACE CONDITION PROTECTION: Use semaphore to prevent concurrent status updates
+            if not hasattr(self, '_status_update_semaphore'):
+                self._status_update_semaphore = asyncio.Semaphore(1)
+
+            async with self._status_update_semaphore:
+                # Bulk fetch returns ContainerStatusResult objects
+                results = await self.bulk_fetch_container_status(container_names)
+
+                success_count = 0
+                error_count = 0
+
+                # Process ContainerStatusResult objects
+                for name, result in results.items():
+                    if result.success:
+                        # Cache ContainerStatusResult directly
+                        self.status_cache_service.set(name, result, datetime.now(timezone.utc))
+                        success_count += 1
+                    else:
+                        logger.warning(f"[STATUS_LOOP] Failed to fetch status for {name}. Error: {result.error_message}")
                         error_count += 1
-                        continue
-                    
-                    display_name = server_config.get('name', docker_name)
-                    
-                    # Update cache with bulk result
-                    self.status_cache[display_name] = {
-                        'data': status_tuple,
-                        'timestamp': now
-                    }
-                    update_count += 1
-                    
-                except Exception as e:
-                    logger.error(f"[STATUS_LOOP] Error processing bulk result for {docker_name}: {e}")
-                    error_count += 1
-            
-            # Handle containers that weren't in bulk results (errors or not found)
-            for server_conf in servers:
-                docker_name = server_conf.get('docker_name')
-                display_name = server_conf.get('name', docker_name)
-                
-                if docker_name and docker_name not in bulk_results:
-                    # Container not in bulk results - likely error or offline
-                    logger.debug(f"[STATUS_LOOP] Container '{docker_name}' not in bulk results, marking as offline")
-                    
-                    details_allowed = server_conf.get('allow_detailed_status', True)
-                    offline_status = (display_name, False, 'N/A', 'N/A', 'N/A', details_allowed)
-                    
-                    self.status_cache[display_name] = {
-                        'data': offline_status,
-                        'timestamp': now
-                    }
-                    update_count += 1
-            
-            # Set last cache update timestamp
-            self.last_cache_update = time.time()
-            
-            # Update the global cache after all servers are processed
-            self.update_global_status_cache()
-            
-            elapsed_time = (time.time() - start_time) * 1000
-            
-            # Performance logging
-            if elapsed_time > 10000:  # Over 10 seconds
-                logger.error(f"[STATUS_LOOP] CRITICAL: Cache update took {elapsed_time:.1f}ms for {len(container_names)} containers")
-            elif elapsed_time > 5000:  # Over 5 seconds
-                logger.warning(f"[STATUS_LOOP] SLOW: Cache update took {elapsed_time:.1f}ms for {len(container_names)} containers")
-            else:
-                logger.info(f"[STATUS_LOOP] Cache updated: {update_count} success, {error_count} errors in {elapsed_time:.1f}ms")
-                
-        except Exception as e:
-            logger.error(f"Error in status_update_loop: {e}", exc_info=True)
+
+                duration_ms = (time.time() - start_time) * 1000
+                logger.info(f"[STATUS_LOOP] Cache updated: {success_count} success, {error_count} errors in {duration_ms:.1f}ms")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"[STATUS_LOOP] Unexpected error during status update loop: {e}", exc_info=True)
 
     @status_update_loop.before_loop
     async def before_status_update_loop(self):
         """Wait until the bot is ready before starting the loop."""
         await self.bot.wait_until_ready()
 
+    # --- Mech Status Cache Startup ---
+    @tasks.loop(count=1)  # Only run once to start the background loop
+    async def start_mech_cache_loop(self):
+        """Start the MechStatusCacheService background loop."""
+        try:
+            logger.info("Starting MechStatusCacheService background loop...")
+            await self.mech_status_cache_service.start_background_loop()
+            logger.info("MechStatusCacheService background loop started successfully")
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Failed to start MechStatusCacheService background loop: {e}", exc_info=True)
+
+    @start_mech_cache_loop.before_loop
+    async def before_start_mech_cache_loop(self):
+        """Wait until the bot is ready before starting the mech cache."""
+        await self.bot.wait_until_ready()
+
+    # --- Initial Animation Cache Warmup (NON-BLOCKING OPTIMIZATION) ---
+    @tasks.loop(count=1)  # Only run once to perform initial cache warmup
+    async def initial_animation_cache_warmup(self):
+        """Perform initial animation cache warmup in background after startup completes."""
+        try:
+            # PERFORMANCE OPTIMIZATION: Let startup complete first, then cache in background
+            logger.info("Scheduling animation cache warmup in background (startup optimization)")
+
+            # Wait for bot to be fully ready and operational
+            await self.bot.wait_until_ready()
+
+            # Additional delay to ensure Discord channels are loaded and bot is responsive
+            await asyncio.sleep(15)  # Let all startup processes complete first
+
+            logger.info("Starting background animation cache warmup...")
+
+            from services.mech.animation_cache_service import get_animation_cache_service
+            animation_cache = get_animation_cache_service()
+
+            # Run cache warmup with parallel optimization
+            await self._perform_optimized_cache_warmup(animation_cache)
+
+            logger.info("Background animation cache warmup completed successfully")
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Failed to perform background animation cache warmup: {e}", exc_info=True)
+
+    async def _perform_optimized_cache_warmup(self, animation_cache):
+        """Perform cache warmup with parallel processing for better performance."""
+        try:
+            # Get current mech status for cache warmup
+            from services.mech.mech_status_cache_service import get_mech_status_cache_service, MechStatusCacheRequest
+            from services.mech.speed_levels import get_combined_mech_status
+
+            cache_service = get_mech_status_cache_service()
+            cache_request = MechStatusCacheRequest(include_decimals=True)
+            mech_result = cache_service.get_cached_status(cache_request)
+
+            if not mech_result.success:
+                logger.warning("Could not get mech status for optimized warmup - using fallback")
+                # Use fallback: cache current level animation
+                await animation_cache.perform_initial_cache_warmup()
+                return
+
+            current_level = mech_result.level
+            current_power = mech_result.power
+
+            # Calculate current speed level
+            if current_level >= 11:
+                current_speed_level = 100  # Level 11 always has maximum speed
+            else:
+                speed_status = get_combined_mech_status(current_power)
+                current_speed_level = speed_status['speed']['level']
+
+            logger.info(f"Optimized cache warmup: Level {current_level}, Power {current_power:.2f}, Speed {current_speed_level}")
+
+            # PARALLEL OPTIMIZATION: Generate small and big animations simultaneously
+            small_task = asyncio.create_task(
+                self._cache_small_animation_async(animation_cache, current_level, current_speed_level, current_power)
+            )
+            big_task = asyncio.create_task(
+                self._cache_big_animation_async(animation_cache, current_level, current_speed_level, current_power)
+            )
+
+            # Wait for both to complete in parallel (much faster than serial)
+            await asyncio.gather(small_task, big_task, return_exceptions=True)
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in optimized cache warmup: {e}", exc_info=True)
+            # Fallback to original implementation
+            await animation_cache.perform_initial_cache_warmup()
+
+    async def _cache_small_animation_async(self, animation_cache, level, speed_level, power):
+        """Cache small animation asynchronously."""
+        try:
+            logger.debug(f"Parallel caching: Small animation Level {level}, Speed {speed_level}")
+            # Run in thread pool to avoid blocking the event loop
+            await asyncio.to_thread(
+                animation_cache.get_animation_with_speed_and_power, level, speed_level, power
+            )
+            logger.debug(f"Completed: Small animation Level {level}")
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.warning(f"Failed to cache small animation: {e}")
+
+    async def _cache_big_animation_async(self, animation_cache, level, speed_level, power):
+        """Cache big animation asynchronously."""
+        try:
+            logger.debug(f"Parallel caching: Big animation Level {level}, Speed {speed_level}")
+            # Run in thread pool to avoid blocking the event loop
+            await asyncio.to_thread(
+                animation_cache.get_animation_with_speed_and_power_big, level, speed_level, power
+            )
+            logger.debug(f"Completed: Big animation Level {level}")
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.warning(f"Failed to cache big animation: {e}")
+
+    @initial_animation_cache_warmup.before_loop
+    async def before_initial_animation_cache_warmup(self):
+        """Minimal delay before starting background cache warmup."""
+        # No additional wait needed - the loop itself handles timing
+        pass
+
     # --- Inactivity Check Loop ---
     @tasks.loop(seconds=30)
     async def inactivity_check_loop(self):
-        """Checks for inactive channels and regenerates messages if needed."""
+        """Checks for channel inactivity and regenerates messages if needed."""
+        config = load_config()
+        if not config:
+            logger.error("Inactivity Check Loop: Could not load configuration. Skipping cycle.")
+            return
+            
+        now_utc = datetime.now(timezone.utc)
+        channel_permissions = config.get('channel_permissions', {})
+        
         try:
             if not self.initial_messages_sent:
-                logger.debug("Inactivity check loop: Initial messages not sent yet, skipping.")
+                logger.info("Inactivity check loop: Initial messages not sent yet, skipping.")
                 return
 
-            logger.debug("Inactivity check loop running")
-            
-            # Get channel permissions from config
-            channel_permissions = self.config.get('channel_permissions', {})
-            default_recreate_enabled = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('recreate_messages_on_inactivity', True)
-            default_timeout_minutes = DEFAULT_CONFIG.get('default_channel_permissions', {}).get('inactivity_timeout_minutes', 10)
-            now_utc = datetime.now(timezone.utc)
+            logger.info("Inactivity check loop running")
             
             # Log tracked channels for debugging
-            logger.debug(f"Currently tracking {len(self.last_channel_activity)} channels for activity")
+            logger.info(f"Currently tracking {len(self.last_channel_activity)} channels for activity: {list(self.last_channel_activity.keys())}")
             
             # Check each channel we've previously registered activity for
             for channel_id, last_activity_time in list(self.last_channel_activity.items()):
@@ -1300,8 +3300,8 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                     logger.debug(f"Channel {channel_id} has no specific config, skipping")
                     continue
                     
-                recreate_enabled = channel_config.get('recreate_messages_on_inactivity', default_recreate_enabled)
-                timeout_minutes = channel_config.get('inactivity_timeout_minutes', default_timeout_minutes)
+                recreate_enabled = channel_config.get('recreate_messages_on_inactivity', True)
+                timeout_minutes = channel_config.get('inactivity_timeout_minutes', 10)
                 
                 logger.debug(f"Channel {channel_id} - recreate_enabled={recreate_enabled}, timeout_minutes={timeout_minutes}")
                 
@@ -1339,10 +3339,10 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                         if not history:
                             logger.info(f"No messages found in channel {channel.name} ({channel_id}). Regenerating")
                             # Determine the mode: control or status
-                            has_control_permission = _channel_has_permission(channel_id, 'control', self.config)
+                            has_control_permission = _channel_has_permission(channel_id, 'control', config)
                             regeneration_mode = 'control' if has_control_permission else 'status'
                             logger.debug(f"Regeneration mode for empty channel: {regeneration_mode}")
-                            await self._regenerate_channel(channel, regeneration_mode)
+                            await self._regenerate_channel(channel, regeneration_mode, config)
                             self.last_channel_activity[channel_id] = now_utc
                             continue
                         
@@ -1358,8 +3358,8 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                         logger.info(f"Last message in channel {channel.name} is NOT from our bot. Will regenerate")
                         
                         # Determine the mode: control or status
-                        has_control_permission = _channel_has_permission(channel_id, 'control', self.config)
-                        has_status_permission = _channel_has_permission(channel_id, 'serverstatus', self.config)
+                        has_control_permission = _channel_has_permission(channel_id, 'control', config)
+                        has_status_permission = _channel_has_permission(channel_id, 'serverstatus', config)
                         
                         logger.debug(f"Channel permissions - control: {has_control_permission}, status: {has_status_permission}")
                         
@@ -1371,24 +3371,34 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                             continue
                         
                         logger.debug(f"Will regenerate with mode: {regeneration_mode}")
-                        
-                        # Attempt channel regeneration
-                        await self._regenerate_channel(channel, regeneration_mode)
-                        
-                        # Reset activity timer
-                        self.last_channel_activity[channel_id] = now_utc
-                        logger.info(f"Channel {channel.name} ({channel_id}) regenerated due to inactivity. Mode: {regeneration_mode}")
+
+                        # Attempt channel regeneration with improved error handling
+                        try:
+                            logger.info(f"Starting inactivity regeneration for {channel.name} ({channel_id}) in mode '{regeneration_mode}'")
+                            await self._regenerate_channel(channel, regeneration_mode, config)
+
+                            # Reset activity timer only on successful regeneration
+                            self.last_channel_activity[channel_id] = now_utc
+                            logger.info(f"✅ Channel {channel.name} ({channel_id}) successfully regenerated due to inactivity. Mode: {regeneration_mode}")
+
+                        except (discord.errors.DiscordException, RuntimeError, OSError) as regen_error:
+                            logger.error(f"❌ Failed to regenerate channel {channel.name} ({channel_id}) due to inactivity: {regen_error}", exc_info=True)
+                            # Don't reset activity timer on failure - try again next cycle
+                            # But prevent infinite retries by adding a small delay
+                            error_delay = timedelta(minutes=2)
+                            self.last_channel_activity[channel_id] = now_utc - inactivity_threshold + error_delay
+                            logger.warning(f"Delaying next regeneration attempt for {channel.name} by {error_delay}")
                         
                     except discord.NotFound:
                         logger.warning(f"Channel {channel_id} not found. Removing from activity tracking")
                         del self.last_channel_activity[channel_id]
                     except discord.Forbidden:
                         logger.error(f"Cannot access channel {channel_id} (forbidden). Continuing tracking but regeneration not possible")
-                    except Exception as e:
+                    except (discord.errors.DiscordException, RuntimeError, OSError) as e:
                         logger.error(f"Error during inactivity check for channel {channel_id}: {e}", exc_info=True)
                 else:
                     logger.debug(f"Channel {channel_id} - Inactivity threshold not reached yet")
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
             logger.error(f"Error in inactivity_check_loop: {e}", exc_info=True)
 
     @inactivity_check_loop.before_loop
@@ -1420,18 +3430,29 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             
             logger.debug("Performance cache clear completed")
             
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
             logger.error(f"Error in performance_cache_clear_loop: {e}", exc_info=True)
 
     @performance_cache_clear_loop.before_loop
     async def before_performance_cache_clear_loop(self):
         """Wait until the bot is ready before starting the loop."""
         await self.bot.wait_until_ready()
+    
+    # Member count updates moved to on-demand during level-ups only
 
     # --- Final Control Command ---
-    @commands.slash_command(name="control", description=_("Displays the control panel in the control channel"), guild_ids=get_guild_id())
+    # REMOVED: Old single-message control command - replaced by Admin View version at line 1354
+    # @commands.slash_command(name="control", description=_("Displays the control panel in the control channel"), guild_ids=get_guild_id())
     async def control_command(self, ctx: discord.ApplicationContext):
-        """(Re)generates the control panel message in the current channel if permitted."""
+        """(Re)generates the control panel message in the current channel if permitted.
+
+        NOTE: This method is kept for backwards compatibility but not exposed as a slash command.
+        The new /control command at line 1354 provides the Admin View functionality.
+        """
+        # Check spam protection first
+        if not await self._check_spam_protection(ctx, "control"):
+            return
+
         if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
             await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
             return
@@ -1440,236 +3461,44 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             await ctx.respond(_("You do not have permission to use this command in this channel, or control panels are disabled here."), ephemeral=True)
             return
 
+        # Permission check passed - now safe to defer with public response
         await ctx.defer(ephemeral=False)
         logger.info(f"Control panel regeneration requested by {ctx.author} in {ctx.channel.name}")
 
         try:
             await ctx.followup.send(_("Regenerating control panel... Please wait."), ephemeral=True)
-        except Exception as e_followup:
-            logger.error(f"Error sending initial followup for /control command: {e_followup}")
+        except (discord.errors.HTTPException, discord.errors.Forbidden) as e_followup:
+            logger.error(f"Error sending initial followup for /control command: {e_followup}", exc_info=True)
 
-        channel_to_regenerate = ctx.channel
-        async def run_regeneration():
+        # Run regeneration directly instead of as background task for better user experience
+        try:
+            await self._regenerate_channel(ctx.channel, 'control', self.config)
+            logger.info(f"Control panel regeneration completed for channel {ctx.channel.name}")
+            # Send success confirmation
             try:
-                await self._regenerate_channel(channel_to_regenerate, 'control')
-                logger.info(f"Background regeneration for channel {channel_to_regenerate.name} completed.")
-            except Exception as e_regen:
-                logger.error(f"Error during background regeneration for channel {channel_to_regenerate.name}: {e_regen}")
-
-        self.bot.loop.create_task(run_regeneration())
+                await ctx.followup.send(_("✅ Control panel regenerated successfully!"), ephemeral=True)
+            except:
+                pass  # Followup might have already been used or expired
+        except (discord.errors.DiscordException, RuntimeError, OSError) as e_regen:
+            logger.error(f"Error during control panel regeneration: {e_regen}", exc_info=True)
+            try:
+                await ctx.followup.send(_("❌ Error regenerating control panel. Check logs for details."), ephemeral=True)
+            except:
+                pass
         
-    # --- SCHEDULE COMMANDS ---
-    @commands.slash_command(name="task_once", description=_("Schedule a one-time task"), guild_ids=get_guild_id())
-    async def schedule_once_command(self, ctx: discord.ApplicationContext, 
-                              container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
-                              action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
-                              time: str = discord.Option(description=_("Time in HH:MM format (e.g., 14:30)"), autocomplete=schedule_time_select),
-                              day: str = discord.Option(description=_("Day of month (e.g., 15)"), autocomplete=schedule_day_select),
-                              month: str = discord.Option(description=_("Month (e.g., 07 or July)"), autocomplete=schedule_month_select),
-                              year: str = discord.Option(description=_("Year (e.g., 2024)"), autocomplete=schedule_year_select)):
-        """Schedules a one-time task for a Docker container."""
-        await self._impl_schedule_once_command(ctx, container_name, action, time, day, month, year)
-    
-    @commands.slash_command(name="task_daily", description=_("Schedule a daily task"), guild_ids=get_guild_id())
-    async def schedule_daily_command(self, ctx: discord.ApplicationContext,
-                              container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
-                              action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
-                              time: str = discord.Option(description=_("Time in HH:MM format (e.g., 08:00)"), autocomplete=schedule_time_select)):
-        """Schedules a daily task for a Docker container."""
-        await self._impl_schedule_daily_command(ctx, container_name, action, time)
-    
-    @commands.slash_command(name="task_weekly", description=_("Schedule a weekly task"), guild_ids=get_guild_id())
-    async def schedule_weekly_command(self, ctx: discord.ApplicationContext, 
-                              container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
-                              action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
-                              time: str = discord.Option(description=_("Time in HH:MM format"), autocomplete=schedule_time_select),
-                              weekday: str = discord.Option(description=_("Day of the week (e.g., Monday or 1)"), autocomplete=schedule_weekday_select)):
-        """Schedules a weekly task for a Docker container."""
-        await self._impl_schedule_weekly_command(ctx, container_name, action, time, weekday)
-    
-    @commands.slash_command(name="task_monthly", description=_("Schedule a monthly task"), guild_ids=get_guild_id())
-    async def schedule_monthly_command(self, ctx: discord.ApplicationContext, 
-                              container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
-                              action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
-                              time: str = discord.Option(description=_("Time in HH:MM format"), autocomplete=schedule_time_select),
-                              day: str = discord.Option(description=_("Day of the month (1-31)"), autocomplete=schedule_day_select)):
-        """Schedules a monthly task for a Docker container."""
-        await self._impl_schedule_monthly_command(ctx, container_name, action, time, day)
-    
-    @commands.slash_command(name="task_yearly", description=_("Schedule a yearly task"), guild_ids=get_guild_id())
-    async def schedule_yearly_command(self, ctx: discord.ApplicationContext, 
-                              container_name: str = discord.Option(description=_("The Docker container to schedule"), autocomplete=container_select),
-                              action: str = discord.Option(description=_("Action to perform"), autocomplete=schedule_action_select),
-                              time: str = discord.Option(description=_("Time in HH:MM format"), autocomplete=schedule_time_select),
-                              month: str = discord.Option(description=_("Month (e.g., 07 or July)"), autocomplete=schedule_month_select),
-                              day: str = discord.Option(description=_("Day of month (e.g., 15)"), autocomplete=schedule_day_select)):
-        """Schedules a yearly task for a Docker container."""
-        await self._impl_schedule_yearly_command(ctx, container_name, action, time, month, day)
-    
-    @commands.slash_command(name="task", description=_("Shows task command help"), guild_ids=get_guild_id())
-    async def schedule_command(self, ctx: discord.ApplicationContext):
-        """Shows help for the various scheduling commands."""
-        await self._impl_schedule_command(ctx)
-    
-    @commands.slash_command(name="task_info", description=_("Shows information about scheduled tasks"), guild_ids=get_guild_id())
-    async def schedule_info_command(self, ctx: discord.ApplicationContext,
-                                  container_name: str = discord.Option(description=_("Container name (or 'all')"), default="all", autocomplete=container_select),
-                                  period: str = discord.Option(description=_("Time period (e.g., next_week)"), default="all", autocomplete=schedule_info_period_select)):
-        """Shows information about scheduled tasks."""
-        await self._impl_schedule_info_command(ctx, container_name, period)
+    # --- TASK COMMANDS REMOVED ---
+    # All task-related Discord slash commands have been removed.
+    # Task scheduling is now handled exclusively through the UI buttons in the server status panels.
+    # Users can click the ⏰ button to add tasks and the ❌ button to delete tasks.
 
-    @commands.slash_command(name="task_delete", description=_("Delete a scheduled task"), guild_ids=get_guild_id())
-    async def schedule_delete_command(self, ctx: discord.ApplicationContext,
-                                    task_id: str = discord.Option(description=_("Task ID to delete"), autocomplete=schedule_task_id_select)):
-        """Deletes a scheduled task."""
-        await self._impl_schedule_delete_command(ctx, task_id)
+    # Note: The following implementation methods have been removed as they are no longer needed:
+    # - All _impl_schedule_* methods (task creation via commands)
+    # - _impl_task_delete_panel_command (task deletion panel via command)
+    # Task management is now integrated into the status UI.
 
-    @commands.slash_command(name="task_delete_panel", description=_("Show active tasks with delete buttons"), guild_ids=get_guild_id())
-    async def task_delete_panel_command(self, ctx: discord.ApplicationContext):
-        """Shows a panel with all active tasks and delete buttons for each."""
-        await self._impl_task_delete_panel_command(ctx)
+    # /info command removed - container information now accessed through UI buttons
 
-    # --- SCHEDULE COMMANDS MOVED TO scheduler_commands.py ---
-    # All schedule related implementation logic has been moved to 
-    # the ScheduleCommandsMixin class in scheduler_commands.py.
-    # The command definitions remain here in DockerControlCog for proper registration,
-    # but they delegate their actual implementation to methods in the mixin.
-    # This includes the following implementation methods:
-    # - _format_schedule_embed
-    # - _create_scheduled_task
-    # - _impl_schedule_once_command
-    # - _impl_schedule_daily_command
-    # - _impl_schedule_weekly_command
-    # - _impl_schedule_monthly_command
-    # - _impl_schedule_yearly_command
-    # - _impl_schedule_command
-    # - _impl_schedule_info_command
-
-    # Implementation for schedule_delete command (implemented directly in Cog)
-    async def _impl_schedule_delete_command(self, ctx: discord.ApplicationContext, task_id: str):
-        """Deletes a scheduled task."""
-        try:
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
-                return
-            
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use schedule commands in this channel."), ephemeral=True)
-                return
-            
-            # Import necessary scheduler functions
-            from utils.scheduler import load_tasks, delete_task
-            from utils.action_logger import log_user_action
-            
-            # Find the task
-            all_tasks = load_tasks()
-            task_to_delete = None
-            
-            for task in all_tasks:
-                if task.task_id == task_id:
-                    task_to_delete = task
-                    break
-            
-            if not task_to_delete:
-                await ctx.respond(_("Task with ID '{task_id}' not found.").format(task_id=task_id), ephemeral=True)
-                return
-            
-            # Delete the task - only channel-level permissions matter
-            if delete_task(task_id):
-                # Log the action
-                log_user_action(
-                    action="SCHEDULE_DELETE_CMD", 
-                    target=f"{task_to_delete.container_name} ({task_to_delete.action})", 
-                    user=str(ctx.author),
-                    source="Discord Command",
-                    details=f"Deleted task: {task_id}, Cycle: {task_to_delete.cycle}"
-                )
-                
-                await ctx.respond(_("✅ Successfully deleted scheduled task!\n**Task ID:** {task_id}\n**Container:** {container}\n**Action:** {action}\n**Cycle:** {cycle}").format(
-                    task_id=task_id,
-                    container=task_to_delete.container_name,
-                    action=task_to_delete.action,
-                    cycle=task_to_delete.cycle
-                ), ephemeral=True)
-            else:
-                await ctx.respond(_("❌ Failed to delete task. The task might not exist or there was an error."), ephemeral=True)
-                
-        except Exception as e:
-            logger.error(f"Error executing schedule_delete command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
-
-    async def _impl_task_delete_panel_command(self, ctx: discord.ApplicationContext):
-        """Shows a panel with all active tasks and delete buttons for each."""
-        try:
-            # Check channel permissions
-            if not ctx.channel or not isinstance(ctx.channel, discord.TextChannel):
-                await ctx.respond(_("This command can only be used in server channels."), ephemeral=True)
-                return
-            
-            config = self.config
-            if not _channel_has_permission(ctx.channel.id, 'schedule', config):
-                await ctx.respond(_("You do not have permission to use task commands in this channel."), ephemeral=True)
-                return
-            
-            # Import necessary scheduler functions
-            from utils.scheduler import load_tasks, CYCLE_ONCE
-            from .control_ui import TaskDeletePanelView
-            import time
-            
-            # Load all tasks
-            all_tasks = load_tasks()
-            if not all_tasks:
-                await ctx.respond(_("📅 **Task Delete Panel**\n\nNo scheduled tasks found."), ephemeral=True)
-                return
-            
-            # Filter to only active tasks
-            current_time = time.time()
-            active_tasks = []
-            
-            for task in all_tasks:
-                # Skip inactive tasks
-                if not task.is_active:
-                    continue
-                    
-                # Skip expired one-time tasks
-                if task.cycle == CYCLE_ONCE:
-                    if task.next_run_ts is None or task.next_run_ts < current_time:
-                        continue
-                    if getattr(task, 'status', None) == "completed":
-                        continue
-                
-                # Add all active tasks - permission check will be done during deletion
-                active_tasks.append(task)
-            
-            if not active_tasks:
-                await ctx.respond(_("📅 **Task Delete Panel**\n\nNo active tasks found."), ephemeral=True)
-                return
-            
-            # Create simple header message (no task list needed since buttons contain task info)
-            message_content = f"📅 **{_('Task Delete Panel')}**\n\n{_('Click any button below to delete the corresponding task:')}"
-            
-            # Add explanation of abbreviations
-            message_content += f"\n\n**{_('Legend:** O = Once, D = Daily, W = Weekly, M = Monthly, Y = Yearly')}"
-            
-            # Add footer information  
-            if len(active_tasks) > 25:
-                message_content += f"\n\n_({_('Showing first 25 of {total} tasks').format(total=len(active_tasks))})_"
-            else:
-                message_content += f"\n\n_({_('Found {total} active tasks').format(total=len(active_tasks))})_"
-            
-            # Create view with delete buttons
-            view = TaskDeletePanelView(self, active_tasks)
-            
-            # Send the panel as normal message
-            await ctx.respond(message_content, view=view, ephemeral=False)
-            logger.info(f"Task delete panel shown to {ctx.author} with {len(active_tasks)} active tasks")
-            
-        except Exception as e:
-            logger.error(f"Error executing task_delete_panel command: {e}", exc_info=True)
-            await ctx.respond(_("An error occurred: {error}").format(error=str(e)), ephemeral=True)
-
+    
     # --- Cog Teardown ---
     def cog_unload(self):
         """Cancel all running background tasks when the cog is unloaded."""
@@ -1686,38 +3515,199 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
             from .control_ui import _clear_caches
             _clear_caches()
             logger.info("Performance caches cleared on cog unload")
-        except Exception as e:
-            logger.error(f"Error clearing performance caches on unload: {e}")
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error clearing performance caches on unload: {e}", exc_info=True)
 
-    # Method to update global docker status cache from instance cache
+    # Method to update shared docker status cache from instance cache
     def update_global_status_cache(self):
-        """Updates the global docker_status_cache from the instance's status_cache."""
-        global docker_status_cache
+        """Publish the current status cache snapshot to the shared runtime."""
+
         try:
-            # Thread-safe update of global status cache
-            with docker_status_cache_lock:
-                docker_status_cache = self.status_cache.copy()
-                logger.debug(f"Updated global docker_status_cache with {len(docker_status_cache)} entries")
-        except Exception as e:
-            logger.error(f"Error updating global docker_status_cache: {e}")
+            snapshot = self.status_cache_service.copy()
+            self._status_cache_runtime.publish(snapshot)
+            logger.debug(
+                "Published docker status cache runtime snapshot with %d entries",
+                len(snapshot),
+            )
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error publishing docker status cache snapshot: {e}", exc_info=True)
 
     # Accessor method to get the current status cache
     def get_status_cache(self) -> Dict[str, Any]:
         """Returns the current status cache."""
-        return self.status_cache.copy()
+        return self.status_cache_service.copy()
 
-    async def _update_overview_message(self, channel_id: int, message_id: int) -> bool:
+    async def _update_all_overview_messages_after_donation(self):
+        """Force update all overview messages after a donation to show new mech animation."""
+        logger.info("Updating all overview messages after donation...")
+
+        try:
+            # Iterate through all channels with overview messages
+            updated_count = 0
+            for channel_id, messages in self.channel_server_message_ids.items():
+                if 'overview' in messages:
+                    message_id = messages['overview']
+                    try:
+                        # Force recreation of the message with new animation
+                        channel = self.bot.get_channel(channel_id)
+                        if not channel:
+                            continue
+
+                        # Fetch the message
+                        try:
+                            message = await channel.fetch_message(message_id)
+                        except discord.NotFound:
+                            logger.warning(f"Overview message {message_id} not found in channel {channel_id}. REGENERATING new overview message for recovery.")
+
+                            # RECOVERY: Generate new overview message to replace the missing one
+                            try:
+                                # Get fresh server data for regeneration
+                                config = load_config()
+                                if not config:
+                                    continue
+
+                                # SERVICE FIRST: Use ServerConfigService instead of direct config access
+                                server_config_service = get_server_config_service()
+                                servers = server_config_service.get_all_servers()
+
+                                # Sort servers by the 'order' field from container configurations
+                                ordered_servers = sorted(servers, key=lambda s: s.get('order', 999))
+
+                                # Determine mech expansion state and create appropriate embed
+                                is_mech_expanded = self.mech_expanded_states.get(channel_id, False)
+                                if is_mech_expanded:
+                                    embed, animation_file = await self._create_overview_embed_expanded(ordered_servers, config)
+                                else:
+                                    embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config)
+
+                                # Create MechView with expand/collapse buttons
+                                from .control_ui import MechView
+                                view = MechView(self, channel_id)
+
+                                # CLEAN SWEEP: Delete all old bot messages before creating new one
+                                await self._clean_sweep_bot_messages(channel, "recovery from missing message")
+
+                                # Send new overview message as recovery
+                                if animation_file:
+                                    if hasattr(animation_file, 'fp') and animation_file.fp:
+                                        new_message = await channel.send(embed=embed, file=animation_file, view=view)
+                                    else:
+                                        new_message = await channel.send(embed=embed, view=view)
+                                else:
+                                    new_message = await channel.send(embed=embed, view=view)
+
+                                # Update tracking with new message ID
+                                self.channel_server_message_ids[channel_id]['overview'] = new_message.id
+                                now_utc = datetime.now(timezone.utc)
+                                if channel_id not in self.last_message_update_time:
+                                    self.last_message_update_time[channel_id] = {}
+                                self.last_message_update_time[channel_id]['overview'] = now_utc
+
+                                logger.info(f"✅ RECOVERY SUCCESS: Generated new overview message {new_message.id} to replace missing {message_id} in channel {channel_id}")
+                                continue
+
+                            except (discord.errors.DiscordException, RuntimeError) as recovery_error:
+                                logger.error(f"❌ RECOVERY FAILED: Could not regenerate overview message for channel {channel_id}: {recovery_error}", exc_info=True)
+                                # Remove from tracking since we can't recover
+                                if channel_id in self.channel_server_message_ids and 'overview' in self.channel_server_message_ids[channel_id]:
+                                    del self.channel_server_message_ids[channel_id]['overview']
+                                continue
+
+                        # Get fresh server data
+                        config = load_config()
+                        if not config:
+                            continue
+
+                        # SERVICE FIRST: Use ServerConfigService instead of direct config access
+                        server_config_service = get_server_config_service()
+                        servers = server_config_service.get_all_servers()
+                        ordered_servers = []
+                        seen_docker_names = set()
+
+                        # Apply server ordering
+                        from services.docker_service.server_order import load_server_order
+                        server_order = load_server_order()
+
+                        for server_name in server_order:
+                            for server in servers:
+                                docker_name = server.get('docker_name')
+                                if server.get('name') == server_name and docker_name and docker_name not in seen_docker_names:
+                                    ordered_servers.append(server)
+                                    seen_docker_names.add(docker_name)
+
+                        # Add remaining servers
+                        for server in servers:
+                            docker_name = server.get('docker_name')
+                            if docker_name and docker_name not in seen_docker_names:
+                                ordered_servers.append(server)
+                                seen_docker_names.add(docker_name)
+
+                        # Create updated embed based on expansion state (with new mech animation)
+                        is_mech_expanded = self.mech_expanded_states.get(channel_id, False)
+                        if is_mech_expanded:
+                            embed, animation_file = await self._create_overview_embed_expanded(ordered_servers, config)
+                        else:
+                            embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config)
+
+                        # Delete and recreate message with new animation
+                        # ROBUST: Handle case where message was already deleted (e.g., by /ss command)
+                        try:
+                            await message.delete()
+                        except discord.NotFound:
+                            logger.debug(f"Overview message {message_id} already deleted in channel {channel_id} (probably by /ss command)")
+                            # Continue anyway - we'll create a new message below
+
+                        # Create new view
+                        from .control_ui import MechView
+                        view = MechView(self, channel_id)
+
+                        # Send new message with fresh animation
+                        if animation_file:
+                            new_message = await self._send_message_with_files(channel, embed, animation_file, view)
+                        else:
+                            new_message = await self._send_message_with_files(channel, embed, None, view)
+
+                        # Update message tracking
+                        self.channel_server_message_ids[channel_id]['overview'] = new_message.id
+
+                        # Update last_glvl_per_channel to prevent duplicate updates
+                        try:
+                            # Use CACHE for glvl tracking
+                            from services.mech.mech_status_cache_service import get_mech_status_cache_service, MechStatusCacheRequest
+                            cache_service = get_mech_status_cache_service()
+                            cache_request = MechStatusCacheRequest(include_decimals=True)
+                            mech_cache_result = cache_service.get_cached_status(cache_request)
+
+                            if mech_cache_result.success:
+                                current_glvl = mech_cache_result.glvl
+                                self.last_glvl_per_channel[channel_id] = current_glvl
+                                self.mech_state_manager.set_last_glvl(channel_id, current_glvl)
+                        except:
+                            pass
+
+                        updated_count += 1
+                        logger.info(f"Updated overview message in channel {channel_id} after donation")
+                    except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                        logger.error(f"Failed to update overview in channel {channel_id}: {e}", exc_info=True)
+
+            logger.info(f"Successfully updated {updated_count} overview messages after donation")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error updating overview messages after donation: {e}", exc_info=True)
+
+    async def _update_overview_message(self, channel_id: int, message_id: int, message_type: str = "overview") -> bool:
         """
-        Updates the overview message with current server statuses.
-        
+        Updates the overview or admin_overview message with current server statuses.
+
         Args:
             channel_id: Discord channel ID
             message_id: Discord message ID to update
-            
+            message_type: Type of message ("overview" or "admin_overview")
+
         Returns:
             bool: Success or failure
         """
-        logger.debug(f"Updating overview message {message_id} in channel {channel_id}")
+        logger.debug(f"Updating {message_type} message {message_id} in channel {channel_id}")
         try:
             # Get channel
             channel = await self.bot.fetch_channel(channel_id)
@@ -1730,54 +3720,771 @@ class DockerControlCog(commands.Cog, ScheduleCommandsMixin, StatusHandlersMixin,
                 # PERFORMANCE OPTIMIZATION: Use partial message instead of fetch
                 message = channel.get_partial_message(message_id)  # No API call
             except discord.NotFound:
-                logger.warning(f"Overview message {message_id} in channel {channel_id} not found. Removing from tracking.")
-                if channel_id in self.channel_server_message_ids and "overview" in self.channel_server_message_ids[channel_id]:
-                    del self.channel_server_message_ids[channel_id]["overview"]
+                logger.warning(f"{message_type.capitalize()} message {message_id} in channel {channel_id} not found. Removing from tracking.")
+                if channel_id in self.channel_server_message_ids and message_type in self.channel_server_message_ids[channel_id]:
+                    del self.channel_server_message_ids[channel_id][message_type]
                 return False
-                
+
             # Get all servers
             config = self.config
-            servers = config.get('servers', [])
-            
+            # SERVICE FIRST: Use ServerConfigService instead of direct config access
+            server_config_service = get_server_config_service()
+            servers = server_config_service.get_all_servers()
+
             # Sort servers
             ordered_docker_names = self.ordered_server_names
             servers_by_name = {s.get('docker_name'): s for s in servers if s.get('docker_name')}
-            
+
             ordered_servers = []
             seen_docker_names = set()
-            
+
             # First add servers in the defined order
             for docker_name in ordered_docker_names:
                 if docker_name in servers_by_name:
                     ordered_servers.append(servers_by_name[docker_name])
                     seen_docker_names.add(docker_name)
-            
+
             # Add any servers that weren't in the ordered list
             for server in servers:
                 docker_name = server.get('docker_name')
                 if docker_name and docker_name not in seen_docker_names:
                     ordered_servers.append(server)
                     seen_docker_names.add(docker_name)
-            
-            # Create the updated embed
-            embed = await self._create_overview_embed(ordered_servers, config)
-            
-            # Update the message
-            await message.edit(embed=embed)
+
+            # Create the updated embed and view based on message type
+            if message_type == "admin_overview":
+                # CACHE WARMUP: Populate cache BEFORE creating admin overview
+                # This prevents showing 🔄 loading icons when updating after info changes
+                logger.debug("Starting cache population for admin overview update")
+
+                # Ensure semaphore exists
+                if not hasattr(self, '_status_update_semaphore'):
+                    self._status_update_semaphore = asyncio.Semaphore(1)
+
+                # Wait for cache to be populated before creating embed
+                await self._background_cache_population()
+                logger.debug("Cache population complete for admin overview update")
+
+                # Create Admin Overview embed
+                embed, _, has_running = await self._create_admin_overview_embed(ordered_servers, config, force_refresh=False)
+                # Create Admin Overview view
+                from .admin_overview import AdminOverviewView
+                view = AdminOverviewView(self, channel_id, has_running)
+                animation_file = None  # Admin Overview doesn't have animations
+            else:
+                # CACHE WARMUP: Populate cache BEFORE creating overview embed
+                # This prevents showing 🔄 loading icons when updating
+                logger.debug("Starting cache population for overview update")
+
+                # Ensure semaphore exists
+                if not hasattr(self, '_status_update_semaphore'):
+                    self._status_update_semaphore = asyncio.Semaphore(1)
+
+                # Wait for cache to be populated before creating embed
+                await self._background_cache_population()
+                logger.debug("Cache population complete for overview update")
+
+                # Create standard overview embed based on expansion state
+                is_mech_expanded = self.mech_expanded_states.get(channel_id, False)
+                if is_mech_expanded:
+                    embed, animation_file = await self._create_overview_embed_expanded(ordered_servers, config)
+                else:
+                    embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config)
+                # Create MechView for standard overview
+                from .control_ui import MechView
+                view = MechView(self, channel_id)
+
+            # Update the message (note: can't add files to edit, only embed)
+            await message.edit(embed=embed, view=view)
             
             # Update message update timestamp, but NOT channel activity
             now_utc = datetime.now(timezone.utc)
             if channel_id not in self.last_message_update_time:
                 self.last_message_update_time[channel_id] = {}
-            self.last_message_update_time[channel_id]["overview"] = now_utc
+            self.last_message_update_time[channel_id][message_type] = now_utc
             
             # DO NOT update channel activity
             # This is commented out to fix the Recreate feature
             # self.last_channel_activity[channel_id] = now_utc
             
-            logger.debug(f"Successfully updated overview message {message_id} in channel {channel_id}")
+            logger.debug(f"Successfully updated {message_type} message {message_id} in channel {channel_id}")
             return True
+
+        except discord.errors.NotFound:
+            # Message was deleted - RECOVERY: Recreate it automatically
+            logger.warning(f"{message_type.capitalize()} message {message_id} in channel {channel_id} not found (likely deleted). ATTEMPTING AUTOMATIC RECOVERY.")
+
+            # Remove from old tracking system
+            if hasattr(self, 'overview_message_ids') and channel_id in self.overview_message_ids:
+                del self.overview_message_ids[channel_id]
+
+            # CRITICAL FIX: Automatically recreate the message to prevent corruption
+            try:
+                # Generate new overview message as recovery
+                is_mech_expanded = self.mech_expanded_states.get(channel_id, False)
+                if is_mech_expanded:
+                    embed, animation_file = await self._create_overview_embed_expanded(ordered_servers, config)
+                else:
+                    embed, animation_file = await self._create_overview_embed_collapsed(ordered_servers, config)
+
+                # Create MechView with expand/collapse buttons
+                from .control_ui import MechView
+                view = MechView(self, channel_id)
+
+                # CLEAN SWEEP: Delete all old bot messages before creating new one
+                await self._clean_sweep_bot_messages(channel, "recovery from deleted message")
+
+                # Send new overview message as recovery
+                if animation_file:
+                    if hasattr(animation_file, 'fp') and animation_file.fp:
+                        new_message = await channel.send(embed=embed, file=animation_file, view=view)
+                    else:
+                        new_message = await channel.send(embed=embed, view=view)
+                else:
+                    new_message = await channel.send(embed=embed, view=view)
+
+                # Update tracking with new message ID
+                if channel_id in self.channel_server_message_ids:
+                    self.channel_server_message_ids[channel_id]['overview'] = new_message.id
+
+                now_utc = datetime.now(timezone.utc)
+                if channel_id not in self.last_message_update_time:
+                    self.last_message_update_time[channel_id] = {}
+                self.last_message_update_time[channel_id]['overview'] = now_utc
+
+                logger.info(f"✅ RECOVERY SUCCESS: Auto-recreated overview message {new_message.id} to replace deleted {message_id} in channel {channel_id}")
+                return True  # Recovery successful
+
+            except (discord.errors.DiscordException, RuntimeError) as recovery_error:
+                logger.error(f"❌ RECOVERY FAILED: Could not auto-recreate overview message for channel {channel_id}: {recovery_error}", exc_info=True)
+                # Remove from tracking since we can't recover
+                if channel_id in self.channel_server_message_ids and 'overview' in self.channel_server_message_ids[channel_id]:
+                    del self.channel_server_message_ids[channel_id]['overview']
+                return False
             
-        except Exception as e:
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
             logger.error(f"Error updating overview message in channel {channel_id}: {e}", exc_info=True)
             return False
+    
+    def _register_persistent_mech_views(self):
+        """Register persistent views for mech buttons to work after bot restart."""
+        try:
+            from .control_ui import (MechExpandButton, MechCollapseButton, MechDonateButton,
+                                   MechDisplayButton, ReadStoryButton, PlaySongButton, EpilogueButton,
+                                   MechHistoryButton)
+            import discord
+
+            # Create persistent views for mech buttons
+            # These views will persist across bot restarts
+            class PersistentMechExpandView(discord.ui.View):
+                def __init__(self, cog_instance):
+                    super().__init__(timeout=None)
+                    self.add_item(MechExpandButton(cog_instance, 0))  # Pass cog_instance correctly
+
+            class PersistentMechCollapseView(discord.ui.View):
+                def __init__(self, cog_instance):
+                    super().__init__(timeout=None)
+                    self.add_item(MechCollapseButton(cog_instance, 0))  # Pass cog_instance correctly
+
+            class PersistentMechDonateView(discord.ui.View):
+                def __init__(self, cog_instance):
+                    super().__init__(timeout=None)
+                    self.add_item(MechDonateButton(cog_instance, 0))  # Pass cog_instance correctly
+
+            class PersistentMechHistoryView(discord.ui.View):
+                def __init__(self, cog_instance):
+                    super().__init__(timeout=None)
+                    self.add_item(MechHistoryButton(cog_instance, 0))  # Pass cog_instance correctly
+
+            # Create persistent views for mech selection buttons (levels 1-11)
+            class PersistentMechSelectionView(discord.ui.View):
+                def __init__(self, cog_instance):
+                    super().__init__(timeout=None)
+                    # Add buttons for all possible mech levels (1-11)
+                    for level in range(1, 12):
+                        self.add_item(MechDisplayButton(cog_instance, level, f"{level}", True))
+                    # Add epilogue button
+                    self.add_item(EpilogueButton(cog_instance))
+
+            # Create persistent views for story buttons (levels 1-11)
+            class PersistentMechStoryView(discord.ui.View):
+                def __init__(self, cog_instance):
+                    super().__init__(timeout=None)
+                    # Add story and music buttons for all possible levels (1-11)
+                    for level in range(1, 12):
+                        self.add_item(ReadStoryButton(cog_instance, level))
+                        self.add_item(PlaySongButton(cog_instance, level))
+
+            # Register persistent views with proper cog instance
+            self.bot.add_view(PersistentMechExpandView(self))
+            self.bot.add_view(PersistentMechCollapseView(self))
+            self.bot.add_view(PersistentMechDonateView(self))
+            self.bot.add_view(PersistentMechHistoryView(self))
+            self.bot.add_view(PersistentMechSelectionView(self))
+            self.bot.add_view(PersistentMechStoryView(self))
+            
+            logger.info("✅ Registered persistent mech views for button persistence")
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.warning(f"⚠️ Could not register persistent mech views: {e}")
+
+class DonationView(discord.ui.View):
+    """View with donation buttons that track clicks."""
+
+    def __init__(self, donation_manager_available: bool, message=None, bot=None):
+        super().__init__(timeout=890)  # 14.8 minutes (just under Discord's 15-minute limit)
+        self.donation_manager_available = donation_manager_available
+        self.message = message  # Store reference to the message for auto-delete
+        self.auto_delete_task = None
+        self.bot = bot  # Store bot instance for modal access
+        logger.info(f"DonationView initialized with donation_manager_available: {donation_manager_available}, timeout: 890s")
+        
+        # Import translation function
+        from .translation_manager import _
+        
+        # Add Buy Me a Coffee button (direct link)
+        coffee_button = discord.ui.Button(
+            label=_("☕ Buy Me a Coffee"),
+            style=discord.ButtonStyle.link,
+            url="https://buymeacoffee.com/dockerdiscordcontrol"
+        )
+        self.add_item(coffee_button)
+        
+        # Add PayPal button (direct link)
+        paypal_button = discord.ui.Button(
+            label=_("💳 PayPal"),
+            style=discord.ButtonStyle.link,
+            url="https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4"
+        )
+        self.add_item(paypal_button)
+        
+        # Add Broadcast Donation button
+        broadcast_button = discord.ui.Button(
+            label=_("📢 Broadcast Donation"),
+            style=discord.ButtonStyle.success,
+            custom_id="donation_broadcast"
+        )
+        broadcast_button.callback = self.broadcast_clicked
+        self.add_item(broadcast_button)
+
+    async def on_timeout(self):
+        """Called when the view times out."""
+        try:
+            # Cancel auto-delete task if it exists
+            if self.auto_delete_task and not self.auto_delete_task.done():
+                self.auto_delete_task.cancel()
+            
+            # Delete the message when timeout occurs
+            if self.message:
+                logger.info("DonationView timeout reached, deleting message to prevent inactive buttons")
+                try:
+                    await self.message.delete()
+                except discord.NotFound:
+                    logger.debug("Message already deleted")
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"Error deleting donation message on timeout: {e}", exc_info=True)
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in DonationView.on_timeout: {e}", exc_info=True)
+    
+    async def start_auto_delete_timer(self):
+        """Start the auto-delete timer that runs shortly before timeout."""
+        try:
+            # Wait for 885 seconds (14.75 minutes), then delete message
+            # This gives us a 5-second buffer before Discord's timeout
+            await asyncio.sleep(885)
+            if self.message:
+                logger.info("Auto-deleting donation message before Discord timeout")
+                try:
+                    await self.message.delete()
+                except discord.NotFound:
+                    logger.debug("Message already deleted")
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"Error auto-deleting donation message: {e}", exc_info=True)
+        except asyncio.CancelledError:
+            logger.debug("Auto-delete timer cancelled")
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in auto-delete timer: {e}", exc_info=True)
+    
+    async def broadcast_clicked(self, interaction: discord.Interaction):
+        """Handle Broadcast Donation button click."""
+        try:
+            # Show modal for donation details
+            modal = DonationBroadcastModal(self.donation_manager_available, interaction.user.name, self.bot)
+            await interaction.response.send_modal(modal)
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in broadcast_clicked: {e}", exc_info=True)
+
+class DonationBroadcastModal(discord.ui.Modal):
+    """Modal for donation broadcast details."""
+
+    def __init__(self, donation_manager_available: bool, default_name: str, bot=None):
+        from .translation_manager import _
+        super().__init__(title=_("📢 Broadcast Your Donation"))
+        self.donation_manager_available = donation_manager_available
+        self.bot = bot  # Store bot instance for mech service access
+
+        # Name field (pre-filled with Discord username)
+        self.name_input = discord.ui.InputText(
+            label=_("Your Name") + " *",
+            placeholder=_("How should we display your name?"),
+            value=default_name,
+            style=discord.InputTextStyle.short,
+            required=True,
+            max_length=50
+        )
+        self.add_item(self.name_input)
+
+        # Get dynamic placeholder for amount field with next level info
+        amount_placeholder = self._get_dynamic_amount_placeholder()
+
+        # Amount field (optional) with dynamic placeholder showing next level goal
+        self.amount_input = discord.ui.InputText(
+            label=_("💰 Donation Amount (optional)"),
+            placeholder=amount_placeholder,
+            style=discord.InputTextStyle.short,
+            required=False,
+            max_length=10
+        )
+        self.add_item(self.amount_input)
+        
+        # Public sharing field
+        self.share_input = discord.ui.InputText(
+            label=_("📢 Share donation publicly?"),
+            placeholder=_("Remove X to keep private"),
+            value="X",  # Default to sharing
+            style=discord.InputTextStyle.short,
+            required=False,
+            max_length=10
+        )
+        self.add_item(self.share_input)
+
+    def _get_dynamic_amount_placeholder(self) -> str:
+        """Get dynamic placeholder text showing how much is needed for next level."""
+        from .translation_manager import _
+
+        try:
+            # Get current mech state from progress_service (includes member-based dynamic costs)
+            from services.mech.progress_service import get_progress_service
+
+            progress_service = get_progress_service()
+            state = progress_service.get_state()
+
+            # Calculate remaining amount needed for next level
+            needed_amount = state.evo_max - state.evo_current
+
+            if needed_amount > 0 and state.level < 11:
+                # Format amount (remove trailing zeros)
+                formatted_amount = f"{needed_amount:.2f}".rstrip('0').rstrip('.')
+                formatted_amount = formatted_amount.replace('.00', '')
+
+                next_level = state.level + 1
+
+                # Return dynamic placeholder with motivation text
+                return f"💎 Need ${formatted_amount} for Level {next_level}! (e.g. {formatted_amount})"
+            else:
+                # At max level or no next level info
+                return _("🎯 Support DDC development! (e.g. 10.50)")
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
+            logger.error(f"Error getting dynamic amount placeholder: {e}", exc_info=True)
+            # Fallback to default placeholder
+            return _("10.50 (numbers only, $ will be added automatically)")
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle modal submission."""
+        logger.info(f"=== DONATION MODAL CALLBACK STARTED ===")
+        logger.info(f"User: {interaction.user.name}, Raw inputs: name={self.name_input.value}, amount={self.amount_input.value}")
+        
+        # Send immediate acknowledgment to avoid timeout (will be replaced quickly)
+        from .translation_manager import _
+        await interaction.response.send_message(
+            _("⏳ Processing..."),  # Shortened processing message
+            ephemeral=True
+        )
+        
+        try:
+            # Get values from modal
+            donor_name = self.name_input.value or interaction.user.name
+            raw_amount = self.amount_input.value.strip() if self.amount_input.value else ""
+            logger.info(f"Processed values: donor_name={donor_name}, raw_amount={raw_amount}")
+            
+            # Check sharing preference
+            share_preference = self.share_input.value.strip() if self.share_input.value else ""
+            should_share_publicly = "X" in share_preference.upper() or "x" in share_preference
+            
+            # Validate and format amount
+            import re
+            amount = ""
+            amount_validation_error = None
+            if raw_amount:
+                if '-' in raw_amount:
+                    amount_validation_error = f"⚠️ Invalid amount: '{raw_amount}' - negative amounts not allowed"
+                else:
+                    cleaned_amount = re.sub(r'[^\d.,]', '', raw_amount)
+                    cleaned_amount = cleaned_amount.replace(',', '.')
+                    
+                    try:
+                        numeric_value = float(cleaned_amount)
+                        if numeric_value > 0:
+                            amount = f"${numeric_value:.2f}"
+                        elif numeric_value == 0:
+                            amount_validation_error = f"⚠️ Invalid amount: '{raw_amount}' - must be greater than 0"
+                        else:
+                            amount_validation_error = f"⚠️ Invalid amount: '{raw_amount}' - please use only numbers"
+                    except ValueError:
+                        amount_validation_error = f"⚠️ Invalid amount: '{raw_amount}' - please use only numbers (e.g. 10.50)"
+            
+            if amount_validation_error:
+                await interaction.followup.send(
+                    amount_validation_error + _("\n\nTip: Use format like: 10.50 or 5 ($ will be added automatically)"),
+                    ephemeral=True
+                )
+                return
+            
+            # Process donation through mech service
+            donation_amount_euros = None
+            processing_msg = None  # Initialize for later deletion
+            evolution_occurred = False
+            old_evolution_level = None
+            new_evolution_level = None
+            
+            if self.donation_manager_available:
+                try:
+                    from services.mech.mech_service import get_mech_service
+                    mech_service = get_mech_service()
+                    
+                    # Get old state before donation using SERVICE FIRST
+                    from services.mech.mech_service import GetMechStateRequest
+                    old_state_request = GetMechStateRequest(include_decimals=False)
+                    old_state_result = mech_service.get_mech_state_service(old_state_request)
+                    if not old_state_result.success:
+                        logger.error("Failed to get old mech state")
+                        return
+                    old_evolution_level = old_state_result.level
+                    
+                    # Parse amount if provided
+                    if amount:
+                        amount_match = re.search(r'(\d+(?:\.\d+)?)', amount)
+                        if amount_match:
+                            donation_amount_euros = float(amount_match.group(1))
+                    
+                    # Record donation if amount > 0
+                    if donation_amount_euros and donation_amount_euros > 0:
+                        amount_dollars = float(donation_amount_euros)  # Keep decimal precision
+
+                        # Quick feedback to user first (store message to delete later)
+                        processing_msg = await interaction.followup.send(
+                            _("💰 Processing ${amount} donation...").format(amount=f"{amount_dollars:.2f}"),
+                            ephemeral=False  # Make it visible so we can delete it
+                        )
+                        
+                        # UNIFIED DONATION SERVICE: Single clean path with guaranteed events
+                        from services.donation.unified_donation_service import process_discord_donation
+
+                        donation_result = await process_discord_donation(
+                            discord_username=interaction.user.name,
+                            amount=amount_dollars,
+                            user_id=str(interaction.user.id),
+                            guild_id=str(interaction.guild.id) if interaction.guild else None,
+                            channel_id=str(interaction.channel.id) if interaction.channel else None,
+                            bot_instance=self.bot
+                        )
+
+                        if not donation_result.success:
+                            logger.error(f"Donation failed: {donation_result.error_message}")
+                            await interaction.followup.send(
+                                _("❌ Donation processing failed: {error}").format(error=donation_result.error_message),
+                                ephemeral=True
+                            )
+                            return
+
+                        new_state = donation_result.new_state
+                        logger.info(f"Donation recorded via unified service: ${amount_dollars:.2f}")
+                    else:
+                        # Get current state using SERVICE FIRST
+                        new_state_request = GetMechStateRequest(include_decimals=False)
+                        new_state_result = mech_service.get_mech_state_service(new_state_request)
+                        if not new_state_result.success:
+                            logger.error("Failed to get new mech state")
+                            return
+                    
+                    # For donation cases, the new_state is returned from add_donation methods
+                    # For non-donation cases, we use the SERVICE FIRST result
+                    if 'new_state' not in locals():
+                        new_evolution_level = new_state_result.level
+                        evolution_occurred = new_evolution_level > old_evolution_level
+                        old_power = old_state_result.power
+                        new_power = new_state_result.power
+                    else:
+                        # Check if evolution occurred (donation cases)
+                        evolution_occurred = new_state.level > old_evolution_level
+                        new_evolution_level = new_state.level
+                        old_power = old_state_result.power
+                        new_power = new_state.Power
+
+                    if evolution_occurred:
+                        logger.info(f"EVOLUTION! Level {old_evolution_level} → {new_evolution_level}")
+
+                    # Force update of mech animation when level OR power changes
+                    new_power = new_state.Power
+                    level_changed = new_state.level != old_state_result.level
+                    power_changed = new_power != old_power
+
+                    if level_changed or power_changed:
+                        if level_changed:
+                            logger.info(f"Level changed from {old_state_result.level} to {new_state.level} - updating mech animations")
+                        if power_changed:
+                            logger.info(f"Power changed from {old_power} to {new_power} - updating mech animations")
+
+                        # Events are now automatically handled by UnifiedDonationService
+                        # No manual event emission needed - prevents duplicate events
+
+                        # REMOVED: Manual update call to prevent duplicate updates
+                        # The donation_event already triggers automatic updates via event system
+                        # Manual update here caused double-updates and race conditions
+                        logger.info("Donation event will trigger automatic overview updates via event system")
+
+                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
+                    logger.error(f"Error processing donation: {e}", exc_info=True)
+                    evolution_occurred = False
+            
+            # Create broadcast message
+            if amount:
+                broadcast_text = _("{donor_name} donated {amount} to DDC – thank you so much ❤️").format(
+                    donor_name=f"**{donor_name}**",
+                    amount=f"**{amount}**"
+                )
+            else:
+                broadcast_text = _("{donor_name} supports DDC – thank you so much ❤️").format(
+                    donor_name=f"**{donor_name}**"
+                )
+            
+            # Create evolution status
+            evolution_status = ""
+            if evolution_occurred:
+                evolution_status = _("**Evolution: Level {old} → {new}!**").format(
+                    old=old_evolution_level, 
+                    new=new_evolution_level
+                )
+            
+            # Send to channels if sharing publicly
+            sent_count = 0
+            failed_count = 0
+            
+            if should_share_publicly:
+                config = load_config()
+                channels_config = config.get('channel_permissions', {})
+                
+                for channel_id_str, channel_info in channels_config.items():
+                    try:
+                        channel_id = int(channel_id_str)
+                        channel = interaction.client.get_channel(channel_id)
+                        
+                        if channel:
+                            embed = discord.Embed(
+                                title=_("💝 Donation received"),
+                                description=broadcast_text,
+                                color=0x00ff41
+                            )
+                            
+                            if evolution_status:
+                                embed.add_field(name=_("Mech Status"), value=evolution_status, inline=False)
+                            
+                            embed.set_footer(text="https://ddc.bot")
+                            await channel.send(embed=embed)
+                            sent_count += 1
+                        else:
+                            failed_count += 1
+                            
+                    except (discord.errors.DiscordException, RuntimeError) as channel_error:
+                        failed_count += 1
+                        logger.error(f"Error sending to channel {channel_id_str}: {channel_error}", exc_info=True)
+            
+            # Respond to user
+            if should_share_publicly:
+                response_text = _("✅ **Donation broadcast sent!**") + "\n\n"
+                response_text += _("📢 Sent to **{count}** channels").format(count=sent_count) + "\n"
+                if failed_count > 0:
+                    response_text += _("⚠️ Failed to send to {count} channels").format(count=failed_count) + "\n"
+                response_text += "\n" + _("Thank you **{donor_name}** for your generosity! 🙏").format(donor_name=donor_name)
+            else:
+                response_text = _("✅ **Donation recorded privately!**") + "\n\n"
+                response_text += _("Thank you **{donor_name}** for your generous support! 🙏").format(donor_name=donor_name) + "\n"
+                response_text += _("Your donation has been recorded and helps power the Donation Engine.")
+            
+            # Replace the processing message with the final result
+            await interaction.edit_original_response(content=response_text)
+
+            # Clean up processing message if donation was processed
+            if processing_msg:
+                try:
+                    await processing_msg.delete()
+                except:
+                    pass  # Ignore if already deleted or expired
+
+        except (discord.errors.DiscordException, RuntimeError, ValueError) as e:
+            logger.error(f"Error in donation broadcast modal: {e}", exc_info=True)
+
+            # Clean up processing message even if error occurred
+            if processing_msg:
+                try:
+                    await processing_msg.delete()
+                except:
+                    pass
+
+            try:
+                await interaction.edit_original_response(
+                    content=_("❌ Error sending donation broadcast. Please try again later.")
+                )
+            except (discord.errors.HTTPException, discord.errors.Forbidden) as edit_error:
+                logger.error(f"Could not send error response: {edit_error}", exc_info=True)
+
+# Setup function required for extension loading
+def setup(bot):
+    """Setup function to add the cog to the bot when loaded as an extension.
+
+    IMPORTANT: In PyCord 2.x, setup() must be synchronous (def, not async def).
+    Only discord.py 2.0+ supports async setup functions.
+    """
+    logger.info("[SETUP DEBUG] setup() function called - NEW CODE VERSION 0f3d5cb")
+    logger.info("[SETUP DEBUG] About to load config...")
+    from services.config.config_service import get_config_service
+    config_manager = get_config_service()
+    config = config_manager.get_config()
+    logger.info("[SETUP DEBUG] Config loaded, about to instantiate DockerControlCog...")
+    cog = DockerControlCog(bot, config)
+    logger.info("[SETUP DEBUG] DockerControlCog instantiated successfully!")
+    
+    # Remove donation commands if donations are disabled
+    try:
+        from services.donation.donation_utils import is_donations_disabled
+        if is_donations_disabled():
+            # Remove the donate and donatebroadcast commands
+            commands_to_remove = ['donate', 'donatebroadcast']
+            for cmd_name in commands_to_remove:
+                if cmd_name in bot.application_commands:
+                    del bot.application_commands[cmd_name]
+                    logger.info(f"Removed /{cmd_name} command - donations disabled")
+    except (KeyError, AttributeError, RuntimeError) as e:
+        logger.debug(f"Could not remove donation commands: {e}")
+    
+    # Add simple donation notification task
+    @tasks.loop(seconds=30)
+    async def check_donation_notifications():
+        """Check for donation notifications from Web UI"""
+        try:
+            import json
+            import os
+            notification_file = "/app/config/donation_notification.json"
+            
+            logger.debug(f"Checking for donation notification file: {notification_file}")
+            
+            if os.path.exists(notification_file):
+                logger.info(f"Found donation notification file!")
+                with open(notification_file, 'r') as f:
+                    notification = json.load(f)
+                
+                logger.info(f"🔔 Notification data: {notification}")
+                
+                if notification.get('type') == 'donation':
+                    donor_name = notification.get('donor', 'Anonymous')
+                    amount = notification.get('amount', 0)
+                    
+                    logger.info(f"🔔 Processing donation notification: {donor_name} ${amount}")
+                    
+                    try:
+                        # Create broadcast message (same as /donate) using configured Discord bot language
+                        try:
+                            from cogs.translation_manager import get_translation
+                            _ = get_translation()
+                        except:
+                            # Fallback if translation fails
+                            def _(text):
+                                return text
+                        
+                        if amount:
+                            # Format amount exactly like /donate command: $X.XX
+                            formatted_amount = f"${float(amount):.2f}"
+                            broadcast_text = _("{donor_name} donated {amount} to DDC – thank you so much ❤️").format(
+                                donor_name=f"**{donor_name}**",
+                                amount=f"**{formatted_amount}**"
+                            )
+                        else:
+                            broadcast_text = _("{donor_name} supports DDC – thank you so much ❤️").format(
+                                donor_name=f"**{donor_name}**"
+                            )
+                        
+                        # Create embed (same style as /donate)
+                        embed = discord.Embed(
+                            title=_("💝 Donation received"),
+                            description=broadcast_text,
+                            color=0x00ff41
+                        )
+                        embed.set_footer(text="https://ddc.bot")
+                        
+                        logger.info(f"🔔 Created donation embed for {donor_name} ${amount}")
+                        
+                        # Send to configured Status and Control channels from Web UI (like /donate command)
+                        sent_count = 0
+                        config = load_config()
+                        channels_config = config.get('channel_permissions', {})
+                        
+                        logger.info(f"🔔 Found {len(channels_config)} configured channels in Web UI")
+                        
+                        for channel_id_str, channel_info in channels_config.items():
+                            try:
+                                channel = bot.get_channel(int(channel_id_str))
+                                donation_broadcasts = channel_info.get('donation_broadcasts', True)
+                                
+                                logger.info(f"🔔 Channel {channel_id_str}: found={channel is not None}, broadcasts={donation_broadcasts}")
+                                
+                                if channel and donation_broadcasts:
+                                    await channel.send(embed=embed)
+                                    sent_count += 1
+                                    logger.info(f"🔔 Successfully sent to channel {channel.name} ({channel_id_str})")
+                                else:
+                                    if not channel:
+                                        logger.debug(f"🔔 Channel {channel_id_str} not found")
+                                    elif not donation_broadcasts:
+                                        logger.debug(f"🔔 Donation broadcasts disabled for {channel_id_str}")
+                            except (discord.errors.DiscordException, RuntimeError) as channel_error:
+                                logger.error(f"🔔 Error sending to channel {channel_id_str}: {channel_error}", exc_info=True)
+                        
+                        logger.info(f"🔔 Processed Web UI donation: {donor_name} ${amount} - sent to {sent_count} channels")
+                        
+                    except (discord.errors.DiscordException, RuntimeError, ValueError) as embed_error:
+                        logger.error(f"🔔 Error creating/sending donation embed: {embed_error}", exc_info=True)
+                
+                # Delete file after processing
+                os.remove(notification_file)
+                
+        except (OSError, ValueError, RuntimeError) as e:
+            logger.debug(f"Error checking donation notifications: {e}")
+    
+    # Start the task and add to cog
+    check_donation_notifications.start()
+    cog.donation_notification_task = check_donation_notifications
+
+    # Start the Mech Status Cache background loop
+    cog.start_mech_cache_loop.start()
+    logger.info("Mech Status Cache startup task initiated")
+
+    # Start the Initial Animation Cache Warmup
+    cog.initial_animation_cache_warmup.start()
+    logger.info("Initial Animation Cache Warmup startup task initiated")
+
+    bot.add_cog(cog)
+    logger.info("[SETUP DEBUG] DockerControlCog added to bot")
+
+    # Start background loops NOW (in setup(), after cog is added)
+    # NOTE: Cannot use on_ready() because bot is already ready when cog loads
+    # NOTE: Cannot use cog_load() because PyCord 2.x doesn't support it
+    logger.info("[SETUP DEBUG] Starting background loops directly from setup()...")
+    try:
+        # Ensure clean loop state
+        cog._cancel_existing_loops()
+        # Start all background loops
+        cog._setup_background_loops()
+        cog._background_loops_started = True
+        logger.info("[SETUP DEBUG] Background loops started successfully!")
+    except Exception as e:
+        logger.error(f"[SETUP DEBUG] Failed to start background loops: {e}", exc_info=True)

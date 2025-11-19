@@ -2,7 +2,7 @@
 # ============================================================================ #
 # DockerDiscordControl (DDC)                                                  #
 # https://ddc.bot                                                              #
-# Copyright (c) 2023-2025 MAX                                                  #
+# Copyright (c) 2025 MAX                                                  #
 # Licensed under the MIT License                                               #
 # ============================================================================ #
 
@@ -11,686 +11,211 @@ from flask import (
     jsonify, session, current_app, send_file, Response
 )
 from datetime import datetime, timezone, timedelta # Added datetime for config_page
-from functools import wraps
 import os
 import io
 import time
 import json
-import traceback
-import pytz
 
 # Import auth from app.auth
 from app.auth import auth 
-from utils.config_loader import load_config, save_config, DEFAULT_CONFIG # Import DEFAULT_CONFIG
+from services.config.config_service import load_config, save_config
+from app.utils.container_info_web_handler import save_container_info_from_web, load_container_info_for_web
 from app.utils.web_helpers import (
-    log_user_action, 
     get_docker_containers_live,
     docker_cache
 )
+from app.utils.port_diagnostics import run_port_diagnostics
 # NEW: Import shared_data
 from app.utils.shared_data import get_active_containers, load_active_containers_from_config
 from app.constants import COMMON_TIMEZONES # Import from new constants file
 # Import scheduler functions for the main page
-from utils.scheduler import (
+from services.scheduling.scheduler import (
     load_tasks, 
     DAYS_OF_WEEK
 )
-from utils.action_logger import log_user_action
-
-# Define COMMON_TIMEZONES here if it's only used by routes in this blueprint
-# Or import it if it's defined centrally and used by multiple blueprints
-# For now, let's assume it might be needed, if not, it can be removed.
-# from app.web_ui import COMMON_TIMEZONES # This would create a circular import if web_ui imports this blueprint.
-# Instead, COMMON_TIMEZONES should be passed to template from web_ui.py or defined in a config/constants file.
-# For simplicity in this step, I will copy it here. Ideally, it should be refactored to a central place.
-# Remove COMMON_TIMEZONES_BP definition
-# COMMON_TIMEZONES_BP = [
-#     "Europe/Berlin", ..., "Australia/Sydney"
-# ]
+from services.infrastructure.action_logger import log_user_action
+from services.infrastructure.spam_protection_service import get_spam_protection_service
 
 main_bp = Blueprint('main_bp', __name__)
 
-# Heartbeat Monitor Script Generator Functions
-def generate_python_monitor_script(form_data):
-    """Generate a Python-based heartbeat monitor script"""
-    # Extract configuration
-    monitor_bot_token = form_data.get('monitor_bot_token', '')
-    ddc_bot_user_id = form_data.get('ddc_bot_user_id', '')
-    heartbeat_channel_id = form_data.get('heartbeat_channel_id', '')
-    alert_channel_ids = form_data.get('alert_channel_ids', '')
-    monitor_timeout_seconds = form_data.get('monitor_timeout_seconds', '271')  # Default: ~4.5 minutes
-    
-    # Format the alert channel IDs as a Python list
-    formatted_alert_channels = [ch.strip() for ch in alert_channel_ids.split(',') if ch.strip()]
-    alert_channels_str = ", ".join([f"'{ch}'" for ch in formatted_alert_channels])
-    
-    # Generate the script content
-    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-    script = f"""#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-'''
-DockerDiscordControl (DDC) Heartbeat Monitor Script
-===================================================
 
-This script monitors Discord for heartbeat messages sent by the DDC bot
-and sends alerts if the heartbeat is missing for too long.
-
-Generated on: {current_time}
-
-Setup Instructions:
-1. Install requirements: pip install discord.py
-2. Run this script on a separate system from your DDC bot
-3. Keep this script running continuously (using systemd, screen, tmux, etc.)
-'''
-
-import asyncio
-import datetime
-import logging
-import sys
-import time
-from typing import List, Optional
-
-try:
-    import discord
-    from discord.ext import tasks
-except ImportError:
-    print("Error: This script requires discord.py. Please install it with: pip install discord.py")
-    sys.exit(1)
-
-# === Configuration ===
-BOT_TOKEN = '{monitor_bot_token}'
-DDC_BOT_USER_ID = {ddc_bot_user_id}
-HEARTBEAT_CHANNEL_ID = {heartbeat_channel_id}
-ALERT_CHANNEL_IDS = [{alert_channels_str}]
-HEARTBEAT_TIMEOUT_SECONDS = {monitor_timeout_seconds}
-
-# === Logging Setup ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('ddc_heartbeat_monitor.log')
-    ]
-)
-logger = logging.getLogger('ddc_monitor')
-
-class HeartbeatMonitor(discord.Client):
-    def __init__(self, *args, **kwargs):
-        # RAM-OPTIMIZED: Minimal intents for Web UI bot
-        intents = discord.Intents.none()
-        intents.guilds = True            # Required for guild access
-        intents.message_content = True   # Required for message content
-        super().__init__(intents=intents, *args, **kwargs)
-        
-        # State tracking
-        self.last_heartbeat_time = None
-        self.alert_sent = False
-        self.start_time = datetime.datetime.now()
-        
-        # Start monitoring loop
-        self.heartbeat_check.start()
-    
-    async def on_ready(self):
-        '''Called when the client is ready'''
-        logger.info(f"Monitor logged in as {{self.user}} (ID: {{self.user.id}})")
-        logger.info(f"Monitoring heartbeats from DDC bot ID: {{DDC_BOT_USER_ID}}")
-        logger.info(f"Watching channel: {{HEARTBEAT_CHANNEL_ID}}")
-        logger.info(f"Will send alerts to channel(s): {{ALERT_CHANNEL_IDS}}")
-        logger.info(f"Heartbeat timeout: {{HEARTBEAT_TIMEOUT_SECONDS}} seconds")
-        
-        # Send startup notification
-        await self._send_to_alert_channels(
-            title="🔄 Heartbeat Monitoring Started",
-            description=f"DDC Heartbeat monitoring is now active.\\nMonitoring DDC bot: <@{{DDC_BOT_USER_ID}}>\\nAlert timeout: {{HEARTBEAT_TIMEOUT_SECONDS}} seconds",
-            color=discord.Color.blue()
-        )
-    
-    async def on_message(self, message):
-        '''Called when a message is received'''
-        # Check if message is from DDC bot and in the heartbeat channel
-        if (message.author.id == DDC_BOT_USER_ID and 
-            message.channel.id == HEARTBEAT_CHANNEL_ID and
-            "❤️" in message.content):
-            
-            # Update last heartbeat time
-            self.last_heartbeat_time = datetime.datetime.now()
-            logger.debug(f"Heartbeat detected at {{self.last_heartbeat_time.isoformat()}}")
-            
-            # If we previously sent an alert, send recovery notification
-            if self.alert_sent:
-                self.alert_sent = False
-                logger.info("Heartbeat recovered after previous alert")
-                await self._send_to_alert_channels(
-                    title="✅ DDC Heartbeat Recovered",
-                    description=f"Heartbeat from DDC bot <@{{DDC_BOT_USER_ID}}> has been restored.\\n\\nMonitoring continues.",
-                    color=discord.Color.green()
-                )
-    
-    async def _send_to_alert_channels(self, title, description, color):
-        '''Send a message to all configured alert channels'''
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=color,
-            timestamp=datetime.datetime.now()
-        )
-        embed.set_footer(text="DDC Heartbeat Monitor | https://ddc.bot")
-        
-        for channel_id in ALERT_CHANNEL_IDS:
-            try:
-                channel = self.get_channel(int(channel_id))
-                if not channel:
-                    channel = await self.fetch_channel(int(channel_id))
-                await channel.send(embed=embed)
-                logger.info(f"Notification sent to channel {{channel_id}}")
-            except Exception as e:
-                logger.error(f"Error sending to channel {{channel_id}}: {{e}}")
-    
-    @tasks.loop(seconds=30)
-    async def heartbeat_check(self):
-        '''Check if heartbeat has been received within the timeout period'''
-        now = datetime.datetime.now()
-        
-        if not self.last_heartbeat_time:
-            # No heartbeat received yet since startup
-            startup_seconds = (now - self.start_time).total_seconds()
-            if startup_seconds > HEARTBEAT_TIMEOUT_SECONDS and not self.alert_sent:
-                logger.warning(f"No initial heartbeat received {{startup_seconds:.1f}} seconds after startup")
-                await self._send_alert()
-        else:
-            # Check time since last heartbeat
-            elapsed = (now - self.last_heartbeat_time).total_seconds()
-            if elapsed > HEARTBEAT_TIMEOUT_SECONDS and not self.alert_sent:
-                await self._send_alert()
-    
-    async def _send_alert(self):
-        '''Send missing heartbeat alert to all configured channels'''
-        if self.alert_sent:
-            return  # Don't spam alerts
-        
-        # Calculate elapsed time
-        now = datetime.datetime.now()
-        if self.last_heartbeat_time:
-            elapsed_seconds = (now - self.last_heartbeat_time).total_seconds()
-            last_heartbeat_time_str = self.last_heartbeat_time.isoformat()
-        else:
-            elapsed_seconds = (now - self.start_time).total_seconds()
-            last_heartbeat_time_str = "Never"
-        
-        logger.warning(f"Heartbeat missing for {{elapsed_seconds:.1f}} seconds, sending alert")
-        
-        await self._send_to_alert_channels(
-            title="⚠️ DDC Heartbeat Missing",
-            description=(f"❌ No heartbeat detected from DDC bot <@{{DDC_BOT_USER_ID}}> "
-                        f"for {{elapsed_seconds:.1f}} seconds.\\n\\n"
-                        f"Last heartbeat: {{last_heartbeat_time_str}}\\n\\n"
-                        f"**Possible causes:**\\n"
-                        f"• DDC container is down\\n"
-                        f"• Discord bot has lost connection\\n"
-                        f"• Discord API issues\\n"
-                        f"• Missing permissions in heartbeat channel"),
-            color=discord.Color.red()
-        )
-        
-        self.alert_sent = True
-    
-    @heartbeat_check.before_loop
-    async def before_heartbeat_check(self):
-        '''Wait until the bot is ready before starting the loop'''
-        await self.wait_until_ready()
-
-async def main():
-    '''Main entry point for the script'''
-    logger.info("Starting DDC Heartbeat Monitor")
-    
-    # Validate configuration
-    if not BOT_TOKEN or BOT_TOKEN == 'YOUR_BOT_TOKEN':
-        logger.error("Invalid bot token. Please set a valid token.")
-        return
-    
-    if not ALERT_CHANNEL_IDS:
-        logger.error("No alert channels specified. Please configure at least one alert channel.")
-        return
-    
-    # Create and start the client
-    client = HeartbeatMonitor()
-    
+def _get_cached_mech_state(include_decimals=False):
+    """Helper function to get mech state from cache with fallback to direct service."""
     try:
-        await client.start(BOT_TOKEN)
-    except discord.LoginFailure:
-        logger.error("Failed to login. Please check your bot token.")
-    except Exception as e:
-        logger.error(f"Error starting bot: {{e}}", exc_info=True)
-    finally:
-        logger.info("Bot is shutting down")
-        if not client.is_closed():
-            await client.close()
+        # PERFORMANCE OPTIMIZATION: Try cache first
+        from services.mech.mech_status_cache_service import get_mech_status_cache_service, MechStatusCacheRequest
 
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Received keyboard interrupt, shutting down")
-    except Exception as e:
-        logger.error(f"Unhandled exception: {{e}}", exc_info=True)
-        sys.exit(1)
-"""
-    return script
+        cache_service = get_mech_status_cache_service()
+        cache_request = MechStatusCacheRequest(include_decimals=include_decimals)
+        cache_result = cache_service.get_cached_status(cache_request)
 
-# Keep these as simple placeholders
-def generate_bash_monitor_script(form_data):
-    """Generate a simplified Bash-based heartbeat monitor script placeholder"""
-    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-    return f"""#!/bin/bash
-# DockerDiscordControl (DDC) Heartbeat Monitor Script (Bash version)
-# Generated on: {current_time}
-#
-# This is a simplified placeholder script.
-# For full functionality, please use the Python monitor script instead.
+        if cache_result.success:
+            current_app.logger.info(f"WEB UI: Using cached mech status (age: {cache_result.cache_age_seconds:.1f}s)")
+            # Create compatibility object from cache
+            class CachedStateCompat:
+                def __init__(self, cache_result):
+                    self.level = cache_result.level
+                    self.Power = cache_result.power
+                    self.power = cache_result.power
+                    self.total_donated = cache_result.total_donated
+                    self.level_name = cache_result.name
+                    self.name = cache_result.name
+                    self.threshold = cache_result.threshold
+                    self.speed = cache_result.speed
+                    self.success = True
+            return CachedStateCompat(cache_result)
+        else:
+            current_app.logger.info("WEB UI: Cache miss - falling back to direct service call")
+            # Fallback to direct service call
+            from services.mech.mech_service import get_mech_service, GetMechStateRequest
+            mech_service = get_mech_service()
+            state_request = GetMechStateRequest(include_decimals=include_decimals)
+            state_result = mech_service.get_mech_state_service(state_request)
 
-echo "DockerDiscordControl Heartbeat Monitor (Bash)"
-echo "This is a placeholder. For full monitoring functionality, please use the Python script."
-echo ""
-echo "The Python script provides the following benefits:"
-echo "- Reliable Discord API connection"
-echo "- Proper heartbeat detection"
-echo "- Automatic alerts when heartbeats are missed"
-echo "- Recovery notifications"
+            if state_result.success:
+                # Create compatibility object from service result
+                class ServiceStateCompat:
+                    def __init__(self, service_result):
+                        self.level = service_result.level
+                        self.Power = service_result.power
+                        self.power = service_result.power
+                        self.total_donated = service_result.total_donated
+                        self.level_name = service_result.name
+                        self.name = service_result.name
+                        self.threshold = service_result.threshold
+                        self.speed = service_result.speed
+                        self.success = True
+                return ServiceStateCompat(state_result)
+            else:
+                current_app.logger.error("Failed to get mech state from service")
+                return None
 
-# Configuration:
-DISCORD_WEBHOOK_URL="{form_data.get('alert_webhook_url', '')}"
-DDC_BOT_USER_ID="{form_data.get('ddc_bot_user_id', '')}"
-HEARTBEAT_CHANNEL_ID="{form_data.get('heartbeat_channel_id', '')}"
-"""
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (cache service, mech service unavailable)
+        current_app.logger.error(f"Service dependency error getting cached mech state: {e}", exc_info=True)
+        return None
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (state conversion, attribute access)
+        current_app.logger.error(f"Data error getting cached mech state: {e}", exc_info=True)
+        return None
 
-def generate_batch_monitor_script(form_data):
-    """Generate a simplified Windows Batch heartbeat monitor script placeholder"""
-    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-    return f"""@echo off
-rem DockerDiscordControl (DDC) Heartbeat Monitor Script (Windows Batch version)
-rem Generated on: {current_time}
-rem
-rem This is a simplified placeholder script.
-rem For full functionality, please use the Python monitor script instead.
-
-echo DockerDiscordControl Heartbeat Monitor (Windows Batch)
-echo This is a placeholder. For full monitoring functionality, please use the Python script.
-echo.
-echo The Python script provides the following benefits:
-echo - Reliable Discord API connection
-echo - Proper heartbeat detection
-echo - Automatic alerts when heartbeats are missed
-echo - Recovery notifications
-
-rem Configuration:
-set "DISCORD_WEBHOOK_URL={form_data.get('alert_webhook_url', '')}"
-set "DDC_BOT_USER_ID={form_data.get('ddc_bot_user_id', '')}"
-set "HEARTBEAT_CHANNEL_ID={form_data.get('heartbeat_channel_id', '')}"
-
-pause
-"""
 
 @main_bp.route('/', methods=['GET'])
 # Use direct auth decorator
-@auth.login_required 
+@auth.login_required
 def config_page():
     logger = current_app.logger
-    
-    # CRITICAL FIX: Use cached config instead of loading directly
-    # This ensures we see the same config that was just saved
-    from utils.config_cache import get_cached_config
-    config = get_cached_config()
-    
-    # Force a fresh reload if requested
-    force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
-    if force_refresh:
-        logger.info("Force refresh requested - reloading configuration from files")
-        from utils.config_cache import init_config_cache
-        fresh_config = load_config()
-        init_config_cache(fresh_config)
-        config = fresh_config
-    
-    now = datetime.now().strftime("%Y%m%d%H%M%S") # datetime is now imported
-    live_containers_list, cache_error = get_docker_containers_live(logger)
-    
-    configured_servers = {}
-    for server in config.get('servers', []):
-        server_name = server.get('docker_name')
-        if server_name:
-            configured_servers[server_name] = server
-            
-    # NEW: Load active containers from the shared data class
-    # Update active containers from configuration
-    load_active_containers_from_config()
-    active_container_names = get_active_containers()
-    
-    # Debug output
-    logger.debug(f"Selected servers in config: {config.get('selected_servers', [])}")
-    logger.debug(f"Active container names for task form: {active_container_names}")
 
-    # Get configured timezone first
-    timezone_str = config.get('timezone', 'Europe/Berlin')
-    
-    # Format cache timestamp for display using configured timezone
-    last_cache_update = docker_cache.get('timestamp')
-    formatted_timestamp = "Never"
-    if last_cache_update:
-        try:
-            # Convert timestamp to configured timezone
-            tz = pytz.timezone(timezone_str)
-            dt = datetime.fromtimestamp(last_cache_update, tz=tz)
-            formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S %Z')
-        except Exception as e:
-            logger.error(f"Error formatting timestamp with timezone: {e}")
-            # Fallback to system timezone
-            formatted_timestamp = datetime.fromtimestamp(last_cache_update).strftime('%Y-%m-%d %H:%M:%S')
-    
-    # Try to get the timestamp from the global_timestamp field, which is used in the newer code
-    if formatted_timestamp == "Never" and docker_cache.get('global_timestamp'):
-        try:
-            # Convert timestamp to configured timezone
-            tz = pytz.timezone(timezone_str)
-            dt = datetime.fromtimestamp(docker_cache['global_timestamp'], tz=tz)
-            formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S %Z')
-            logger.debug(f"Using global_timestamp for container list update time: {formatted_timestamp}")
-        except Exception as e:
-            logger.error(f"Error formatting global_timestamp: {e}")
-    
-    # Load schedules for display on the main page
-    tasks_list = load_tasks()
-    
-    # Sort by next execution time
-    tasks_list.sort(key=lambda t: t.next_run_ts if t.next_run_ts else float('inf'))
-    
-    # Prepare data for the template
-    formatted_tasks = []
-    for task in tasks_list:
-        # Format timestamps
-        next_run = None
-        if task.next_run_ts:
-            next_run_dt = datetime.utcfromtimestamp(task.next_run_ts)
-            if timezone_str:
-                tz = pytz.timezone(timezone_str)
-                next_run_dt = next_run_dt.replace(tzinfo=pytz.UTC).astimezone(tz)
-            next_run = next_run_dt.strftime("%Y-%m-%d %H:%M %Z")
-        
-        last_run = None
-        if task.last_run_ts:
-            last_run_dt = datetime.utcfromtimestamp(task.last_run_ts)
-            if timezone_str:
-                tz = pytz.timezone(timezone_str)
-                last_run_dt = last_run_dt.replace(tzinfo=pytz.UTC).astimezone(tz)
-            last_run = last_run_dt.strftime("%Y-%m-%d %H:%M %Z")
-            
-        # Cycle information
-        cycle_info = task.cycle
-        if task.cycle == "weekly" and task.weekday_val is not None:
-            day_name = DAYS_OF_WEEK[task.weekday_val] if 0 <= task.weekday_val < len(DAYS_OF_WEEK) else f"Day {task.weekday_val}"
-            cycle_info = f"Weekly ({day_name})"
-        elif task.cycle == "monthly" and task.day_val is not None:
-            cycle_info = f"Monthly (Day {task.day_val})"
-        elif task.cycle == "yearly" and task.month_val is not None and task.day_val is not None:
-            month_display = task.month_val
-            if isinstance(month_display, int) and 1 <= month_display <= 12:
-                month_names = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
-                month_display = month_names[month_display - 1]
-            cycle_info = f"Yearly ({month_display} {task.day_val})"
-        elif task.cycle == "daily":
-            cycle_info = "Daily"
-        elif task.cycle == "once":
-            cycle_info = "Once"
-        
-        # Find container display name
-        display_name = task.container_name
-        for server in config.get('servers', []):
-            if server.get('docker_name') == task.container_name:
-                display_name = server.get('name', task.container_name)
-                break
-        
-        # Add last run result
-        last_run_result = "Not run yet"
-        if task.last_run_success is not None:
-            if task.last_run_success:
-                last_run_result = "Success"
-            else:
-                last_run_result = f"Failed: {task.last_run_error or 'Unknown error'}"
-        
-        formatted_tasks.append({
-            'id': task.task_id,
-            'container_name': task.container_name,
-            'display_name': display_name,
-            'action': task.action,
-            'cycle': task.cycle,
-            'cycle_info': cycle_info,
-            'next_run': next_run,
-            'last_run': last_run,
-            'created_by': task.created_by or "Unknown",
-            'is_active': task.next_run_ts is not None,
-            'last_run_result': last_run_result,
-            'last_run_success': task.last_run_success
-        })
-    
-    return render_template('config.html', 
-                           config=config,
-                           common_timezones=COMMON_TIMEZONES, # Use imported COMMON_TIMEZONES
-                           current_timezone=config.get('selected_timezone', 'UTC'),
-                           all_containers=live_containers_list,  # Renamed from 'containers' to 'all_containers'
-                           configured_servers=configured_servers,  # Added
-                           active_container_names=active_container_names, # NEW Added
-                           cache_error=cache_error,
-                           docker_cache=docker_cache,  # Pass the entire docker_cache for direct access in template
-                           last_cache_update=last_cache_update,
-                           formatted_timestamp=formatted_timestamp,
-                           auto_refresh_interval=config.get('auto_refresh_interval', 30),
-                           version_tag=now, 
-                           show_clear_logs_button=config.get('show_clear_logs_button', True),
-                           show_download_logs_button=config.get('show_download_logs_button', True),
-                           DEFAULT_CONFIG=DEFAULT_CONFIG, # Add DEFAULT_CONFIG
-                           tasks=formatted_tasks # Add schedule data
-                          )
+    try:
+        # Use ConfigurationPageService to handle business logic
+        from services.web.configuration_page_service import get_configuration_page_service, ConfigurationPageRequest
+
+        # Check for force refresh parameter
+        force_refresh = request.args.get('force_refresh', 'false').lower() == 'true'
+
+        # Create service request
+        page_request = ConfigurationPageRequest(force_refresh=force_refresh)
+
+        # Process page data through service
+        page_service = get_configuration_page_service()
+        result = page_service.prepare_page_data(page_request)
+
+        if result.success:
+            # Render template with service-prepared data
+            return render_template('config.html', **result.template_data)
+        else:
+            logger.error(f"Failed to prepare configuration page data: {result.error}")
+            # Fallback: render with minimal data
+            return render_template('config.html',
+                                 config={},
+                                 error_message="Failed to load configuration data. Please check the logs.")
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (configuration page service unavailable)
+        logger.error(f"Service dependency error in config_page route: {e}", exc_info=True)
+        return render_template('config.html',
+                             config={},
+                             error_message="Service error: Unable to load configuration services.")
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (request parsing, template data)
+        logger.error(f"Data error in config_page route: {e}", exc_info=True)
+        return render_template('config.html',
+                             config={},
+                             error_message="Data error: Failed to process configuration data.")
 
 @main_bp.route('/save_config_api', methods=['POST'])
 # Use direct auth decorator
 @auth.login_required
 def save_config_api():
     logger = current_app.logger
-    print("[CONFIG-DEBUG] save_config_api endpoint called")
     logger.info("save_config_api (blueprint) called...")
-    result = {'success': False, 'message': 'An unexpected error occurred.'}
-    
+
     try:
-        from utils.config_loader import (
-            process_config_form, BOT_CONFIG_FILE, DOCKER_CONFIG_FILE, 
-            CHANNELS_CONFIG_FILE, WEB_CONFIG_FILE
-        )
-        
-        # Explicitly import server_order utilities
-        try:
-            from utils.server_order import save_server_order
-            server_order_utils_available = True
-        except ImportError:
-            server_order_utils_available = False
-            logger.warning("Server order utilities not available, server order changes will require restart")
-        
-        # Is configuration splitting enabled?
-        config_split_enabled = request.form.get('config_split_enabled') == '1'
-        
-        # Process form
+        # Use ConfigurationSaveService to handle business logic
+        from services.web.configuration_save_service import get_configuration_save_service, ConfigurationSaveRequest
+
+        # Extract form data and options
         form_data = request.form.to_dict(flat=False)
-        
-        # Convert all lists with only one element to normal values
-        # This logic can be adjusted if you want to keep certain fields as lists
-        cleaned_form_data = {}
-        for key, value in form_data.items():
-            if isinstance(value, list) and len(value) == 1:
-                cleaned_form_data[key] = value[0]
-            else:
-                cleaned_form_data[key] = value
-        
-        # Load current config to check for critical changes
-        current_config = load_config()
-        
-        # Perform configuration processing
-        processed_data, success, message = process_config_form(cleaned_form_data, current_config)
-        if not success:
-            logger.warning(f"Configuration processing failed: {message}")
-            message = "An error occurred while processing the configuration."
-        
-        # Check file permissions before attempting to save
-        if success:
-            from utils.config_manager import get_config_manager
-            config_manager = get_config_manager()
-            permission_results = config_manager.check_all_permissions()
-            
-            permission_errors = []
-            for file_path, (has_permission, error_msg) in permission_results.items():
-                if not has_permission:
-                    permission_errors.append(error_msg)
-            
-            if permission_errors:
-                logger.error(f"Cannot save configuration due to permission errors: {permission_errors}")
-                result = {
-                    'success': False,
-                    'message': 'Cannot save configuration: File permission errors. Check server logs for details.',
-                    'permission_errors': permission_errors
-                }
-                flash('Error: Configuration files are not writable. Please check file permissions.', 'danger')
-                return jsonify(result) if request.headers.get('X-Requested-With') == 'XMLHttpRequest' else redirect(url_for('.config_page'))
-        
-        # Check if critical settings that require cache invalidation have changed
-        critical_settings_changed = False
-        if success:
-            # Check for language change
-            old_language = current_config.get('language', 'en')
-            new_language = processed_data.get('language', 'en')
-            if old_language != new_language:
-                logger.info(f"Language changed from '{old_language}' to '{new_language}' - cache invalidation required")
-                critical_settings_changed = True
-            
-            # Check for timezone change
-            old_timezone = current_config.get('timezone', 'Europe/Berlin')
-            new_timezone = processed_data.get('timezone', 'Europe/Berlin')
-            if old_timezone != new_timezone:
-                logger.info(f"Timezone changed from '{old_timezone}' to '{new_timezone}' - cache invalidation required")
-                critical_settings_changed = True
-        
-        # Process server order separately for immediate effect
-        if success and server_order_utils_available:
-            server_order = processed_data.get('server_order')
-            if server_order:
-                # If it's a string with separators, split it
-                if isinstance(server_order, str):
-                    server_order = [name.strip() for name in server_order.split('__,__') if name.strip()]
-                
-                # Save to dedicated file
-                save_server_order(server_order)
-                logger.info(f"Server order saved separately: {server_order}")
-        
-        # List of saved configuration files
-        saved_files = []
-        
-        if success:
-            # Save configuration
-            save_config(processed_data)
-            
-            # Invalidate caches if critical settings changed
-            if critical_settings_changed:
-                try:
-                    # Invalidate ConfigManager cache
-                    from utils.config_manager import get_config_manager
-                    config_manager = get_config_manager()
-                    config_manager.invalidate_cache()
-                    logger.info("ConfigManager cache invalidated due to critical settings change")
-                    
-                    # Invalidate config cache
-                    from utils.config_cache import get_config_cache
-                    config_cache = get_config_cache()
-                    config_cache.clear()
-                    logger.info("Config cache cleared due to critical settings change")
-                    
-                    # Force reload of configuration in config cache
-                    from utils.config_cache import init_config_cache
-                    fresh_config = load_config()
-                    init_config_cache(fresh_config)
-                    logger.info("Config cache reinitialized with fresh configuration")
-                    
-                    # Clear translation manager cache if language changed
-                    if old_language != new_language:
-                        try:
-                            from cogs.translation_manager import translation_manager
-                            # Clear the translation cache to force reload with new language
-                            if hasattr(translation_manager, '_'):
-                                translation_manager._.cache_clear()
-                            # Reset cached language to force fresh lookup
-                            if hasattr(translation_manager, '_cached_language'):
-                                delattr(translation_manager, '_cached_language')
-                            logger.info(f"Translation manager cache cleared for language change: {old_language} -> {new_language}")
-                        except Exception as e:
-                            logger.warning(f"Could not clear translation manager cache: {e}")
-                    
-                except Exception as e:
-                    logger.error(f"Error invalidating caches: {e}")
-            
-            # Update scheduler logging settings if they have changed
-            try:
-                # Explicitly ensure the debug mode is refreshed
-                from utils.logging_utils import refresh_debug_status
-                debug_status = refresh_debug_status()
-                logger.info(f"Debug mode after config save: {'ENABLED' if debug_status else 'DISABLED'}")
-                
-                # Verify that debug setting was properly saved
-                config_check = load_config()
-                saved_debug_status = config_check.get('scheduler_debug_mode', False)
-                if saved_debug_status != debug_status:
-                    logger.warning(f"Debug status mismatch! Requested: {debug_status}, Saved: {saved_debug_status}")
-                    # Force an additional save with correct debug status
-                    config_check['scheduler_debug_mode'] = debug_status
-                    save_config(config_check)
-                    logger.info(f"Forced additional save with debug status: {debug_status}")
-                
-                # Import here to avoid circular imports
-                from utils.scheduler import initialize_logging
-                initialize_logging()
-                logger.info("Scheduler logging settings updated after configuration save")
-            except Exception as e:
-                logger.warning(f"Failed to update scheduler logging: {str(e)}")
-            
-            # Prepare file paths for display (filenames only)
-            saved_files = [
-                os.path.basename(BOT_CONFIG_FILE),
-                os.path.basename(DOCKER_CONFIG_FILE),
-                os.path.basename(CHANNELS_CONFIG_FILE),
-                os.path.basename(WEB_CONFIG_FILE)
-            ]
-            
-            logger.info(f"Configuration saved successfully via API: {message}")
-            log_user_action("SAVE", "Configuration", source="Web UI Blueprint")
-            
-            # Add note about cache invalidation if critical settings changed
-            if critical_settings_changed:
-                message += " Critical settings changed - caches have been invalidated. Changes should take effect immediately."
-            
+        config_split_enabled = request.form.get('config_split_enabled') == '1'
+
+        # Debug form data
+        logger.debug(f"Form data keys count: {len(form_data.keys())}")
+
+        # Debug display_name values
+        logger.info("[DISPLAY_NAME_SAVE_DEBUG] Checking display_name values in form:")
+        for key in form_data.keys():
+            if 'display_name_' in key:
+                logger.info(f"[DISPLAY_NAME_SAVE_DEBUG] {key} = {repr(form_data[key])}")
+        if 'donation_disable_key' in form_data:
+            logger.debug("Found donation_disable_key in form")
+
+        # Create service request
+        save_request = ConfigurationSaveRequest(
+            form_data=form_data,
+            config_split_enabled=config_split_enabled
+        )
+
+        # Process save through service
+        config_service = get_configuration_save_service()
+        save_result = config_service.save_configuration(save_request)
+
+        if save_result.success:
             result = {
-                'success': True, 
-                'message': message or 'Configuration saved successfully.',
-                'config_files': saved_files if config_split_enabled else [],
-                'critical_settings_changed': critical_settings_changed
+                'success': True,
+                'message': save_result.message,
+                'config_files': save_result.config_files,
+                'critical_settings_changed': save_result.critical_settings_changed
             }
             flash(result['message'], 'success')
+            logger.info(f"Configuration saved successfully via ConfigurationSaveService: {save_result.message}")
         else:
-            logger.warning(f"Failed to save configuration via API: {message}")
-            result = {'success': False, 'message': message or 'Failed to save configuration.'}
+            result = {
+                'success': False,
+                'message': save_result.error or save_result.message or 'Failed to save configuration.'
+            }
             flash(result['message'], 'error')
+            logger.warning(f"Failed to save configuration via ConfigurationSaveService: {result['message']}")
 
-    except Exception as e:
-        logger.error(f"Unexpected error saving configuration via API (blueprint): {str(e)}", exc_info=True)
-        result['message'] = "An error occurred while saving the configuration. Please check the logs for details."
-        flash("Error saving configuration. Please check the logs for details.", 'danger')
-    
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (configuration save service unavailable)
+        logger.error(f"Service dependency error in save_config_api: {str(e)}", exc_info=True)
+        result = {
+            'success': False,
+            'message': "Service error: Unable to access configuration services."
+        }
+        flash("Service error: Unable to save configuration.", 'danger')
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (request data parsing, validation)
+        logger.error(f"Data error in save_config_api: {str(e)}", exc_info=True)
+        result = {
+            'success': False,
+            'message': "Data error: Invalid configuration data provided."
+        }
+        flash("Data error: Invalid configuration data.", 'danger')
+
     # Check if it's an AJAX request (has the X-Requested-With header)
     is_ajax_request = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-    
+
     if is_ajax_request:
         # Return JSON for AJAX requests
         return jsonify(result)
@@ -702,9 +227,7 @@ def save_config_api():
 # Use direct auth decorator
 @auth.login_required
 def discord_bot_setup():
-    # Use cached config for consistency
-    from utils.config_cache import get_cached_config
-    config = get_cached_config()
+    config = load_config()
     return render_template('discord_bot_setup.html', config=config)
 
 @main_bp.route('/download_monitor_script', methods=['POST'])
@@ -716,255 +239,1483 @@ def download_monitor_script():
     Supports Python, Bash, and Windows Batch formats.
     """
     logger = current_app.logger
-    
+
     try:
         # Get form data from request
         form_data = request.form.to_dict()
-        
-        # Extract monitoring configuration
-        monitor_bot_token = form_data.get('monitor_bot_token', '')
-        ddc_bot_user_id = form_data.get('ddc_bot_user_id', '')
-        heartbeat_channel_id = form_data.get('heartbeat_channel_id', '')
-        alert_channel_ids = form_data.get('alert_channel_ids', '')
-        alert_webhook_url = form_data.get('alert_webhook_url', '')
-        monitor_timeout_seconds = form_data.get('monitor_timeout_seconds', '271')  # Default: ~4.5 minutes
         script_type = form_data.get('script_type', 'python')
-        
-        # Validate basic fields (common to all scripts)
-        if not heartbeat_channel_id or not ddc_bot_user_id:
-            logger.warning("Missing required fields for monitor script generation")
-            flash("Heartbeat Channel ID and DDC Bot User ID are required.", "warning")
+
+        # Basic validation
+        if not form_data.get('heartbeat_channel_id'):
+            logger.warning("Missing required field: heartbeat_channel_id")
+            flash("Heartbeat Channel ID is required.", "warning")
             return redirect(url_for('.config_page'))
-        
-        # Validate script-specific fields
-        if script_type == 'python' and not monitor_bot_token:
-            logger.warning("Missing bot token for Python script")
-            flash("Bot Token is required for the Python script.", "warning")
+
+        # Script-specific validation
+        if script_type == 'python' and not form_data.get('monitor_bot_token'):
+            logger.warning("Missing bot token for Python REST monitor script")
+            flash("Bot Token is required for the Python REST monitor script.", "warning")
             return redirect(url_for('.config_page'))
-        elif (script_type in ['bash', 'batch']) and not alert_webhook_url:
-            logger.warning("Missing webhook URL for shell scripts")
-            flash("Webhook URL is required for Shell scripts.", "warning")
-            return redirect(url_for('.config_page'))
-        
-        # Generate the appropriate script content
-        if script_type == 'python':
-            script_content = generate_python_monitor_script(form_data)
-            file_extension = 'py'
-            mime_type = 'text/x-python'
-        elif script_type == 'bash':
-            script_content = generate_bash_monitor_script(form_data)
-            file_extension = 'sh'
-            mime_type = 'text/x-shellscript'
-        elif script_type == 'batch':
-            script_content = generate_batch_monitor_script(form_data)
-            file_extension = 'bat'
-            mime_type = 'application/x-msdos-program'
-        else:
+        elif script_type in ['bash', 'batch']:
+            if not form_data.get('alert_webhook_url'):
+                logger.warning("Missing webhook URL for shell scripts")
+                flash("Webhook URL is required for Shell scripts.", "warning")
+                return redirect(url_for('.config_page'))
+            if not form_data.get('monitor_bot_token'):
+                logger.warning("Missing bot token for shell scripts")
+                flash("Bot Token is required for Shell scripts to resolve the bot user ID.", "warning")
+                return redirect(url_for('.config_page'))
+
+        # Use MonitorScriptService to generate script
+        from services.web.monitor_script_service import get_monitor_script_service, MonitorScriptRequest, ScriptType
+
+        # Map string to enum
+        script_type_enum = {
+            'python': ScriptType.PYTHON,
+            'bash': ScriptType.BASH,
+            'batch': ScriptType.BATCH
+        }.get(script_type)
+
+        if not script_type_enum:
             flash(f"Unknown script type: {script_type}", "danger")
             return redirect(url_for('.config_page'))
-        
-        # Create a buffer with the script content
-        buffer = io.BytesIO(script_content.encode('utf-8'))
-        buffer.seek(0)
-        
-        # Log action
-        script_names = {
-            'python': 'Python',
-            'bash': 'Bash',
-            'batch': 'Windows Batch'
+
+        # Create request object
+        script_request = MonitorScriptRequest(
+            script_type=script_type_enum,
+            monitor_bot_token=form_data.get('monitor_bot_token', ''),
+            alert_webhook_url=form_data.get('alert_webhook_url', ''),
+            ddc_bot_user_id=form_data.get('ddc_bot_user_id', ''),
+            heartbeat_channel_id=form_data.get('heartbeat_channel_id', ''),
+            monitor_timeout_seconds=form_data.get('monitor_timeout_seconds', '271'),
+            alert_channel_ids=form_data.get('alert_channel_ids', '')
+        )
+
+        # Generate script using service
+        script_service = get_monitor_script_service()
+        result = script_service.generate_script(script_request)
+
+        if not result.success:
+            flash(f"Error generating script: {result.error}", "danger")
+            return redirect(url_for('.config_page'))
+
+        # Determine file properties
+        file_properties = {
+            'python': {'extension': 'py', 'mime_type': 'text/x-python'},
+            'bash': {'extension': 'sh', 'mime_type': 'text/x-shellscript'},
+            'batch': {'extension': 'bat', 'mime_type': 'application/x-msdos-program'}
         }
+        props = file_properties[script_type]
+
+        # Create buffer and prepare download
+        buffer = io.BytesIO(result.script_content.encode('utf-8'))
+        buffer.seek(0)
+
+        # Log action
+        script_names = {'python': 'Python', 'bash': 'Bash', 'batch': 'Windows Batch'}
         log_user_action(
-            action="DOWNLOAD", 
-            target=f"Heartbeat monitor script ({script_names.get(script_type, script_type)})", 
+            action="DOWNLOAD",
+            target=f"Heartbeat monitor script ({script_names.get(script_type, script_type)})",
             source="Web UI"
         )
         logger.info(f"Generated and downloaded heartbeat monitor script ({script_type})")
-        
+
         return send_file(
-            buffer, 
-            as_attachment=True, 
-            download_name=f'ddc_heartbeat_monitor.{file_extension}', 
-            mimetype=mime_type
+            buffer,
+            as_attachment=True,
+            download_name=f'ddc_heartbeat_monitor.{props["extension"]}',
+            mimetype=props['mime_type']
         )
-    except Exception as e:
-        logger.error(f"Error generating monitor script: {e}", exc_info=True)
-        flash("Error generating monitor script. Please check the logs for details.", "danger")
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (monitor script service unavailable)
+        logger.error(f"Service dependency error generating monitor script: {e}", exc_info=True)
+        flash("Service error: Unable to generate monitor script.", "danger")
+        return redirect(url_for('.config_page'))
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (script type validation, template rendering)
+        logger.error(f"Data error generating monitor script: {e}", exc_info=True)
+        flash("Data error: Invalid script configuration.", "danger")
         return redirect(url_for('.config_page'))
 
 @main_bp.route('/refresh_containers', methods=['POST'])
-# Use direct auth decorator
 @auth.login_required
 def refresh_containers():
-    """Endpoint to force refresh of Docker container list"""
-    logger = current_app.logger
-    
+    """Endpoint to force refresh of Docker container list - USING CONTAINER REFRESH SERVICE."""
     try:
-        # Get Docker containers with force_refresh=True
-        from app.utils.web_helpers import get_docker_containers_live, docker_cache
-        
-        logger.info("Manual refresh of Docker container list requested")
-        containers, error = get_docker_containers_live(logger, force_refresh=True)
-        
-        if error:
-            logger.warning(f"Error during manual container refresh: {error}")
+        # Use new ContainerRefreshService for all business logic
+        from services.web.container_refresh_service import get_container_refresh_service, ContainerRefreshRequest
+
+        service = get_container_refresh_service()
+        request_obj = ContainerRefreshRequest()
+
+        # Perform refresh through service
+        result = service.refresh_containers(request_obj)
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                'container_count': result.container_count,
+                'timestamp': result.timestamp,
+                'formatted_time': result.formatted_time
+            })
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Container refresh failed: {result.error}", exc_info=True)
             return jsonify({
                 'success': False,
-                'message': "Error refreshing containers. Please check the logs for details."
+                'message': "Container refresh failed"
             })
-        
-        # Log the success
-        log_user_action("REFRESH", "Docker Container List", source="Web UI")
-        
-        # Get the timestamp for the response
-        timestamp = docker_cache.get('global_timestamp', time.time())
-        
-        # Format timestamp with configured timezone
-        from utils.config_cache import get_cached_config
-        config = get_cached_config()
-        timezone_str = config.get('timezone', 'Europe/Berlin')
-        
-        try:
-            tz = pytz.timezone(timezone_str)
-            dt = datetime.fromtimestamp(timestamp, tz=tz)
-            formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S %Z')
-        except Exception as e:
-            logger.error(f"Error formatting timestamp with timezone: {e}")
-            # Fallback to system timezone
-            formatted_time = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
-        
-        return jsonify({
-            'success': True,
-            'container_count': len(containers),
-            'timestamp': timestamp,
-            'formatted_time': formatted_time
-        })
-        
-    except Exception as e:
-        logger.error(f"Unexpected error refreshing containers: {e}", exc_info=True)
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (container refresh service unavailable)
+        current_app.logger.error(f"Service dependency error in refresh_containers route: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': "Unexpected error refreshing containers. Please check the logs for details."
+            'message': "Service error: Unable to access container refresh service."
+        })
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (result processing, timestamp formatting)
+        current_app.logger.error(f"Data error in refresh_containers route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': "Data error: Failed to process container data."
         })
 
 @main_bp.route('/enable_temp_debug', methods=['POST'])
 @auth.login_required
 def enable_temp_debug():
-    """
-    API endpoint to enable temporary debug mode.
-    This will enable debug logging for a specified duration without modifying the config file.
-    """
-    logger = current_app.logger
-    
+    """Enable temporary debug mode using DiagnosticsService."""
     try:
-        # Get duration from request, default to 10 minutes
+        # Get duration from request
         duration_minutes = request.form.get('duration', 10)
-        try:
-            duration_minutes = int(duration_minutes)
-        except (ValueError, TypeError):
-            duration_minutes = 10
-            
-        # Enforce reasonable limits
-        if duration_minutes < 1:
-            duration_minutes = 1
-        elif duration_minutes > 60:
-            duration_minutes = 60
-        
-        # Enable temporary debug mode
-        from utils.logging_utils import enable_temporary_debug
-        success, expiry = enable_temporary_debug(duration_minutes)
-        
-        if success:
-            # Format expiry time for display
-            expiry_formatted = datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S')
-            logger.info(f"Temporary debug mode enabled for {duration_minutes} minutes (until {expiry_formatted})")
-            log_user_action("ENABLE", "Temporary Debug Mode", source="Web UI")
-            
+
+        # Use DiagnosticsService for business logic
+        from services.web.diagnostics_service import get_diagnostics_service, DebugModeRequest
+
+        service = get_diagnostics_service()
+        request_obj = DebugModeRequest(duration_minutes=duration_minutes)
+
+        # Enable debug mode through service
+        result = service.enable_temp_debug(request_obj)
+
+        if result.success:
             return jsonify({
                 'success': True,
-                'message': f"Temporary debug mode enabled for {duration_minutes} minutes",
-                'expiry': expiry,
-                'expiry_formatted': expiry_formatted,
-                'duration_minutes': duration_minutes
+                **result.data
             })
         else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Failed to enable temp debug: {result.error}", exc_info=True)
             return jsonify({
                 'success': False,
-                'message': "Failed to enable temporary debug mode"
-            })
-            
-    except Exception as e:
-        logger.error(f"Error enabling temporary debug mode: {e}", exc_info=True)
+                'message': "Failed to enable debug mode"
+            }), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (diagnostics service unavailable)
+        current_app.logger.error(f"Service dependency error in enable_temp_debug route: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': "Error enabling temporary debug mode. Please check the logs for details."
-        })
+            'message': "Service error: Unable to access diagnostics service."
+        }), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (duration parsing, request validation)
+        current_app.logger.error(f"Data error in enable_temp_debug route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': "Data error: Invalid debug mode configuration."
+        }), 400
 
 @main_bp.route('/disable_temp_debug', methods=['POST'])
 @auth.login_required
 def disable_temp_debug():
-    """
-    API endpoint to disable temporary debug mode immediately.
-    """
-    logger = current_app.logger
-    
+    """Disable temporary debug mode using DiagnosticsService."""
     try:
-        # Disable temporary debug mode
-        from utils.logging_utils import disable_temporary_debug
-        success = disable_temporary_debug()
-        
-        if success:
-            logger.info("Temporary debug mode disabled manually")
-            log_user_action("DISABLE", "Temporary Debug Mode", source="Web UI")
-            
+        # Use DiagnosticsService for business logic
+        from services.web.diagnostics_service import get_diagnostics_service, DebugModeRequest
+
+        service = get_diagnostics_service()
+        request_obj = DebugModeRequest()
+
+        # Disable debug mode through service
+        result = service.disable_temp_debug(request_obj)
+
+        if result.success:
             return jsonify({
                 'success': True,
-                'message': "Temporary debug mode disabled"
+                **result.data
             })
         else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Failed to disable temp debug: {result.error}", exc_info=True)
             return jsonify({
                 'success': False,
-                'message': "Failed to disable temporary debug mode"
-            })
-            
-    except Exception as e:
-        logger.error(f"Error disabling temporary debug mode: {e}", exc_info=True)
+                'message': "Failed to disable debug mode"
+            }), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (diagnostics service unavailable)
+        current_app.logger.error(f"Service dependency error in disable_temp_debug route: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': "Error disabling temporary debug mode. Please check the logs for details."
-        })
+            'message': "Service error: Unable to access diagnostics service."
+        }), 500
 
 @main_bp.route('/temp_debug_status', methods=['GET'])
 @auth.login_required
 def temp_debug_status():
+    """Get temporary debug status using DiagnosticsService."""
+    try:
+        # Use DiagnosticsService for business logic
+        from services.web.diagnostics_service import get_diagnostics_service, DebugStatusRequest
+
+        service = get_diagnostics_service()
+        request_obj = DebugStatusRequest()
+
+        # Get debug status through service
+        result = service.get_debug_status(request_obj)
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                **result.data
+            })
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Cache diagnostics failed: {result.error}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'message': "Failed to retrieve cache diagnostics"
+            }), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (diagnostics service unavailable)
+        current_app.logger.error(f"Service dependency error in temp_debug_status route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': "Service error: Unable to access diagnostics service.",
+            'is_enabled': False
+        }), 500
+
+@main_bp.route('/performance_stats', methods=['GET'])
+@auth.login_required
+def performance_stats():
     """
-    API endpoint to get the current status of temporary debug mode.
+    API endpoint to get current performance statistics for monitoring.
+    This endpoint provides insights into system performance without affecting configuration.
     """
     try:
-        # Get current status
-        from utils.logging_utils import get_temporary_debug_status
-        is_enabled, expiry, remaining_seconds = get_temporary_debug_status()
+        # Use PerformanceStatsService to handle business logic
+        from services.web.performance_stats_service import get_performance_stats_service
+
+        stats_service = get_performance_stats_service()
+        result = stats_service.get_performance_stats()
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                'performance_data': result.performance_data
+            })
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Performance statistics failed: {result.error}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'message': "Error getting performance statistics. Please check the logs for details."
+            })
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (performance stats service unavailable)
+        current_app.logger.error(f"Service dependency error in performance_stats endpoint: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': "Service error: Unable to access performance statistics service."
+        })
+
+@main_bp.route('/api/spam-protection', methods=['GET'])
+@auth.login_required
+def get_spam_protection():
+    """Get current spam protection settings."""
+    try:
+        spam_service = get_spam_protection_service()
+        result = spam_service.get_config()
+        settings = result.data.to_dict() if result.success else {}
+        return jsonify(settings)
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (spam protection service unavailable)
+        current_app.logger.error(f"Service dependency error getting spam protection settings: {e}", exc_info=True)
+        return jsonify({'error': 'Service error: Unable to access spam protection service'}), 500
+
+@main_bp.route('/api/spam-protection', methods=['POST'])
+@auth.login_required
+def save_spam_protection():
+    """Save spam protection settings."""
+    try:
+        settings = request.get_json()
+        if not settings:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
         
-        # Format expiry time
-        expiry_formatted = datetime.fromtimestamp(expiry).strftime('%Y-%m-%d %H:%M:%S') if expiry > 0 else ""
+        spam_service = get_spam_protection_service()
+        from services.infrastructure.spam_protection_service import SpamProtectionConfig
+        config = SpamProtectionConfig.from_dict(settings)
+        result = spam_service.save_config(config)
+        success = result.success
         
-        # Format remaining time
-        remaining_minutes = int(remaining_seconds / 60)
-        remaining_seconds_mod = int(remaining_seconds % 60)
-        remaining_formatted = f"{remaining_minutes}m {remaining_seconds_mod}s" if is_enabled else ""
+        if success:
+            # Log the action
+            log_user_action(
+                action="SAVE",
+                target="Spam Protection Settings",
+                source="Web UI",
+                details=f"Spam protection enabled: {settings.get('global_settings', {}).get('enabled', True)}"
+            )
+            return jsonify({'success': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save settings'}), 500
+            
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (spam protection service unavailable)
+        current_app.logger.error(f"Service dependency error saving spam protection settings: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to save spam protection settings'}), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (config validation, dict conversion)
+        current_app.logger.error(f"Data error saving spam protection settings: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Data error: Invalid spam protection configuration'}), 400
+
+@main_bp.route('/api/donation/status', methods=['GET'])
+def get_donation_status():
+    """Get current donation status with speed information - USING DONATION STATUS SERVICE."""
+    try:
+        # Use new DonationStatusService for all business logic
+        from services.web.donation_status_service import get_donation_status_service, DonationStatusRequest
+
+        service = get_donation_status_service()
+        request_obj = DonationStatusRequest()
+
+        # Get status through service
+        result = service.get_donation_status(request_obj)
+
+        if result.success:
+            return jsonify(result.status_data)
+        else:
+            # Log detailed error but return generic message to user
+            current_app.logger.error(f"Failed to get donation status: {result.error}")
+            return jsonify({'error': 'Failed to get donation status'}), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (donation status service unavailable)
+        current_app.logger.error(f"Service dependency error in get_donation_status route: {e}", exc_info=True)
+        return jsonify({'error': 'Service error: Unable to access donation status service'}), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (status data formatting)
+        current_app.logger.error(f"Data error in get_donation_status route: {e}", exc_info=True)
+        return jsonify({'error': 'Data error: Failed to process donation status'}), 500
+
+@main_bp.route('/api/donation/click', methods=['POST'])
+def record_donation_click():
+    """Record a donation button click - USING DONATION TRACKING SERVICE."""
+    try:
+        data = request.get_json()
+        if not data or 'type' not in data:
+            return jsonify({'success': False, 'error': 'Missing donation type'}), 400
+
+        # Use new DonationTrackingService for all business logic
+        from services.web.donation_tracking_service import get_donation_tracking_service, DonationClickRequest
+
+        service = get_donation_tracking_service()
+        request_obj = DonationClickRequest(
+            donation_type=data.get('type'),
+            request_object=request
+        )
+
+        # Track donation click through service
+        result = service.record_donation_click(request_obj)
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                'timestamp': result.timestamp,
+                'message': result.message
+            })
+        else:
+            # Log detailed error but return generic message to user
+            current_app.logger.error(f"Failed to record donation click: {result.error}")
+            return jsonify({
+                'success': False,
+                'error': 'Failed to record donation click'
+            }), 400
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (donation tracking service unavailable)
+        current_app.logger.error(f"Service dependency error in record_donation_click route: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to record donation click'}), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (request parsing, validation)
+        current_app.logger.error(f"Data error in record_donation_click route: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Data error: Invalid click data'}), 400
+
+
+@main_bp.route('/api/donation/add-power', methods=['POST'])
+@auth.login_required
+def add_test_power():
+    """Add or remove Power for testing (requires auth) - USING NEW MECH SERVICE."""
+    try:
+        data = request.get_json()
+        amount = data.get('amount', 0)
+        donation_type = data.get('type', 'test')
+        user = data.get('user', 'Test')
+
+        # Validate amount is numeric
+        try:
+            amount = int(amount) if not isinstance(amount, int) else amount
+        except (ValueError, TypeError):
+            return jsonify({'error': f'Invalid amount: {amount} - must be numeric'}), 400
+
+        # UNIFIED DONATION SERVICE: Centralized processing with guaranteed events
+        from services.donation.unified_donation_service import process_test_donation
+
+        if amount != 0:
+            # Add donation (positive only - negative testing requires special handling)
+            if amount > 0:
+                # Use unified service for positive donations with automatic events
+                donation_result = process_test_donation(user, amount)
+
+                if not donation_result.success:
+                    raise Exception(f"Test donation failed: {donation_result.error_message}")
+
+                result_state = donation_result.new_state
+                current_app.logger.info(f"UNIFIED SERVICE: Added ${amount} Power, new total: ${result_state.Power}")
+            else:
+                # For negative amounts, we need to work around the limitation
+                # MechService only accepts positive integers, so we add a negative donation
+                # by manipulating the state directly (testing only!)
+                # PERFORMANCE OPTIMIZATION: Use cached mech state
+                current_state = _get_cached_mech_state(include_decimals=False)
+                if not current_state:
+                    current_app.logger.error("Failed to get mech state for negative donation")
+                    return jsonify({'error': 'Failed to get mech state'}), 500
+
+                # Calculate new power (ensure it doesn't go below 0)
+                new_power = max(0, current_state.Power + amount)
+                
+                # Since we can't directly set power, we add a donation that results in the desired power
+                # This is a workaround for testing purposes
+                if new_power < current_state.Power:
+                    # We want to reduce power, but can't do it directly
+                    # Return the current state with a message
+                    current_app.logger.info(f"NEW SERVICE: Power reduction not directly supported, current: ${current_state.Power}")
+                    return jsonify({
+                        'success': True,
+                        'Power': current_state.Power,
+                        'level': current_state.level,
+                        'level_name': current_state.level_name,
+                        'total_donated': current_state.total_donated,
+                        'message': f'Power reduction not supported (would be ${new_power})'
+                    })
+                    
+                result_state = current_state
+                current_app.logger.info(f"NEW SERVICE: Attempted to reduce Power by ${abs(amount)}, but not supported")
+                
+            return jsonify({
+                'success': True, 
+                'Power': result_state.Power,
+                'level': result_state.level,
+                'level_name': result_state.level_name,
+                'total_donated': result_state.total_donated
+            })
+        else:
+            return jsonify({'success': False, 'error': 'Amount must be non-zero'}), 400
+            
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (unified donation service unavailable)
+        current_app.logger.error(f"Service dependency error adding test Power: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to process test donation'}), 500
+    except (ValueError, TypeError) as e:
+        # Data processing errors (amount validation, state calculations)
+        current_app.logger.error(f"Data error adding test Power: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Data error: Invalid donation amount'}), 400
+
+@main_bp.route('/api/donation/reset-power', methods=['POST'])
+@auth.login_required  
+def reset_power():
+    """Reset Power to 0 for testing (requires auth) - USING NEW MECH SERVICE."""
+    try:
+        # UNIFIED DONATION SERVICE: Reset with automatic event emission
+        from services.donation.unified_donation_service import reset_all_donations
+
+        reset_result = reset_all_donations(source='admin_reset')
+
+        if not reset_result.success:
+            # Log detailed error but return generic message to user
+            current_app.logger.error(f"Failed to reset donations: {reset_result.error_message}")
+            return jsonify({'success': False, 'error': 'Failed to reset donations'})
+        
+        # Get new state (should be Level 1, 0 Power) using CACHE FOR PERFORMANCE
+        # PERFORMANCE OPTIMIZATION: Use cached mech state (will be fresh since we just reset)
+        reset_state = _get_cached_mech_state(include_decimals=False)
+        if not reset_state:
+            current_app.logger.error("Failed to get reset state")
+            return jsonify({'success': False, 'error': 'Failed to get reset state'})
+        
+        current_app.logger.info(f"NEW SERVICE: Power reset - Level {reset_state.level}, Power ${reset_state.Power}")
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Power reset to 0 using new MechService',
+            'level': reset_state.level,
+            'level_name': reset_state.level_name,
+            'Power': reset_state.Power,
+            'total_donated': reset_state.total_donated
+        })
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (unified donation service unavailable)
+        current_app.logger.error(f"Service dependency error resetting Power: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to reset donations'}), 500
+
+@main_bp.route('/api/donation/consume-power', methods=['POST'])
+@auth.login_required
+def consume_Power():
+    """Get current Power state - USES CACHE FOR PERFORMANCE."""
+    try:
+        # PERFORMANCE OPTIMIZATION: Use cached mech state
+        current_state = _get_cached_mech_state(include_decimals=False)
+        if not current_state:
+            return jsonify({'success': False, 'error': 'Failed to get current state'})
+        
+        # Removed frequent Power consumption log to reduce noise in DEBUG mode
+        # current_app.logger.debug(f"NEW SERVICE: Power consumption check - current Power: ${current_state.Power}")
+        
+        return jsonify({
+            'success': True, 
+            'new_Power': max(0, current_state.Power),
+            'level': current_state.level,
+            'level_name': current_state.level_name,
+            'message': 'Power decay calculated automatically by new service'
+        })
+        
+    except (RuntimeError, AttributeError) as e:
+        # Service/cache errors (mech state retrieval failures)
+        current_app.logger.error(f"Service error consuming Power: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to get Power state'}), 500
+
+
+@main_bp.route('/api/donation/submit', methods=['POST'])
+@auth.login_required
+def submit_donation():
+    """Submit a manual donation entry from the web UI modal."""
+    try:
+        # Parse request data
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        # Use DonationService to handle business logic
+        from services.web.donation_service import get_donation_service, DonationRequest
+
+        donation_service = get_donation_service()
+        donation_request = DonationRequest(
+            amount=data.get('amount', 0),
+            donor_name=data.get('donor_name', 'Anonymous'),
+            publish_to_discord=data.get('publish_to_discord', True),
+            source=data.get('source', 'web_ui_manual')
+        )
+
+        # Process donation through service
+        result = donation_service.process_donation(donation_request)
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                'message': result.message,
+                'donation_info': result.donation_info
+            })
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Donation processing failed: {result.error}", exc_info=True)
+            return jsonify({'success': False, 'error': 'Failed to process donation'}), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (donation service unavailable)
+        current_app.logger.error(f"Service dependency error processing manual donation: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to process donation'}), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (amount validation, request parsing)
+        current_app.logger.error(f"Data error processing manual donation: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Data error: Invalid donation data'}), 400
+
+@main_bp.route('/mech_animation')
+def mech_animation():
+    """Live mech animation endpoint using MechWebService."""
+    try:
+        # Use MechWebService for business logic
+        from services.web.mech_web_service import get_mech_web_service, MechAnimationRequest
+
+        service = get_mech_web_service()
+        request_obj = MechAnimationRequest()
+
+        # Get animation through service
+        result = service.get_live_animation(request_obj)
+
+        if result.success and result.animation_bytes:
+            return Response(
+                result.animation_bytes,
+                mimetype=result.content_type,
+                headers=result.cache_headers or {}
+            )
+        else:
+            # Return error response based on result
+            return Response(
+                result.animation_bytes or b'Animation generation failed',
+                mimetype=result.content_type,
+                status=result.status_code
+            )
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech web service unavailable)
+        current_app.logger.error(f"Service dependency error in mech_animation route: {e}", exc_info=True)
+        return jsonify({'error': 'Service error: Unable to generate animation'}), 500
+    except (ValueError, TypeError) as e:
+        # Data processing errors (animation generation, response formatting)
+        current_app.logger.error(f"Data error in mech_animation route: {e}", exc_info=True)
+        return jsonify({'error': 'Data error: Animation generation failed'}), 500
+
+@main_bp.route('/api/test-mech-animation', methods=['POST'])
+@auth.login_required
+def test_mech_animation():
+    """Test endpoint for generating mech animations using MechWebService."""
+    try:
+        data = request.get_json()
+        donor_name = data.get('donor_name', 'Test User')
+        amount = data.get('amount', '10$')
+        total_donations = data.get('total_donations', 0)
+
+        current_app.logger.info(f"Generating test mech animation for {donor_name}, donations: {total_donations}")
+
+        # Use MechWebService for business logic
+        from services.web.mech_web_service import get_mech_web_service, MechTestAnimationRequest
+
+        service = get_mech_web_service()
+        request_obj = MechTestAnimationRequest(
+            donor_name=donor_name,
+            amount=amount,
+            total_donations=total_donations
+        )
+
+        # Get test animation through service
+        result = service.get_test_animation(request_obj)
+
+        if result.success and result.animation_bytes:
+            return Response(
+                result.animation_bytes,
+                mimetype=result.content_type,
+                headers={'Cache-Control': 'max-age=60'}
+            )
+        else:
+            # Return error response based on result
+            return Response(
+                result.animation_bytes or b'Error: Service not available',
+                mimetype=result.content_type,
+                status=result.status_code
+            )
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech web service unavailable)
+        current_app.logger.error(f"Service dependency error in test_mech_animation route: {e}", exc_info=True)
+        return jsonify({'error': 'Service error: Unable to generate test animation'}), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (request parsing, animation generation)
+        current_app.logger.error(f"Data error in test_mech_animation route: {e}", exc_info=True)
+        return jsonify({'error': 'Data error: Invalid test animation parameters'}), 400
+
+@main_bp.route('/api/simulate-donation-broadcast', methods=['POST'])
+@auth.login_required
+def simulate_donation_broadcast():
+    """Simulate a donation broadcast for testing purposes."""
+    try:
+        current_app.logger.info("Simulating donation broadcast...")
+        return jsonify({
+            'success': True,
+            'message': 'Donation broadcast simulation not yet implemented'
+        })
+    except RuntimeError as e:
+        # Runtime errors (simulation failures)
+        current_app.logger.error(f"Runtime error simulating donation broadcast: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Runtime error in simulation'}), 500
+
+@main_bp.route('/api/mech-speed-config', methods=['POST'])
+@auth.login_required
+def get_mech_speed_config():
+    """Get speed configuration using MechWebService."""
+    try:
+        data = request.get_json()
+        total_donations = data.get('total_donations', 0)
+
+        # Use MechWebService for business logic
+        from services.web.mech_web_service import get_mech_web_service, MechSpeedConfigRequest
+
+        service = get_mech_web_service()
+        request_obj = MechSpeedConfigRequest(total_donations=total_donations)
+
+        # Get speed config through service
+        result = service.get_speed_config(request_obj)
+
+        if result.success:
+            return jsonify(result.data)
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Speed config request failed: {result.error}", exc_info=True)
+            return jsonify({'error': 'Failed to get speed configuration'}), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech web service unavailable)
+        current_app.logger.error(f"Service dependency error in get_mech_speed_config route: {e}", exc_info=True)
+        return jsonify({'error': 'Service error: Unable to get speed config'}), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (donation amount parsing, config formatting)
+        current_app.logger.error(f"Data error in get_mech_speed_config route: {e}", exc_info=True)
+        return jsonify({'error': 'Data error: Invalid speed configuration'}), 400
+
+@main_bp.route('/port_diagnostics', methods=['GET'])
+@auth.login_required
+def port_diagnostics():
+    """Get port diagnostics using DiagnosticsService."""
+    try:
+        # Use DiagnosticsService for business logic
+        from services.web.diagnostics_service import get_diagnostics_service, PortDiagnosticsRequest
+
+        service = get_diagnostics_service()
+        request_obj = PortDiagnosticsRequest()
+
+        # Run diagnostics through service
+        result = service.run_port_diagnostics(request_obj)
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                **result.data
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': result.error
+            }), result.status_code
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (diagnostics service unavailable)
+        current_app.logger.error(f"Service dependency error in port_diagnostics route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': "Service error: Unable to run port diagnostics."
+        }), 500
+
+@main_bp.route('/api/mech/difficulty', methods=['GET'])
+@auth.login_required
+def get_mech_difficulty():
+    """Get current mech evolution difficulty multiplier using MechWebService."""
+    try:
+        # Use MechWebService for business logic
+        from services.web.mech_web_service import get_mech_web_service, MechDifficultyRequest
+
+        service = get_mech_web_service()
+        request_obj = MechDifficultyRequest(operation='get')
+
+        # Get difficulty through service
+        result = service.manage_difficulty(request_obj)
+
+        if result.success:
+            return jsonify(result.data)
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Difficulty get request failed: {result.error}", exc_info=True)
+            return jsonify({'success': False, 'error': 'Failed to get difficulty settings'}), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech web service unavailable)
+        current_app.logger.error(f"Service dependency error in get_mech_difficulty route: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to get difficulty'}), 500
+
+@main_bp.route('/api/mech/difficulty', methods=['POST'])
+@auth.login_required
+def set_mech_difficulty():
+    """Set mech evolution difficulty multiplier using MechWebService."""
+    try:
+        data = request.get_json()
+
+        if not data or 'difficulty_multiplier' not in data:
+            return jsonify({'success': False, 'error': 'Missing difficulty_multiplier parameter'}), 400
+
+        difficulty_multiplier = float(data['difficulty_multiplier'])
+        manual_override = data.get('manual_override', False)
+
+        # Use MechWebService for business logic
+        from services.web.mech_web_service import get_mech_web_service, MechDifficultyRequest
+
+        service = get_mech_web_service()
+
+        if manual_override:
+            # Manual override = static mode with custom difficulty
+            request_obj = MechDifficultyRequest(
+                operation='set',
+                multiplier=difficulty_multiplier
+            )
+        else:
+            # No manual override = reset to dynamic mode
+            request_obj = MechDifficultyRequest(operation='reset')
+
+        # Set difficulty through service
+        result = service.manage_difficulty(request_obj)
+
+        if result.success:
+            return jsonify(result.data)
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Difficulty set request failed: {result.error}", exc_info=True)
+            return jsonify({'success': False, 'error': 'Failed to set difficulty'}), 500
+
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Invalid difficulty multiplier value'}), 400
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech web service unavailable)
+        current_app.logger.error(f"Service dependency error in set_mech_difficulty route: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to set difficulty'}), 500
+
+@main_bp.route('/api/mech/difficulty/reset', methods=['POST'])
+@auth.login_required
+def reset_mech_difficulty():
+    """Reset mech evolution difficulty to automatic mode using MechWebService."""
+    try:
+        # Use MechWebService for business logic
+        from services.web.mech_web_service import get_mech_web_service, MechDifficultyRequest
+
+        service = get_mech_web_service()
+        request_obj = MechDifficultyRequest(operation='reset')
+
+        # Reset difficulty through service
+        result = service.manage_difficulty(request_obj)
+
+        if result.success:
+            return jsonify(result.data)
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Difficulty reset request failed: {result.error}", exc_info=True)
+            return jsonify({'success': False, 'error': 'Failed to reset difficulty'}), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech web service unavailable)
+        current_app.logger.error(f"Service dependency error in reset_mech_difficulty route: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': 'Service error: Unable to reset difficulty'}), 500
+
+@main_bp.route('/api/donations/list')
+@auth.login_required
+def donations_api():
+    """
+    API endpoint to get donation data for the modal.
+    """
+    try:
+        from services.donation.donation_management_service import get_donation_management_service
+        donation_service = get_donation_management_service()
+        
+        # Get donation history and stats using service
+        result = donation_service.get_donation_history(limit=100)
+        
+        if not result.success:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Failed to load donations: {result.error}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': 'Failed to load donations'
+            })
+        
+        donations = result.data['donations']
+        stats = result.data['stats']
         
         return jsonify({
             'success': True,
-            'is_enabled': is_enabled,
-            'expiry': expiry,
-            'expiry_formatted': expiry_formatted,
-            'remaining_seconds': remaining_seconds,
-            'remaining_formatted': remaining_formatted
+            'donations': donations,
+            'stats': {
+                'total_power': stats.total_power,
+                'total_donations': stats.total_donations,
+                'average_donation': stats.average_donation
+            }
         })
-            
-    except Exception as e:
-        current_app.logger.error(f"Error getting temporary debug status: {e}", exc_info=True)
+        
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (donation management service unavailable)
+        current_app.logger.error(f"Service dependency error loading donations API: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'message': "Error getting temporary debug status. Please check the logs for details.",
-            'is_enabled': False
+            'error': 'Service error: Unable to load donations'
         })
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (stats formatting, data access)
+        current_app.logger.error(f"Data error loading donations API: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Data error: Failed to process donation data'
+        })
+
+@main_bp.route('/api/donations/delete/<int:index>', methods=['POST'])
+@auth.login_required
+def delete_donation(index):
+    """
+    Delete a donation OR restore a deleted donation using Event Sourcing compensation events.
+
+    This is EVENT SOURCING COMPLIANT:
+    - For DonationAdded: Adds a DonationDeleted event (marks donation as deleted)
+    - For DonationDeleted: Adds another DonationDeleted event (restores original donation!)
+    - Rebuilds the snapshot from scratch, applying all active events
+    - All level-ups and costs are recalculated correctly
+    - Member counts are frozen at the correct historical moments
+    """
+    try:
+        from services.donation.donation_management_service import get_donation_management_service
+
+        service = get_donation_management_service()
+        result = service.delete_donation(index)
+
+        if result.success:
+            action = result.data.get('action', 'Deleted')
+            event_type = result.data.get('type', 'Unknown')
+            seq = result.data.get('deleted_seq', 'Unknown')
+
+            current_app.logger.info(f"{action} event at index {index} (seq {seq}, type {event_type})")
+
+            message = f"Event {action.lower()} successfully (seq #{seq})"
+            return jsonify({
+                'success': True,
+                'message': message
+            })
+        else:
+            # Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Failed to delete/restore event: {result.error}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': 'Failed to delete/restore event'
+            }), 400
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (donation management service unavailable)
+        current_app.logger.error(f"Service dependency error in delete/restore donation route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': "Service error: Unable to process donation deletion/restoration"
+        }), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (index validation, result parsing)
+        current_app.logger.error(f"Data error in delete/restore donation route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': "Data error: Invalid deletion request"
+        }), 400
+
+# ========================================
+# FIRST-TIME SETUP ROUTES
+# ========================================
+
+@main_bp.route('/setup', methods=['GET'])
+def setup_page():
+    """First-time setup page - only works if no password is configured."""
+    config = load_config()
+    
+    # Only allow setup if no password hash exists
+    if config.get('web_ui_password_hash') is not None:
+        flash('Setup is only available for first-time installation. System is already configured.', 'error')
+        return redirect(url_for('main_bp.config_page'))
+    
+    return render_template('setup.html')
+
+@main_bp.route('/setup', methods=['POST'])
+def setup_save():
+    """Save the initial setup configuration."""
+    config = load_config()
+    
+    # Security check: only allow if no password is set
+    if config.get('web_ui_password_hash') is not None:
+        return jsonify({
+            'success': False,
+            'error': 'Setup is not allowed when password is already configured'
+        })
+    
+    try:
+        from werkzeug.security import generate_password_hash
+        
+        # Get form data
+        password = request.form.get('password')
+        confirm_password = request.form.get('confirm_password')
+        
+        # Validation
+        if not password or not confirm_password:
+            return jsonify({
+                'success': False,
+                'error': 'Both password fields are required'
+            })
+        
+        if password != confirm_password:
+            return jsonify({
+                'success': False,
+                'error': 'Passwords do not match'
+            })
+        
+        if len(password) < 6:
+            return jsonify({
+                'success': False,
+                'error': 'Password must be at least 6 characters long'
+            })
+        
+        # Create secure password hash
+        password_hash = generate_password_hash(password, method="pbkdf2:sha256:600000")
+        
+        # Update config
+        config['web_ui_password_hash'] = password_hash
+        config['web_ui_user'] = 'admin'
+        
+        # Save config
+        success = save_config(config)
+        
+        if success:
+            # Log the setup completion
+            current_app.logger.info("First-time setup completed successfully")
+            log_user_action("admin", "setup", "First-time password setup completed")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Setup completed! You can now login with username "admin" and your password.'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to save configuration'
+            })
+            
+    except (ImportError, AttributeError) as e:
+        # Dependency errors (werkzeug unavailable)
+        current_app.logger.error(f"Dependency error in setup: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Setup failed: Missing required dependencies'
+        })
+    except (ValueError, TypeError) as e:
+        # Data processing errors (password validation, hash generation)
+        current_app.logger.error(f"Data error in setup: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Setup failed: Invalid configuration data'
+        })
+    except (IOError, OSError) as e:
+        # File I/O errors (config save failure)
+        current_app.logger.error(f"File I/O error in setup: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Setup failed: Unable to save configuration'
+        })
+
+# ========================================
+# MECH MUSIC API ROUTES (for Discord integration)
+# ========================================
+
+@main_bp.route('/api/mech/music/<int:level>')
+def get_mech_music_url(level):
+    """Get YouTube URL for mech music at a specific level using MechMusicService."""
+    try:
+        # Use MechMusicService for business logic
+        from services.web.mech_music_service import get_mech_music_service, MechMusicRequest
+
+        service = get_mech_music_service()
+        request_obj = MechMusicRequest(level=level)
+
+        # Get YouTube music URL through service
+        result = service.get_mech_music_url(request_obj)
+
+        if result.success:
+            current_app.logger.info(f"Providing YouTube URL for mech music level {level}: {result.title}")
+            return jsonify({
+                'success': True,
+                'level': level,
+                'title': result.title,
+                'url': result.url,
+                'platform': 'YouTube',
+                'monetized': True  # Support creator revenue! 💰
+            })
+        else:
+            current_app.logger.warning(f"YouTube URL not found for mech level {level}: {result.error}")
+            return jsonify({
+                'success': False,
+                'error': result.error or f'YouTube URL not found for Mech Level {level}'
+            }), result.status_code
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech music service unavailable)
+        current_app.logger.error(f"Service dependency error in get_mech_music_url route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Service error: Unable to get YouTube music URL'
+        }), 500
+    except (ValueError, TypeError) as e:
+        # Data processing errors (level validation, URL formatting)
+        current_app.logger.error(f"Data error in get_mech_music_url route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Data error: Invalid music level'
+        }), 400
+
+@main_bp.route('/api/mech/music/info')
+def get_mech_music_info():
+    """Get information about all available mech music tracks using MechMusicService."""
+    try:
+        # Use MechMusicService for business logic
+        from services.web.mech_music_service import get_mech_music_service, MechMusicInfoRequest
+
+        service = get_mech_music_service()
+        request_obj = MechMusicInfoRequest()
+
+        # Get all music info through service
+        result = service.get_all_music_info(request_obj)
+
+        if result.success:
+            return jsonify({
+                'success': True,
+                **result.data
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result.error
+            }), result.status_code
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech music service unavailable)
+        current_app.logger.error(f"Service dependency error in get_mech_music_info route: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Service error: Unable to get mech music information'
+        }), 500
+
+
+@main_bp.route('/api/mech/display/<int:level>/<string:image_type>')
+def get_mech_display_image(level: int, image_type: str):
+    """
+    Serve pre-rendered mech display images for instant Discord loading.
+
+    URL: /api/mech/display/{level}/{type}
+    Example: /api/mech/display/5/shadow
+             /api/mech/display/8/unlocked
+    """
+    try:
+        # Validate parameters
+        if level < 1 or level > 11:
+            return jsonify({'error': 'Invalid level. Must be 1-11.'}), 400
+
+        if image_type not in ['shadow', 'unlocked']:
+            return jsonify({'error': 'Invalid image type. Must be "shadow" or "unlocked".'}), 400
+
+        # Get pre-rendered image through SERVICE FIRST
+        from services.mech.mech_display_cache_service import get_mech_display_cache_service, MechDisplayImageRequest
+
+        display_cache_service = get_mech_display_cache_service()
+        image_request = MechDisplayImageRequest(
+            evolution_level=level,
+            image_type=image_type
+        )
+        image_result = display_cache_service.get_mech_display_image(image_request)
+
+        if not image_result.success:
+            current_app.logger.error(f"Failed to get mech display image: {image_result.error_message}")
+            return jsonify({'error': 'Image not available'}), 404
+
+        # Create in-memory file object for serving
+        image_buffer = io.BytesIO(image_result.image_bytes)
+        image_buffer.seek(0)
+
+        # Determine content type and set caching headers
+        response = Response(
+            image_buffer.getvalue(),
+            mimetype='image/webp',
+            headers={
+                'Content-Type': 'image/webp',
+                'Cache-Control': 'public, max-age=86400',  # Cache for 24 hours
+                'ETag': f'mech-{level}-{image_type}',
+                'Content-Disposition': f'inline; filename="{image_result.filename}"'
+            }
+        )
+
+        current_app.logger.info(f"Served mech display image: Level {level} {image_type} ({len(image_result.image_bytes)} bytes)")
+        return response
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (display cache service unavailable)
+        current_app.logger.error(f"Service dependency error serving mech display image: {e}", exc_info=True)
+        return jsonify({'error': 'Service error: Unable to serve display image'}), 500
+    except (ValueError, TypeError, IOError, OSError) as e:
+        # Data/file errors (validation, image access)
+        current_app.logger.error(f"Data/file error serving mech display image: {e}", exc_info=True)
+        return jsonify({'error': 'Error: Invalid image request or file access failed'}), 400
+
+
+@main_bp.route('/api/mech/display/info')
+def get_mech_display_info():
+    """
+    Get information about available mech display images.
+
+    Returns: JSON with available levels and image types
+    """
+    try:
+        from services.mech.mech_display_cache_service import get_mech_display_cache_service
+
+        display_cache_service = get_mech_display_cache_service()
+
+        # Check available cache files
+        cache_files = list(display_cache_service.cache_dir.glob('mech_*_*.webp'))
+        available_images = {}
+
+        for cache_file in cache_files:
+            # Parse filename: mech_{level}_{type}.webp
+            parts = cache_file.stem.split('_')
+            if len(parts) >= 3:
+                try:
+                    level = int(parts[1])
+                    image_type = parts[2]
+
+                    if level not in available_images:
+                        available_images[level] = {}
+
+                    file_size = cache_file.stat().st_size
+                    available_images[level][image_type] = {
+                        'available': True,
+                        'size_bytes': file_size,
+                        'url': url_for('main_bp.get_mech_display_image', level=level, image_type=image_type, _external=True)
+                    }
+                except ValueError:
+                    continue
+
+        return jsonify({
+            'success': True,
+            'available_levels': list(range(1, 12)),
+            'available_types': ['shadow', 'unlocked'],
+            'cached_images': available_images,
+            'total_cached': len(cache_files),
+            'cache_directory': str(display_cache_service.cache_dir)
+        })
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (display cache service unavailable)
+        current_app.logger.error(f"Service dependency error getting mech display info: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Service error: Unable to get display information'
+        }), 500
+    except (IOError, OSError) as e:
+        # File system errors (cache directory access, file stat)
+        current_app.logger.error(f"File system error getting mech display info: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'File system error: Unable to access cache directory'
+        }), 500
+    except (ValueError, TypeError) as e:
+        # Data processing errors (filename parsing, stat operations)
+        current_app.logger.error(f"Data error getting mech display info: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Data error: Failed to process cache information'
+        }), 500
+
+@main_bp.route('/api/mech/reset', methods=['POST'])
+@auth.login_required
+def reset_mech_to_level_1():
+    """Reset Mech system to Level 1 for testing/development."""
+    try:
+        from services.mech.mech_reset_service import get_mech_reset_service
+
+        # Get reset service
+        reset_service = get_mech_reset_service()
+
+        # Get current status before reset
+        current_status = reset_service.get_current_status()
+
+        # Perform full reset
+        result = reset_service.full_reset()
+
+        # Log the action
+        try:
+            from services.infrastructure.action_logger import log_user_action
+            log_user_action(
+                action="MECH_RESET",
+                target="Mech System",
+                user=session.get('username', 'Unknown'),
+                source="Web UI",
+                details=f"Reset to Level 1 - Previous: Level {current_status.get('current_level', 'Unknown')}"
+            )
+        except (ImportError, AttributeError, RuntimeError) as log_error:
+            # Non-critical: Action logger errors (logging service unavailable)
+            current_app.logger.warning(f"Failed to log mech reset action: {log_error}")
+
+        # Return result
+        if result.success:
+            # Success: Construct clean response (defense-in-depth against potential data leaks)
+            # Note: Success messages are safe, but we sanitize to satisfy CodeQL data flow analysis
+            safe_message = "Mech system reset to Level 1 completed successfully"
+
+            response_data = {
+                'success': True,
+                'message': safe_message,
+                'previous_status': {
+                    'current_level': current_status.get('current_level', 1),
+                    'donations_count': current_status.get('donations_count', 0),
+                    'total_donated': current_status.get('total_donated', 0)
+                },
+                'timestamp': result.details.get('timestamp') if result.details else None
+            }
+
+            # Include operation details using strict allowlist (security: prevent exception exposure)
+            # Define expected safe operation messages (allowlist approach for CodeQL compliance)
+            SAFE_OPERATION_ALLOWLIST = {
+                "Donations: All donations cleared",
+                "Mech State: Mech state reset to Level 1",
+                "Mech State: Reset to Level 1",
+                "Evolution Mode: Evolution mode reset to defaults",
+                "Evolution Mode: Reset to defaults",
+                "Cleanup: Deprecated files cleaned up",
+                "Cleanup: Files cleaned up successfully",
+                "Config: Mech configuration updated",
+                "Status: Mech system reset completed"
+            }
+
+            def _validate_operation_message(op):
+                """Validate and return safe operation message - CodeQL taint barrier.
+
+                Returns the allowlist string (not the input) if valid, breaking taint chain.
+                """
+                if not isinstance(op, str):
+                    return None
+                # Return the ALLOWLIST string (new object), not the input string
+                # This breaks taint tracking by returning a known-safe constant
+                if op in SAFE_OPERATION_ALLOWLIST:
+                    # Find and return the matching allowlist string (creates new reference)
+                    for safe_msg in SAFE_OPERATION_ALLOWLIST:
+                        if op == safe_msg:
+                            return safe_msg  # Return allowlist string, not input
+                return None
+
+            if result.details and 'operations' in result.details:
+                # Validate each operation through barrier function
+                safe_operations = []
+                for op in result.details.get('operations', []):
+                    validated = _validate_operation_message(op)
+                    if validated is not None:
+                        safe_operations.append(validated)  # Append allowlist string, not input
+
+                if safe_operations:  # Only add if we have safe operations
+                    response_data['operations'] = safe_operations
+
+            current_app.logger.info(f"Mech reset to Level 1 completed by user: {session.get('username', 'Unknown')}")
+            return jsonify(response_data)
+        else:
+            # Failure: Log detailed error server-side, return generic message to user
+            current_app.logger.error(f"Mech reset failed: {result.message}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': 'Failed to reset mech system'
+            }), 500
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech reset service unavailable)
+        error_msg = f"Service dependency error during mech reset: {e}"
+        current_app.logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Service error: Unable to reset mech system'
+        }), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (status parsing, result formatting)
+        error_msg = f"Data error during mech reset: {e}"
+        current_app.logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Data error: Failed to process reset operation'
+        }), 500
+
+@main_bp.route('/api/mech/status', methods=['GET'])
+@auth.login_required
+def get_mech_status():
+    """Get current Mech system status."""
+    try:
+        from services.mech.mech_reset_service import get_mech_reset_service
+
+        # Get reset service for status
+        reset_service = get_mech_reset_service()
+        status = reset_service.get_current_status()
+
+        # Security: Check for error in status (service returns {"error": "..."} on exceptions)
+        if isinstance(status, dict) and "error" in status:
+            # Service encountered an error - log detailed error, return generic message
+            current_app.logger.error(f"Mech status service error: {status['error']}", exc_info=True)
+            return jsonify({
+                'success': False,
+                'error': 'Failed to retrieve mech status'
+            }), 500
+
+        # Security: Sanitize status completely (CodeQL taint barrier)
+        # Create new dict with only primitive, validated values - breaks taint chain
+        def _safe_int(value, default=0):
+            """Extract safe integer - CodeQL taint barrier."""
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return int(value)
+            return default
+
+        def _safe_string(value, default='Unknown'):
+            """Extract safe string without exceptions - CodeQL taint barrier."""
+            if not isinstance(value, str):
+                return default
+            # Reject any string containing exception markers
+            if any(marker in str(value) for marker in ['Exception', 'Error:', 'Traceback', 'File "', 'line ']):
+                return default
+            return value
+
+        def _safe_numbers_list(value):
+            """Extract safe list of numbers only - CodeQL taint barrier."""
+            if not isinstance(value, list):
+                return []
+            result = []
+            for item in value:
+                if isinstance(item, (int, float)) and not isinstance(item, bool):
+                    result.append(item)
+            return result
+
+        # Construct completely new dict using safe extraction functions
+        # This breaks CodeQL's taint tracking by going through validation barriers
+        safe_status = {
+            'donations_count': _safe_int(status.get('donations_count'), 0),
+            'total_donated': _safe_int(status.get('total_donated'), 0),
+            'current_level': _safe_int(status.get('current_level'), 1),
+            'level_upgrades_count': _safe_int(status.get('level_upgrades_count'), 0),
+            'next_level_threshold': _safe_int(status.get('next_level_threshold'), 0) if status.get('next_level_threshold') is not None else None,
+            'amount_needed': _safe_int(status.get('amount_needed'), 0),
+            'next_level_name': _safe_string(status.get('next_level_name'), 'Unknown'),
+            'channels_tracked': _safe_int(status.get('channels_tracked'), 0),
+            'glvl_values': _safe_numbers_list(status.get('glvl_values')),
+            'architecture': _safe_string(status.get('architecture'), 'Unknown'),
+            'deprecated_files_exist': bool(status.get('deprecated_files_exist', False))
+        }
+
+        return jsonify({
+            'success': True,
+            'status': safe_status,
+            'timestamp': datetime.now().isoformat()
+        })
+
+    except (ImportError, AttributeError, RuntimeError) as e:
+        # Service dependency errors (mech reset service unavailable)
+        error_msg = f"Service dependency error getting mech status: {e}"
+        current_app.logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Service error: Unable to get mech status'
+        }), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # Data processing errors (status formatting, datetime operations)
+        error_msg = f"Data error getting mech status: {e}"
+        current_app.logger.error(error_msg, exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'Data error: Failed to format status'
+        }), 500

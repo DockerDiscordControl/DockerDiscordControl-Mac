@@ -1,55 +1,64 @@
 # -*- coding: utf-8 -*-
+# ============================================================================ #
+# DockerDiscordControl (DDC)                                                  #
+# https://ddc.bot                                                              #
+# Copyright (c) 2025 MAX                                                  #
+# Licensed under the MIT License                                               #
+# ============================================================================ #
 import time
-import pytz
+import os
+import json
 import logging
+import pytz
 from datetime import datetime, timedelta, timezone
 from typing import Union, Tuple, List, Dict, Any, Optional
+from zoneinfo import ZoneInfo
 from utils.logging_utils import setup_logger
 
 logger = setup_logger('ddc.time_utils')
 
-# Zentrale datetime-Imports für konsistente Verwendung im gesamten Projekt
+# Central datetime imports for consistent usage throughout the project
 def get_datetime_imports():
     """
-    Zentrale Funktion für datetime-Imports.
-    Eliminiert redundante 'from datetime import datetime' Statements.
-    
+    Central function for datetime imports.
+    Eliminates redundant 'from datetime import datetime' statements.
+
     Returns:
-        Tuple mit (datetime, timedelta, timezone, time)
+        Tuple with (datetime, timedelta, timezone, time)
     """
     return datetime, timedelta, timezone, time
 
 def get_current_time(tz_name: Optional[str] = None) -> datetime:
     """
-    Gibt die aktuelle Zeit in der angegebenen Zeitzone zurück.
-    
+    Returns the current time in the specified timezone.
+
     Args:
-        tz_name: Name der Zeitzone (z.B. 'Europe/Berlin'), None für UTC
-        
+        tz_name: Name of the timezone (e.g. 'Europe/Berlin'), None for UTC
+
     Returns:
-        Aktuelle Zeit als timezone-aware datetime
+        Current time as timezone-aware datetime
     """
     if tz_name:
         try:
             tz = pytz.timezone(tz_name)
             return datetime.now(tz)
-        except Exception as e:
-            logger.warning(f"Invalid timezone '{tz_name}', falling back to UTC: {e}")
-    
+        except (pytz.exceptions.UnknownTimeZoneError, AttributeError, TypeError) as e:
+            logger.warning(f"Invalid timezone '{tz_name}', falling back to UTC: {e}", exc_info=True)
+
     return datetime.now(timezone.utc)
 
 def get_utc_timestamp() -> float:
-    """Gibt den aktuellen UTC-Timestamp zurück"""
+    """Returns the current UTC timestamp"""
     return time.time()
 
 def timestamp_to_datetime(timestamp: float, tz_name: Optional[str] = None) -> datetime:
     """
-    Konvertiert einen Timestamp zu einem datetime-Objekt.
-    
+    Converts a timestamp to a datetime object.
+
     Args:
-        timestamp: Unix-Timestamp
-        tz_name: Ziel-Zeitzone (None für UTC)
-        
+        timestamp: Unix timestamp
+        tz_name: Target timezone (None for UTC)
+
     Returns:
         Timezone-aware datetime object
     """
@@ -59,22 +68,22 @@ def timestamp_to_datetime(timestamp: float, tz_name: Optional[str] = None) -> da
         try:
             target_tz = pytz.timezone(tz_name)
             return dt.astimezone(target_tz)
-        except Exception as e:
-            logger.warning(f"Invalid timezone '{tz_name}', returning UTC: {e}")
-    
+        except (pytz.exceptions.UnknownTimeZoneError, AttributeError, TypeError) as e:
+            logger.warning(f"Invalid timezone '{tz_name}', returning UTC: {e}", exc_info=True)
+
     return dt
 
 def datetime_to_timestamp(dt: datetime) -> float:
     """
-    Konvertiert ein datetime-Objekt zu einem Timestamp.
-    
+    Converts a datetime object to a timestamp.
+
     Args:
-        dt: datetime object (timezone-aware oder naive)
-        
+        dt: datetime object (timezone-aware or naive)
+
     Returns:
         Unix timestamp
     """
-    # Wenn naive datetime, als UTC interpretieren
+    # If naive datetime, interpret as UTC
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     
@@ -82,13 +91,13 @@ def datetime_to_timestamp(dt: datetime) -> float:
 
 def format_duration(seconds: float) -> str:
     """
-    Formatiert eine Dauer in Sekunden zu einem lesbaren String.
-    
+    Formats a duration in seconds to a readable string.
+
     Args:
-        seconds: Dauer in Sekunden
-        
+        seconds: Duration in seconds
+
     Returns:
-        Formatierte Dauer (z.B. "2h 30m 15s")
+        Formatted duration (e.g. "2h 30m 15s")
     """
     if seconds < 60:
         return f"{seconds:.1f}s"
@@ -112,88 +121,219 @@ def format_duration(seconds: float) -> str:
 
 def is_same_day(dt1: datetime, dt2: datetime, tz_name: Optional[str] = None) -> bool:
     """
-    Prüft, ob zwei datetime-Objekte am selben Tag liegen.
-    
+    Checks if two datetime objects are on the same day.
+
     Args:
-        dt1: Erstes datetime
-        dt2: Zweites datetime
-        tz_name: Zeitzone für Vergleich (None für UTC)
-        
+        dt1: First datetime
+        dt2: Second datetime
+        tz_name: Timezone for comparison (None for UTC)
+
     Returns:
-        True wenn beide am selben Tag liegen
+        True if both are on the same day
     """
     if tz_name:
         try:
             tz = pytz.timezone(tz_name)
             dt1 = dt1.astimezone(tz) if dt1.tzinfo else tz.localize(dt1)
             dt2 = dt2.astimezone(tz) if dt2.tzinfo else tz.localize(dt2)
-        except Exception as e:
-            logger.warning(f"Invalid timezone '{tz_name}', using UTC: {e}")
-    
+        except (pytz.exceptions.UnknownTimeZoneError, pytz.exceptions.AmbiguousTimeError, pytz.exceptions.NonExistentTimeError, AttributeError, TypeError) as e:
+            logger.warning(f"Invalid timezone '{tz_name}', using UTC: {e}", exc_info=True)
+
     return dt1.date() == dt2.date()
 
 def get_timezone_offset(tz_name: str) -> str:
     """
-    Gibt den Zeitzone-Offset als String zurück.
-    
+    Returns the timezone offset as a string.
+
     Args:
-        tz_name: Name der Zeitzone
-        
+        tz_name: Name of the timezone
+
     Returns:
-        Offset-String (z.B. "+01:00")
+        Offset string (e.g. "+01:00")
     """
     try:
         tz = pytz.timezone(tz_name)
         now = datetime.now(tz)
         return now.strftime('%z')
-    except Exception as e:
-        logger.warning(f"Could not get offset for timezone '{tz_name}': {e}")
+    except (pytz.exceptions.UnknownTimeZoneError, AttributeError, TypeError, ValueError) as e:
+        logger.warning(f"Could not get offset for timezone '{tz_name}': {e}", exc_info=True)
         return "+00:00"
 
-def format_datetime_with_timezone(dt: datetime, 
-                                  timezone_name: Optional[str] = None,
-                                  fmt: str = "%Y-%m-%d %H:%M:%S %Z") -> str:
+def format_datetime_with_timezone(dt, timezone_name=None, time_only=False):
     """
-    Formats a datetime object with the specified timezone.
+    Format a datetime with timezone awareness and multiple fallback mechanisms.
     
     Args:
-        dt: Datetime object to format
-        timezone_name: Name of the timezone to use (e.g., 'Europe/Berlin')
-        fmt: Format string for the output
+        dt: The datetime to format
+        timezone_name: Optional timezone name to use
+        time_only: If True, return only the time part
         
     Returns:
-        Formatted datetime string with timezone information
+        Formatted datetime string
     """
-    if not dt:
-        return "N/A"
-    
-    # Ensure dt is timezone-aware - if naive, assume UTC
+    if not isinstance(dt, datetime):
+        try:
+            if isinstance(dt, (int, float)):
+                dt = datetime.fromtimestamp(float(dt))
+            else:
+                logger.error(f"Invalid datetime value (not a number or datetime): {dt}")
+                return "Time not available (error)"
+        except (TypeError, ValueError) as e:
+            logger.error(f"Invalid datetime value: {dt} - {e}")
+            return "Time not available (error)"
+
+    # Ensure dt is timezone-aware
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
+
+    # Get target timezone using the public API
+    tz_name = timezone_name or get_configured_timezone()
     
     try:
-        # Attempt to get target timezone
-        if timezone_name:
-            target_tz = pytz.timezone(timezone_name)
-        else:
-            target_tz = timezone.utc # Fall back to UTC if no timezone specified
-        
-        # Convert to target timezone
-        dt_in_target_tz = dt.astimezone(target_tz)
-        
-        # Format according to provided pattern
-        return dt_in_target_tz.strftime(fmt)
-    except Exception as e:
-        logger.error(f"Error formatting datetime with timezone: {e}")
-        target_tz = timezone.utc # Ensure fallback on generic error too
+        # First attempt: Try zoneinfo (Python 3.9+)
+        target_tz = ZoneInfo(tz_name)
+        local_time = dt.astimezone(target_tz)
+        format_str = "%H:%M:%S" if time_only else "%d.%m.%Y %H:%M:%S"
+        return local_time.strftime(format_str)
+    except (ImportError, AttributeError, TypeError, ValueError, OSError) as e1:
+        logger.warning(f"zoneinfo conversion failed: {e1}", exc_info=True)
         try:
-            # Fallback to UTC formatting if localization fails
-            dt_in_utc = dt.astimezone(timezone.utc)
-            return dt_in_utc.strftime(fmt) + " UTC"
-        except Exception as inner_e:
-            logger.error(f"Failed even with UTC fallback: {inner_e}")
-            return str(dt)
+            # Second attempt: Try pytz
+            target_tz = pytz.timezone(tz_name)
+            local_time = dt.astimezone(target_tz)
+            return local_time.strftime("%d.%m.%Y %H:%M:%S")
+        except (pytz.exceptions.UnknownTimeZoneError, AttributeError, TypeError, ValueError) as e2:
+            logger.warning(f"pytz conversion failed: {e2}", exc_info=True)
+            try:
+                # Third attempt: Manual offset for Europe/Berlin
+                if tz_name == 'Europe/Berlin':
+                    # Manually handle DST - rough approximation
+                    now = datetime.now()
+                    is_dst = now.month > 3 and now.month < 10
+                    offset = 2 if is_dst else 1
+                    local_time = dt.astimezone(timezone(timedelta(hours=offset)))
+                    return local_time.strftime("%d.%m.%Y %H:%M:%S")
+            except (AttributeError, TypeError, ValueError, OSError) as e3:
+                logger.warning(f"Manual timezone conversion failed: {e3}", exc_info=True)
+
+            # Final fallback: Just use UTC
+            try:
+                utc_time = dt.astimezone(timezone.utc)
+                return utc_time.strftime("%d.%m.%Y %H:%M:%S UTC")
+            except (AttributeError, TypeError, ValueError) as e4:
+                logger.error(f"UTC fallback failed: {e4}", exc_info=True)
+                return dt.strftime("%d.%m.%Y %H:%M:%S") + " (timezone unknown)"
+
+
+# Global timezone cache for performance
+_cached_timezone = None
+_cache_timestamp = None
+_CACHE_DURATION = 300  # 5 minutes cache
+
+def get_configured_timezone() -> str:
+    """
+    Public API to get the configured timezone from the Web UI.
+    This is the SINGLE SOURCE OF TRUTH for timezone throughout the application.
+
+    Returns:
+        str: The configured timezone string (e.g., 'Europe/Berlin', 'UTC')
+    """
+    global _cached_timezone, _cache_timestamp
+
+    # Check cache first (valid for 5 minutes)
+    if _cached_timezone and _cache_timestamp:
+        if time.time() - _cache_timestamp < _CACHE_DURATION:
+            return _cached_timezone
+
+    # Get fresh timezone
+    tz = _get_timezone_safe()
+
+    # Update cache
+    _cached_timezone = tz
+    _cache_timestamp = time.time()
+
+    return tz
+
+def _get_timezone_safe():
+    """Get timezone from config with multiple fallbacks - SERVICE FIRST compliant."""
+    try:
+        # First priority: Environment variable (for container-level override)
+        tz = os.environ.get('TZ')
+        if tz:
+            logger.debug(f"Using timezone from TZ environment variable: {tz}")
+            return tz
+
+        # Second priority: Service First - Use load_config from config_service
+        try:
+            from services.config.config_service import load_config
+            config = load_config()
+
+            # Look for 'timezone' (correct key name)
+            if config and config.get('timezone'):
+                tz = config['timezone']
+                logger.debug(f"Using timezone from config service: {tz}")
+                return tz
+        except ImportError:
+            logger.warning("Config service not available, trying alternate methods")
+        except (AttributeError, TypeError, KeyError, RuntimeError) as e:
+            logger.debug(f"Could not get timezone from config service: {e}", exc_info=True)
+
+        # Third priority: Use ConfigManager if available (for legacy support)
+        try:
+            from services.config.config_service import get_config_service as get_config_manager
+            config = get_config_manager().get_config()
+            if config and config.get('timezone'):
+                tz = config['timezone']
+                logger.debug(f"Using timezone from ConfigManager: {tz}")
+                return tz
+        except (ImportError, AttributeError, TypeError, KeyError, RuntimeError) as e:
+            logger.debug(f"Could not get timezone from ConfigManager: {e}", exc_info=True)
+
+        # Final fallback: Default to UTC (safer than hardcoded Europe/Berlin)
+        logger.warning("All timezone detection methods failed, falling back to UTC")
+        return 'UTC'
+
+    except (RuntimeError, SystemError) as e:
+        logger.error(f"Critical error in _get_timezone_safe: {e}", exc_info=True)
+        return 'UTC'
             
+def clear_timezone_cache():
+    """
+    Clear the cached timezone to force a fresh load from config.
+    Call this when the timezone setting is changed in the Web UI.
+    """
+    global _cached_timezone, _cache_timestamp
+    _cached_timezone = None
+    _cache_timestamp = None
+    logger.info("Timezone cache cleared - will reload from config on next access")
+
+def get_log_timestamp(include_tz: bool = True) -> str:
+    """
+    Get a formatted timestamp string for logging purposes.
+    Uses the configured timezone from Web UI.
+
+    Args:
+        include_tz: Whether to include timezone name in the output
+
+    Returns:
+        str: Formatted timestamp (e.g., '2024-01-15 14:30:45' or '2024-01-15 14:30:45 CET')
+    """
+    tz_name = get_configured_timezone()
+
+    try:
+        tz = pytz.timezone(tz_name)
+        now = datetime.now(tz)
+
+        if include_tz:
+            return now.strftime('%Y-%m-%d %H:%M:%S %Z')
+        else:
+            return now.strftime('%Y-%m-%d %H:%M:%S')
+    except (pytz.exceptions.UnknownTimeZoneError, AttributeError, TypeError, ValueError) as e:
+        logger.error(f"Error formatting log timestamp: {e}", exc_info=True)
+        # Fallback to UTC
+        now = datetime.now(timezone.utc)
+        return now.strftime('%Y-%m-%d %H:%M:%S UTC')
+
 def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
     """
     Parse a timestamp string into a datetime object.
