@@ -184,8 +184,9 @@ docker compose up -d
 ### **Method 2: Docker Run (Direct)**
 
 ```bash
-# Run directly with Docker
+# Run directly with Docker (macOS requires --group-add 0 for Docker socket access)
 docker run -d --name ddc \
+  --group-add 0 \
   -p 9374:9374 \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
   -v ./config:/app/config \
@@ -194,6 +195,8 @@ docker run -d --name ddc \
   --restart unless-stopped \
   dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
 ```
+
+**⚠️ macOS Important:** The `--group-add 0` flag is **required** on macOS for Docker socket access. Docker Desktop for Mac uses GID 0 (root/wheel) for the socket, not the docker group like on Linux.
 
 ### **Method 3: Build from Source**
 

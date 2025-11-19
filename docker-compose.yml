@@ -6,6 +6,10 @@ services:
     image: dockerdiscordcontrol # The image to be used (built by rebuild.sh)
     build: . # Optional: Allows building the image with 'docker-compose build'
     restart: unless-stopped # Equivalent to --restart unless-stopped
+    # IMPORTANT FOR macOS: Add user to GID 0 (root/wheel) for Docker socket access
+    # Docker Desktop for Mac uses GID 0 for the socket, not the docker group
+    group_add:
+      - "0"  # Required on macOS for Docker socket permissions
     ports:
       - "9374:9374" # Equivalent to -p 9374:9374 (<host-port>:<container-port>)
                     # Change the host port (9374) if it's already in use.
