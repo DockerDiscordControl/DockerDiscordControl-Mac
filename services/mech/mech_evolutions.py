@@ -11,6 +11,7 @@ Mech Evolution System - Maps donation amounts to evolution levels
 SERVICE FIRST: Unified evolution system replacing evolution_config_manager
 """
 
+import json
 import logging
 import math
 from pathlib import Path
@@ -278,10 +279,10 @@ def get_evolution_info(total_donations: float) -> dict:
 def get_mech_filename(evolution_level: int) -> str:
     """
     Get filename for mech evolution spritesheet.
-    
+
     Args:
         evolution_level: Evolution level (1-11)
-        
+
     Returns:
         Filename for the spritesheet
     """

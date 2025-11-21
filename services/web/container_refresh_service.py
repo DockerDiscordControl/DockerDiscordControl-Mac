@@ -17,6 +17,7 @@ import pytz
 from datetime import datetime
 from typing import Optional
 from dataclasses import dataclass
+import docker
 
 logger = logging.getLogger(__name__)
 

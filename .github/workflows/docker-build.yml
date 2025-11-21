@@ -1,4 +1,4 @@
-name: 🐳🍎 Mac Docker Hub Push (Apple Silicon)
+name: 🐳🍎 Mac Docker Hub Push (Alpine)
 
 on:
   push:
@@ -10,16 +10,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-
-env:
-  REGISTRY: docker.io
-  IMAGE_NAME: dockerdiscordcontrol/dockerdiscordcontrol-mac
-
-# Security: Explicit minimal permissions (GitHub CodeQL requirement)
-permissions:
-  contents: read      # Read repository contents
-  actions: read       # Read GitHub Actions cache
-  security-events: write  # Write security events if needed
 
 jobs:
   build_and_push:
@@ -60,9 +50,8 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=mac,enable={{is_default_branch}}
-            type=raw,value=apple-silicon,enable={{is_default_branch}}
 
-      - name: Build and push Mac (Multi-Arch)
+      - name: Build and push Mac (Alpine Optimized)
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -72,4 +61,4 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
-          cache-to: type=gha,mode=max 
+          cache-to: type=gha,mode=max

@@ -40,16 +40,15 @@ try:
     # Import directly from source modules, not via app.web_ui
     from services.config.config_service import load_config
     from app.utils.web_helpers import get_docker_containers_live
-    from services.exceptions import DockerConnectionError
     # Setup logger
     logging.basicConfig(level=logging.INFO) # Ensure basicConfig is called somewhere
     logger = logging.getLogger("gunicorn.config")
     logger.info("Gunicorn config logger initialized.")
 except ImportError as e:
-    # Fallback logger 
+    # Fallback logger
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    logger.error(f"Error importing required components: {e}.") 
+    logger.error(f"Error importing required components: {e}.")
     print(f"Critical import error in gunicorn_config.py: {e}")
     sys.exit(1)
 
@@ -93,8 +92,11 @@ def when_ready(server):
         get_docker_containers_live(logger) # Pass the logger
         logger.info(f"[Gunicorn Master {os.getpid()}] Initial cache update complete.")
 
-    except (RuntimeError, docker.errors.APIError, docker.errors.DockerException, DockerConnectionError) as e:
-        logger.error(f"[Gunicorn Master {os.getpid()}] Error during initial cache population: {e}", exc_info=True)
+    except Exception as e:
+        # Catch ALL exceptions including DockerConnectionError, APIError, etc.
+        # Web-UI must continue to start even if Docker is unavailable
+        logger.warning(f"[Gunicorn Master {os.getpid()}] Could not populate Docker cache (Docker may be unavailable): {e}")
+        logger.info(f"[Gunicorn Master {os.getpid()}] Web-UI will continue starting - Docker features may be limited")
 
 # --- RAM-OPTIMIZED Gunicorn Server Configuration ---
 
@@ -152,22 +154,22 @@ def post_fork(server, worker):
         # OPTIMIZED: Reduced threadpool from 20 to 10
         import gevent.hub
         gevent.hub.get_hub().threadpool_size = 10  # Reduced from 20
-        
+
         try:
             # Adjust the hub for better thread compatibility
             from gevent import monkey
             from gevent.threading import _ForkHooks
-            
+
             # Safe hooks for better thread compatibility
             original_after_fork = _ForkHooks.after_fork_in_child
-            
+
             def safer_after_fork_in_child(self):
                 # Override the assert check - fixed parameter signature
                 pass
-                
+
             # Replace the hook method
             _ForkHooks.after_fork_in_child = safer_after_fork_in_child
-            
+
             # Provide worker info
             worker.log.info(f"RAM-optimized Gevent worker (threadpool: 10, connections: 200)")
         except (ImportError, AttributeError) as e:
@@ -180,4 +182,4 @@ def pre_exec(server):
 # Dynamic settings based on environment variables
 if os.environ.get('DDC_DISABLE_CACHE_LOCKS', '').lower() == 'true':
     os.environ['DDC_CACHE_LOCKS_DISABLED'] = 'true'
-    server_socket = "/tmp/gunicorn.sock" 
+    server_socket = "/tmp/gunicorn.sock"

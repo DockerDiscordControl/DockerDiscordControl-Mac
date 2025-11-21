@@ -12,8 +12,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional, Set, Tuple
+
+try:
+    import discord
+except ImportError:
+    discord = None  # Discord.py not available (used for type checking only)
 
 from services.mech.progress_paths import get_progress_paths
 from utils.logging_utils import get_module_logger
@@ -130,7 +135,7 @@ class MemberCountService:
             self._logger.info("Unique member count across status channels: %s", unique_count)
             return unique_count
         except (RuntimeError, discord.Forbidden, discord.HTTPException, discord.NotFound) as e:
-            self._logger.error("Error updating member count: %s", exc, exc_info=True)
+            self._logger.error("Error updating member count: %s", e, exc_info=True)
             return fallback_count
 
     def publish_member_count(self, member_count: int) -> None:
@@ -143,7 +148,7 @@ class MemberCountService:
             progress_service.update_member_count(member_count)
             self._logger.debug("Member count updated successfully: %s", member_count)
         except (AttributeError, ImportError, KeyError, ModuleNotFoundError, RuntimeError, TypeError) as e:
-            self._logger.error("Error updating member count: %s", exc, exc_info=True)
+            self._logger.error("Error updating member count: %s", e, exc_info=True)
 
     def persist_member_count_snapshot(
         self,
@@ -193,7 +198,7 @@ class MemberCountService:
                 channel_perms = {}
             self._channel_perms = _ChannelPermissionsCache(channel_perms, True)
         except (IOError, OSError, PermissionError, RuntimeError, discord.Forbidden, discord.HTTPException, discord.NotFound) as e:
-            self._logger.error("Error loading channel permissions: %s", exc, exc_info=True)
+            self._logger.error("Error loading channel permissions: %s", e, exc_info=True)
             self._channel_perms = _ChannelPermissionsCache({}, True)
 
         return self._channel_perms.permissions
@@ -248,8 +253,8 @@ class MemberCountService:
 
                 unique_members.add(member.id)
                 member_count += 1
-            except (RuntimeError, discord.Forbidden, discord.HTTPException, discord.NotFound) as e:
-                self._logger.debug("Error processing member: %s", exc)
+            except (RuntimeError, ValueError, TypeError) as e:
+                self._logger.debug("Error processing member: %s", e)
 
         self._logger.debug("  └─ #%s: %s non-bot members", getattr(channel, "name", "?"), member_count)
         return True

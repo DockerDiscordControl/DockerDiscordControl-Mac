@@ -13,6 +13,7 @@ import os
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime, timezone
 from copy import deepcopy
+import docker
 
 logger = logging.getLogger('ddc.status_cache_service')
 

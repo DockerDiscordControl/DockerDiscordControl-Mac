@@ -1,24 +1,25 @@
 # Startup Optimization Changes for Main Repository
 
 ## Overview
-This document describes the startup optimization changes made to the Mac repository that should be applied to the main DockerDiscordControl repository. These changes eliminate bot crashes when the Discord bot token is not configured.
+This document describes the startup optimization changes made to the Mac repository that should be applied to the main DockerDiscordControl repository. These changes eliminate crash loops and reduce resource usage when the Discord bot token is not configured.
 
 ## Problem Statement
 **Before:**
-- Bot crashes immediately when Discord token is missing
-- Container exits with error status
-- No way to configure token via Web-UI because container is dead
-- Poor user experience
+- Container crashes immediately when Discord token is missing
+- Web-UI restarts aggressively every 2-3 seconds (supervisord auto-restart)
+- Excessive resource usage from constant crash loops
+- Poor user experience with spam logs
 
 **After:**
+- Container runs stably without token
 - Bot implements intelligent retry loop with countdown (configurable interval, default 60s)
-- Container stays running, Web-UI remains accessible
-- User can configure token via Web-UI while bot waits
-- Clean, informative logs with countdown messages
+- Web-UI waits silently for token configuration (synchronized with bot timing)
+- No crash loops, minimal resource usage
+- Clean, informative logs
 
 ## Changes Required
 
-### Change 1: bot.py - Add Intelligent Retry Loop
+### 1. bot.py - Add Intelligent Retry Loop
 
 **Location:** `bot.py` around line 95-130 (in the `main()` function, after `bot = create_bot(runtime)`)
 
@@ -79,155 +80,108 @@ def main() -> None:
     runtime.logger.info("Bot has stopped gracefully.")
 ```
 
-### Change 2: gunicorn_config.py - Fix Missing Import and Exception Handling
+### 2. Create scripts/start_webui.sh
 
-**Location:** `gunicorn_config.py`
+**Create new file:** `scripts/start_webui.sh`
 
-**Problem:** Web-UI crashes on startup when Docker is unavailable due to:
-1. Missing `import docker` - causes NameError
-2. Missing exception handler for `DockerConnectionError` - causes uncaught exception crash
+```bash
+#!/bin/sh
+# Smart startup script for Web UI - synchronized with Bot retry logic
 
-**Add import at line ~28 (after other imports):**
-```python
-import docker
+RETRY_INTERVAL=${DDC_TOKEN_RETRY_INTERVAL:-60}
+RETRY_COUNT=0
+
+echo "[WebUI] Checking if configuration is ready..."
+
+while true; do
+    # Check if Discord token is configured (environment variable or config file)
+    if [ -n "$DISCORD_BOT_TOKEN" ]; then
+        echo "[WebUI] Discord token found in environment - starting Web UI..."
+        break
+    fi
+
+    # Check if credentials.yaml exists and is not empty (contains token)
+    if [ -f "/app/config/credentials.yaml" ] && [ -s "/app/config/credentials.yaml" ]; then
+        # Check if it actually contains a token (not just empty/template)
+        if grep -q "bot_token" "/app/config/credentials.yaml" 2>/dev/null; then
+            echo "[WebUI] Bot token found in credentials.yaml - starting Web UI..."
+            break
+        fi
+    fi
+
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "[WebUI] Retry $RETRY_COUNT: Bot token not configured yet, waiting ${RETRY_INTERVAL} seconds before retry..."
+    echo "[WebUI] (synchronized with Bot retry timing)"
+    sleep "$RETRY_INTERVAL"
+done
+
+# Start Gunicorn with the web UI
+echo "[WebUI] Starting Gunicorn web server on port ${DDC_WEB_PORT:-9374}..."
+exec /usr/bin/python3 -m gunicorn -c gunicorn_config.py app.web_ui:app
 ```
 
-**Add custom exception import at line ~43 (in the try block with other imports):**
-```python
-try:
-    # Import directly from source modules, not via app.web_ui
-    from services.config.config_service import load_config
-    from app.utils.web_helpers import get_docker_containers_live
-    from services.exceptions import DockerConnectionError  # ADD THIS LINE
-    # Setup logger
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger("gunicorn.config")
-    logger.info("Gunicorn config logger initialized.")
-except ImportError as e:
-    # Fallback logger
-    ...
+### 3. Update supervisord.conf
+
+**Modify the `[program:web-ui]` section:**
+
+**Before:**
+```ini
+[program:web-ui]
+command=/usr/bin/python3 -m gunicorn -c gunicorn_config.py app.web_ui:app
+directory=/app
+autostart=true
+autorestart=true
+stdout_logfile=/app/logs/webui.log
+stderr_logfile=/app/logs/webui.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+stderr_logfile_backups=3
+environment=DDC_WEB_PORT="9374"
+user=ddc
 ```
 
-**Update exception handling at line ~96 (in when_ready function):**
-```python
-def when_ready(server):
-    """Gunicorn Hook: Executed when the master process is ready (before forking workers)."""
-    logger.info(f"[Gunicorn Master {os.getpid()}] Server ready. Performing initial cache population...")
-
-    try:
-        # Fill initial cache synchronously (keep this part)
-        logger.info(f"[Gunicorn Master {os.getpid()}] Performing initial Docker cache update...")
-        get_docker_containers_live(logger) # Pass the logger
-        logger.info(f"[Gunicorn Master {os.getpid()}] Initial cache update complete.")
-
-    # ADD DockerConnectionError to the exception tuple:
-    except (RuntimeError, docker.errors.APIError, docker.errors.DockerException, DockerConnectionError) as e:
-        logger.error(f"[Gunicorn Master {os.getpid()}] Error during initial cache population: {e}", exc_info=True)
+**After:**
+```ini
+[program:web-ui]
+command=/app/scripts/start_webui.sh
+directory=/app
+autostart=true
+autorestart=true
+stdout_logfile=/app/logs/webui.log
+stderr_logfile=/app/logs/webui.log
+stdout_logfile_maxbytes=10MB
+stderr_logfile_maxbytes=10MB
+stdout_logfile_backups=3
+stderr_logfile_backups=3
+environment=DDC_WEB_PORT="9374"
+user=ddc
 ```
 
-**Why These Changes Are Critical:**
-- Without `import docker`: NameError crashes gunicorn immediately
-- Without `DockerConnectionError` handling: Web-UI crashes when Docker socket unavailable (common during first setup)
-- With these fixes: Web-UI starts gracefully and logs the error, remaining accessible for configuration
+### 4. Update Dockerfile
 
-### Change 3: container_status_service.py - Auto-Cleanup for Missing Containers
+**Find the section that copies scripts (around line 156-161):**
 
-**Location:** `services/infrastructure/container_status_service.py`
+**Before:**
+```dockerfile
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --chown=ddc:ddc scripts/entrypoint.sh /app/entrypoint.sh
 
-**Problem:** When containers are deleted outside the application, the service logs ERROR messages with full tracebacks, causing log pollution.
-
-**Add imports at top of file (if not already present):**
-```python
-import json  # Around line 17
-from pathlib import Path  # Around line 22
+# Setup permissions
+RUN chmod +x /app/entrypoint.sh && \
+    mkdir -p /app/config /app/logs /app/scripts && \
 ```
 
-**Add the `_deactivate_container()` method after `_record_performance()` method (around line 536):**
-```python
-def _deactivate_container(self, container_name: str) -> bool:
-    """
-    Set container to active=false in JSON config when container is not found.
-    Does NOT delete the file, just marks it as inactive for auto-cleanup.
+**After:**
+```dockerfile
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --chown=ddc:ddc scripts/entrypoint.sh /app/entrypoint.sh
+COPY --chown=ddc:ddc scripts/start_webui.sh /app/scripts/start_webui.sh
 
-    Args:
-        container_name: Name of the container to deactivate
-
-    Returns:
-        True if successfully deactivated, False otherwise
-    """
-    try:
-        # Construct path to container config file
-        config_dir = Path('/app/config/containers')
-        container_file = config_dir / f'{container_name}.json'
-
-        if not container_file.exists():
-            self.logger.debug(f"Container config file not found: {container_file}")
-            return False
-
-        # Read existing config
-        with open(container_file, 'r', encoding='utf-8') as f:
-            container_config = json.load(f)
-
-        # Set active to false
-        container_config['active'] = False
-
-        # Write back to file
-        with open(container_file, 'w', encoding='utf-8') as f:
-            json.dump(container_config, f, indent=2, ensure_ascii=False)
-
-        self.logger.info(f"Auto-cleanup: Container '{container_name}' marked as inactive (active=false)")
-        return True
-
-    except (OSError, IOError) as e:
-        self.logger.warning(f"Failed to deactivate container '{container_name}': {e}")
-        return False
-    except (ValueError, KeyError) as e:
-        self.logger.warning(f"Invalid JSON in container config '{container_name}': {e}")
-        return False
+# Setup permissions
+RUN chmod +x /app/entrypoint.sh /app/scripts/start_webui.sh && \
+    mkdir -p /app/config /app/logs /app/scripts && \
 ```
-
-**Update the `docker.errors.NotFound` exception handler (around line 472):**
-```python
-# BEFORE:
-except docker.errors.NotFound as e:
-    # Container not found error
-    duration_ms = (time.time() - start_time) * 1000
-    self.logger.error(f"Container not found: {request.container_name}: {e}", exc_info=True)
-
-    return ContainerStatusResult(
-        success=False,
-        container_name=request.container_name,
-        error_message=f"Container not found: {str(e)}",
-        error_type="container_not_found",
-        query_duration_ms=duration_ms
-    )
-
-# AFTER:
-except docker.errors.NotFound as e:
-    # Container not found - auto-cleanup
-    duration_ms = (time.time() - start_time) * 1000
-    self.logger.warning(f"Container '{request.container_name}' not found in Docker, marking as inactive...")
-
-    # Auto-cleanup: Mark container as inactive in JSON
-    self._deactivate_container(request.container_name)
-
-    return ContainerStatusResult(
-        success=False,
-        container_name=request.container_name,
-        error_message=f"Container not found: {str(e)}",
-        error_type="container_not_found",
-        query_duration_ms=duration_ms
-    )
-```
-
-**Why This Change Is Important:**
-- **Before:** Full ERROR traceback logged every time a deleted container is queried
-- **After:** Clean WARNING message + automatic cleanup by setting `active=false` in JSON
-- **Benefits:**
-  - Cleaner logs (WARNING instead of ERROR with traceback)
-  - Auto-deactivates missing containers (sets `active=false` in config)
-  - Prevents log pollution from normal container lifecycle events
-  - Container config preserved (not deleted), just marked inactive
 
 ## New Environment Variables
 
@@ -239,43 +193,21 @@ DDC_TOKEN_RETRY_INTERVAL=60    # Seconds between retry attempts (default: 60)
 DDC_TOKEN_MAX_RETRIES=0        # Maximum retry attempts, 0 = infinite (default: 0)
 ```
 
-## Why NOT to modify Web-UI startup
-
-**IMPORTANT:** Do NOT add startup delays or token checks to the Web-UI!
-
-**Reasons:**
-1. **Web-UI is the configuration interface** - Users NEED access to configure the token
-2. **Web-UI doesn't require Discord token** - Runs independently with only Flask secret key
-3. **Creates Catch-22** - Can't access Web-UI to set token if Web-UI waits for token
-4. **Unnecessary complexity** - Web-UI should always be accessible
-
-**Keep supervisord.conf as-is:**
-```ini
-[program:web-ui]
-command=/usr/bin/python3 -m gunicorn -c gunicorn_config.py app.web_ui:app
-directory=/app
-autostart=true
-autorestart=true
-stdout_logfile=/app/logs/webui.log
-stderr_logfile=/app/logs/webui.log
-environment=DDC_WEB_PORT="9374"
-user=ddc
-```
-
 ## Benefits
 
-1. **No Bot Crashes:** Container runs stably even without token configured
-2. **Web-UI Always Accessible:** Users can configure token at any time
+1. **No Crash Loops:** Container runs stably even without token configured
+2. **Reduced Resource Usage:** No aggressive restart cycles
 3. **Better User Experience:** Clear countdown messages inform users what's happening
-4. **Configurable:** Users can adjust retry timing via environment variables
-5. **Production Ready:** Handles edge cases like token being added while running
+4. **Synchronized Timing:** Both Bot and Web-UI retry at the same interval
+5. **Configurable:** Users can adjust retry timing via environment variables
+6. **Production Ready:** Handles edge cases like token being added while running
 
 ## Testing
 
 Test with these scenarios:
 
 ```bash
-# Test 1: No token configured (should retry every 60s, Web-UI accessible)
+# Test 1: No token configured (should retry every 60s)
 docker run --rm -e FLASK_SECRET_KEY="test" yourimage:latest
 
 # Test 2: Custom retry interval (should retry every 20s)
@@ -285,96 +217,32 @@ docker run --rm -e DDC_TOKEN_RETRY_INTERVAL=20 -e FLASK_SECRET_KEY="test" yourim
 docker run --rm -e DDC_TOKEN_RETRY_INTERVAL=10 -e DDC_TOKEN_MAX_RETRIES=3 -e FLASK_SECRET_KEY="test" yourimage:latest
 ```
 
-## macOS-Specific: Docker Socket Permissions
-
-**Problem:** On macOS with Docker Desktop, the Docker socket (`/var/run/docker.sock`) has GID 0 (root/wheel), not the docker group. This prevents the container from accessing the Docker API for container management.
-
-**Solution:** Add `--group-add 0` when running the container on macOS:
-
-```bash
-# macOS: Add --group-add 0 for Docker socket access
-docker run --rm \
-  --group-add 0 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -p 9374:9374 \
-  -e FLASK_SECRET_KEY="your-secret-key" \
-  yourimage:latest
-```
-
-**Why This Works:**
-- On macOS Docker Desktop, the socket is owned by `root:wheel` (GID 0)
-- The `ddc` user (UID 1000) inside the container needs to be in GID 0 to access the socket
-- `--group-add 0` adds the container user to the root/wheel group without changing the primary UID
-- This is **safe** because the container user is still non-root (UID 1000), just with socket access
-
-**Verification:**
-```bash
-# Test Docker API access on macOS
-docker run --rm --group-add 0 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  --entrypoint=python3 yourimage:latest -c "
-import docker
-client = docker.from_env()
-containers = client.containers.list()
-print(f'✅ Docker API works! Found {len(containers)} containers')
-"
-```
-
-**Linux vs macOS:**
-- **Linux:** Socket typically has docker group (GID 999 or similar) - no `--group-add` needed
-- **macOS:** Socket has root group (GID 0) - requires `--group-add 0`
-- **Container auto-detection:** The entrypoint script will warn if socket is inaccessible
-
 ## Expected Log Output
 
-**Bot (without token):**
 ```
+Starting DockerDiscordControl as user: ddc (UID: 1000, GID: 1000)
+...
+2025-11-19 19:31:50,689 INFO success: discord-bot entered RUNNING state
+2025-11-19 19:31:50,689 INFO success: web-ui entered RUNNING state
+...
 2025-11-19 19:31:51 CET - ddc.bot - ERROR - FATAL: Bot token not found or could not be decrypted.
 2025-11-19 19:31:51 CET - ddc.bot - ERROR - Please configure the bot token in the Web UI or check the configuration files.
 2025-11-19 19:31:51 CET - ddc.bot - WARNING - Retry 1: Waiting 60 seconds before next attempt...
 2025-11-19 19:31:51 CET - ddc.bot - INFO - ⏳ Retrying in 60 seconds...
 2025-11-19 19:32:01 CET - ddc.bot - INFO - ⏳ Retrying in 50 seconds...
-2025-11-19 19:32:11 CET - ddc.bot - INFO - ⏳ Retrying in 40 seconds...
 ...
 ```
 
-**Web-UI (should start normally):**
-```
-2025-11-19 19:31:50,689 INFO success: web-ui entered RUNNING state
-[2025-11-19 19:31:52 +0100] [15] [INFO] Starting gunicorn 23.0.0
-[2025-11-19 19:31:52 +0100] [15] [INFO] Listening at: http://0.0.0.0:9374
-```
+Note: Web-UI should have NO crash/restart messages after initial startup.
 
 ## Rollback Instructions
 
 If these changes cause issues, rollback by:
 
-1. Revert `bot.py` changes (remove retry loop, restore original token check that exits on failure)
-2. That's it - only one file changed!
-
-## Common Mistakes to Avoid
-
-❌ **WRONG:** Adding startup delays to Web-UI
-✅ **CORRECT:** Only modify bot.py retry logic
-
-❌ **WRONG:** Making Web-UI wait for Discord token
-✅ **CORRECT:** Web-UI starts immediately and always
-
-❌ **WRONG:** Complex startup scripts
-✅ **CORRECT:** Simple retry loop in bot.py only
-
-## Implementation Notes
-
-- **Three-file changes:** `bot.py`, `gunicorn_config.py`, and `container_status_service.py` need modification
-- **bot.py:** Add intelligent retry loop for missing Discord token
-- **gunicorn_config.py:** Fix missing import and exception handling for Docker connectivity
-- **container_status_service.py:** Add auto-cleanup for missing containers
-- **No Docker rebuild required:** Code changes only (unless using cached image layers)
-- **Backward compatible:** Works with existing configurations
-- **No breaking changes:** All existing functionality preserved
-- **Critical for production:**
-  - Without gunicorn_config.py fixes, Web-UI crashes on startup
-  - Without container_status_service.py fixes, logs are polluted with ERROR tracebacks
+1. Revert `bot.py` changes (remove retry loop, restore original token check)
+2. Delete `scripts/start_webui.sh`
+3. Restore original `supervisord.conf` (direct gunicorn command)
+4. Restore original Dockerfile (remove start_webui.sh references)
 
 ## Author
 
