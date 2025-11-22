@@ -39,7 +39,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: dockerdiscordcontrol/dockerdiscordcontrol
+          images: dockerdiscordcontrol/dockerdiscordcontrol-mac
           tags: |
             type=schedule
             type=ref,event=branch
@@ -49,7 +49,7 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=unraid,enable={{is_default_branch}}
+            type=raw,value=mac,enable={{is_default_branch}}
 
       - name: Build and push Universal (Alpine Optimized)
         uses: docker/build-push-action@v5
