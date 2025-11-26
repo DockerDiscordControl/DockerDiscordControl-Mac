@@ -83,6 +83,12 @@ def _ensure_timezone(runtime_logger: logging.Logger) -> None:
 def main() -> None:
     """Main entry point for the Discord bot."""
 
+    # Ensure event loop exists before creating bot (required for py-cord)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        _prepare_event_loop()
+
     configure_environment()
     config = load_main_configuration()
     runtime = build_runtime(config)
@@ -91,6 +97,10 @@ def main() -> None:
 
     bot = create_bot(runtime)
     register_event_handlers(bot, runtime)
+
+    # Set global bot instance for Web UI access
+    from services.scheduling.donation_message_service import set_bot_instance
+    set_bot_instance(bot)
 
     # Retry loop for missing token with countdown
     retry_interval = int(os.getenv("DDC_TOKEN_RETRY_INTERVAL", "60"))

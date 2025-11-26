@@ -13,6 +13,8 @@ Part of ConfigService refactoring for Single Responsibility Principle
 import logging
 from typing import Dict, Any, Tuple
 
+import discord
+
 logger = logging.getLogger('ddc.config_form_parser')
 
 
@@ -298,6 +300,34 @@ class ConfigFormParserService:
                 except (AttributeError, IOError, ImportError, KeyError, ModuleNotFoundError, OSError, PermissionError, RuntimeError, TypeError) as e:
                     logger.error(f"Error saving channels via ChannelConfigService: {e}", exc_info=True)
 
+            # Process heartbeat (Status Watchdog) settings
+            heartbeat_config = {}
+
+            # Get ping URL
+            ping_url = form_data.get('heartbeat_ping_url', '')
+            if isinstance(ping_url, str):
+                ping_url = ping_url.strip()
+
+            # Only enable if valid HTTPS URL is provided
+            if ping_url and ping_url.startswith('https://'):
+                heartbeat_config['enabled'] = True
+                heartbeat_config['ping_url'] = ping_url
+
+                # Get interval (default 5 minutes)
+                try:
+                    interval = int(form_data.get('heartbeat_interval', 5))
+                    heartbeat_config['interval'] = max(1, min(60, interval))  # Clamp 1-60
+                except (ValueError, TypeError):
+                    heartbeat_config['interval'] = 5
+            else:
+                heartbeat_config['enabled'] = False
+                heartbeat_config['ping_url'] = ''
+                heartbeat_config['interval'] = 5
+
+            updated_config['heartbeat'] = heartbeat_config
+            # Remove legacy fields if present
+            updated_config.pop('heartbeat_channel_id', None)
+
             # Process each form field
             for key, value in form_data.items():
                 # Skip server-related fields (already processed above)
@@ -310,6 +340,10 @@ class ConfigFormParserService:
                 if key.startswith('status_channel_') or key.startswith('control_channel_') or \
                    key.startswith('status_') or key.startswith('control_') or \
                    key.startswith('old_status_channel_') or key.startswith('old_control_channel_'):
+                    continue
+
+                # Skip heartbeat fields (already processed above)
+                if key in ['heartbeat_ping_url', 'heartbeat_interval', 'enableHeartbeatSection']:
                     continue
 
                 if key == 'donation_disable_key':

@@ -423,25 +423,18 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
 
             # Member count updates moved to on-demand (during level-ups only)
 
-            # Start heartbeat loop if enabled (supports legacy and new config)
+            # Start Status Watchdog loop if enabled
             heartbeat_enabled = False
             try:
-                # Prefer latest cached config (reflects Web UI changes)
                 latest_config = load_config() or {}
+                heartbeat_cfg = latest_config.get('heartbeat', {})
+                if isinstance(heartbeat_cfg, dict):
+                    heartbeat_enabled = bool(heartbeat_cfg.get('enabled', False))
+                    # Also check if ping_url is actually set
+                    if heartbeat_enabled and not heartbeat_cfg.get('ping_url', '').strip():
+                        heartbeat_enabled = False
             except (OSError, KeyError, ValueError):
-                latest_config = {}
-
-            # New format
-            heartbeat_cfg_obj = latest_config.get('heartbeat') if isinstance(latest_config, dict) else None
-            if isinstance(heartbeat_cfg_obj, dict):
-                heartbeat_enabled = bool(heartbeat_cfg_obj.get('enabled', False))
-
-            # Legacy enable if a numeric channel id exists at root
-            legacy_channel_id = (latest_config or self.config).get('heartbeat_channel_id')
-            if not heartbeat_enabled and legacy_channel_id is not None:
-                legacy_str = str(legacy_channel_id)
-                if legacy_str.isdigit():
-                    heartbeat_enabled = True
+                heartbeat_enabled = False
 
             if heartbeat_enabled:
                 heartbeat_task = self.bot.loop.create_task(
@@ -806,6 +799,98 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
 
     async def _start_periodic_message_edit_loop_safely(self):
         await self._start_loop_safely(self.periodic_message_edit_loop, "Periodic Message Edit Loop (Direct Cog)")
+
+    async def trigger_status_refresh(self, container_name: str, delay_seconds: int = 5):
+        """
+        Trigger a status refresh for a specific container after an action.
+        Called by AAS (Auto-Action System) after automated container actions.
+
+        Args:
+            container_name: Docker container name
+            delay_seconds: Delay before refresh (default 5s for container to stabilize)
+        """
+        async def _delayed_refresh():
+            try:
+                logger.info(f"[AAS_REFRESH] Waiting {delay_seconds}s before refreshing status for {container_name}")
+                await asyncio.sleep(delay_seconds)
+
+                # Invalidate caches
+                if self.status_cache_service.get(container_name):
+                    self.status_cache_service.remove(container_name)
+                    logger.info(f"[AAS_REFRESH] Invalidated StatusCacheService for {container_name}")
+
+                from services.infrastructure.container_status_service import get_container_status_service
+                container_status_service = get_container_status_service()
+                container_status_service.invalidate_container(container_name)
+                logger.info(f"[AAS_REFRESH] Invalidated ContainerStatusService for {container_name}")
+
+                # Find display_name for this container
+                config = load_config()
+                servers = config.get('servers', {})
+                display_name = None
+                server_config = None
+                for name, srv_config in servers.items():
+                    if srv_config.get('docker_name') == container_name:
+                        display_name = name
+                        server_config = srv_config
+                        break
+
+                if not display_name:
+                    logger.warning(f"[AAS_REFRESH] Container {container_name} not found in config")
+                    return
+
+                # Get fresh status
+                if server_config:
+                    fresh_status = await self.get_status(server_config)
+                    if fresh_status.success:
+                        self.status_cache_service.set(container_name, fresh_status, datetime.now(timezone.utc))
+
+                # Update tracked status messages (Server Overview individual containers)
+                if hasattr(self, 'tracked_status_messages'):
+                    for channel_id, messages in self.tracked_status_messages.items():
+                        for msg_data in messages:
+                            if msg_data.get('display_name') == display_name:
+                                try:
+                                    channel = self.bot.get_channel(channel_id)
+                                    if channel:
+                                        message = await channel.fetch_message(msg_data['message_id'])
+                                        if message:
+                                            embed, view, _ = await self._generate_status_embed_and_view(
+                                                channel_id, display_name, server_config, config,
+                                                allow_toggle=True, force_collapse=False, show_cache_age=False
+                                            )
+                                            if embed:
+                                                await message.edit(embed=embed, view=view)
+                                                logger.info(f"[AAS_REFRESH] Updated status message for {display_name}")
+                                except Exception as e:
+                                    logger.error(f"[AAS_REFRESH] Failed to update status message: {e}")
+
+                # Update overview messages (Server Overview collapsed view)
+                if hasattr(self, 'channel_server_message_ids'):
+                    for channel_id, server_messages in self.channel_server_message_ids.items():
+                        if 'overview' in server_messages:
+                            try:
+                                await self._update_overview_message(channel_id, server_messages['overview'], 'overview')
+                                logger.info(f"[AAS_REFRESH] Updated overview in channel {channel_id}")
+                            except Exception as e:
+                                logger.error(f"[AAS_REFRESH] Failed to update overview: {e}")
+
+                        # Also update admin_overview if exists
+                        if 'admin_overview' in server_messages:
+                            try:
+                                await self._update_overview_message(channel_id, server_messages['admin_overview'], 'admin_overview')
+                                logger.info(f"[AAS_REFRESH] Updated admin_overview in channel {channel_id}")
+                            except Exception as e:
+                                logger.error(f"[AAS_REFRESH] Failed to update admin_overview: {e}")
+
+                logger.info(f"[AAS_REFRESH] Status refresh complete for {container_name}")
+
+            except Exception as e:
+                logger.error(f"[AAS_REFRESH] Error refreshing status for {container_name}: {e}", exc_info=True)
+
+        # Run as background task
+        task = asyncio.create_task(_delayed_refresh())
+        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
     async def _clean_sweep_bot_messages(self, channel, reason: str):
         """Clean sweep: Delete all bot messages in channel using ChannelCleanupService."""
@@ -2383,13 +2468,15 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
                         ram_formatted = "—GB"
 
                     # Build single-line: "🟢 Name · cpu% • ramGB ⓘ"
-                    # Use middot (·) as separator, smaller info icon (ⓘ)
+                    # Use middot (·) as separator, ⓘ only if has info
                     container_line = f"{status_emoji} {truncated_name} · {cpu_formatted} • {ram_formatted}"
                     if has_info:
-                        container_line += " ⓘ"  # Small circled i
+                        container_line += " ⓘ"
                 else:
                     # Container is stopped: "🔴 Name · offline"
                     container_line = f"{status_emoji} {truncated_name} · {translate('offline')}"
+                    if has_info:
+                        container_line += " ⓘ"
 
                 # Add to container lines list
                 container_lines.append(container_line)
@@ -2407,7 +2494,7 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
                 # Single-line format: "🔄 Name"
                 container_line = f"{status_emoji} {truncated_name}"
                 if has_info:
-                    container_line += " ⓘ"  # Small circled i
+                    container_line += " ⓘ"
 
                 # Add to container lines list
                 container_lines.append(container_line)
@@ -2415,9 +2502,9 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
         # Format the counts in the header line
         header_lines[1] = translate("Container: {total} • Online: {online} • Offline: {offline}").format(total=total_containers, online=online_count, offline=offline_count)
 
-        # Build final description with spacing between container lines to handle ⓘ height differences
-        # Join container lines with double newline for consistent spacing (fixes mobile layout issue)
-        container_section = "\n\n".join(container_lines) if container_lines else ""
+        # Build final description with consistent spacing between container lines
+        # Use Hangul filler (ㅤ U+3164) on separator line to match ⓘ height
+        container_section = "\nㅤ\n".join(container_lines) if container_lines else ""
 
         # Combine header and container section
         embed.description = "\n".join(header_lines) + "\n\n" + container_section
@@ -2967,110 +3054,77 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
         """Edit-only update for /ss messages (used for expand/collapse)"""
         await self._auto_update_ss_messages(reason, force_recreate=False)
 
-    # --- Heartbeat Loop ---
-    @tasks.loop(minutes=1)
+    # --- Status Watchdog (Heartbeat) Loop ---
+    @tasks.loop(minutes=5)
     async def heartbeat_send_loop(self):
-        """[BETA] Sends a heartbeat signal if enabled in config.
+        """
+        Status Watchdog: Pings an external monitoring URL periodically.
 
-        This feature is in BETA and allows the bot to send periodic heartbeat messages
-        to a specified Discord channel. These messages can be monitored by an external
-        script to check if the bot is still operational.
+        This implements a "Dead Man's Switch" pattern - if DDC stops running,
+        the monitoring service (e.g., Healthchecks.io, Uptime Kuma) will detect
+        the missing ping and send an alert.
 
-        The heartbeat configuration is loaded from the bot's config and can be configured
-        through the web UI.
+        Security: Only outbound HTTPS requests, no tokens or data shared.
         """
         try:
-            # Load the heartbeat configuration from latest cache (fallback to initial config)
+            import aiohttp
+
+            # Load heartbeat configuration
             current_config = load_config() or self.config or {}
+            heartbeat_config = current_config.get('heartbeat', {})
 
-            # First check legacy format with 'heartbeat_channel_id' at root level
-            heartbeat_channel_id = current_config.get('heartbeat_channel_id')
-
-            # Initialize heartbeat config with defaults
-            heartbeat_config = {
-                'enabled': bool(str(heartbeat_channel_id).isdigit()) if heartbeat_channel_id is not None else False,
-                'method': 'channel',
-                'interval': 60,
-                'channel_id': heartbeat_channel_id
-            }
-
-            # Override with nested config if it exists (new format)
-            if 'heartbeat' in current_config:
-                nested_config = current_config.get('heartbeat', {})
-                if isinstance(nested_config, dict):
-                    heartbeat_config.update(nested_config)
-
-            # Check if heartbeat is enabled
-            if not heartbeat_config.get('enabled', False):
-                logger.debug("Heartbeat monitoring disabled in config.")
+            if not isinstance(heartbeat_config, dict):
                 return
 
-            # Get the heartbeat method and interval
-            method = heartbeat_config.get('method', 'channel')
-            try:
-                interval_minutes = int(heartbeat_config.get('interval', 60))
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid heartbeat interval, using default 60 minutes")
-                interval_minutes = 60
+            # Check if enabled
+            if not heartbeat_config.get('enabled', False):
+                return
 
-            # Dynamically change interval if needed
+            # Get ping URL
+            ping_url = heartbeat_config.get('ping_url', '').strip()
+            if not ping_url:
+                return
+
+            # Security: Only allow HTTPS
+            if not ping_url.startswith('https://'):
+                logger.warning("[Watchdog] Monitoring URL must use HTTPS - skipping ping")
+                return
+
+            # Get interval and update loop if needed
+            try:
+                interval_minutes = int(heartbeat_config.get('interval', 5))
+                interval_minutes = max(1, min(60, interval_minutes))  # Clamp 1-60
+            except (ValueError, TypeError):
+                interval_minutes = 5
+
             if self.heartbeat_send_loop.minutes != interval_minutes:
                 try:
                     self.heartbeat_send_loop.change_interval(minutes=interval_minutes)
-                    logger.info(f"[BETA] Heartbeat interval updated to {interval_minutes} minutes.")
-                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
-                    logger.error(f"[BETA] Failed to update heartbeat interval: {e}", exc_info=True)
+                    logger.info(f"[Watchdog] Interval updated to {interval_minutes} minutes")
+                except Exception as e:
+                    logger.warning(f"[Watchdog] Failed to update interval: {e}")
 
-            logger.debug("[BETA] Heartbeat loop running.")
+            # Ping the monitoring URL
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(ping_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 200:
+                            logger.debug(f"[Watchdog] Ping successful")
+                        else:
+                            logger.warning(f"[Watchdog] Ping returned status {resp.status}")
+            except aiohttp.ClientError as e:
+                logger.warning(f"[Watchdog] Ping failed: {e}")
+            except Exception as e:
+                logger.error(f"[Watchdog] Unexpected error during ping: {e}")
 
-            # Handle different heartbeat methods
-            if method == 'channel':
-                # Get the channel ID from either nested config or root config
-                channel_id_str = heartbeat_config.get('channel_id') or heartbeat_channel_id
-
-                if not channel_id_str:
-                    logger.error("[BETA] Heartbeat method is 'channel' but no channel_id is configured.")
-                    return
-
-                if not str(channel_id_str).isdigit():
-                    logger.error(f"[BETA] Heartbeat channel ID '{channel_id_str}' is not a valid numeric ID.")
-                    return
-
-                channel_id = int(channel_id_str)
-                try:
-                    # Fetch the channel
-                    channel = await self.bot.fetch_channel(channel_id)
-
-                    if not isinstance(channel, discord.TextChannel):
-                        logger.warning(f"[BETA] Heartbeat channel ID {channel_id} is not a text channel.")
-                        return
-
-                    # Send the heartbeat message with timestamp
-                    timestamp = datetime.now(timezone.utc).isoformat()
-                    await channel.send(_("❤️ Heartbeat signal at {timestamp}").format(timestamp=timestamp))
-                    logger.info(f"[BETA] Heartbeat sent to channel {channel_id}.")
-
-                except discord.NotFound:
-                    logger.error(f"[BETA] Heartbeat channel ID {channel_id} not found. Please check your configuration.")
-                except discord.Forbidden:
-                    logger.error(f"[BETA] Missing permissions to send heartbeat message to channel {channel_id}.")
-                except discord.HTTPException as http_err:
-                    logger.error(f"[BETA] HTTP error sending heartbeat to channel {channel_id}: {http_err}")
-                except (discord.errors.DiscordException, RuntimeError, OSError) as e:
-                    logger.error(f"[BETA] Error sending heartbeat to channel {channel_id}: {e}", exc_info=True)
-            elif method == 'api':
-                # API method is not implemented yet
-                logger.warning("[BETA] API heartbeat method is not yet implemented.")
-            else:
-                logger.warning(f"[BETA] Unknown heartbeat method specified in config: '{method}'. Supported methods: 'channel'")
-        except (discord.errors.DiscordException, RuntimeError, ValueError, OSError) as e:
-            logger.error(f"[BETA] Error in heartbeat_send_loop: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"[Watchdog] Error in heartbeat loop: {e}", exc_info=True)
 
     @heartbeat_send_loop.before_loop
     async def before_heartbeat_loop(self):
-       """Wait until the bot is ready before starting the heartbeat loop."""
-       await self.bot.wait_until_ready()
-       logger.info("[BETA] Heartbeat monitoring loop is ready to start.")
+        """Wait until the bot is ready before starting the watchdog loop."""
+        await self.bot.wait_until_ready()
+        logger.info("[Watchdog] Status monitoring loop ready")
 
     # --- Status Cache Update Loop ---
     @tasks.loop(seconds=30)
@@ -4366,92 +4420,83 @@ def setup(bot):
     async def check_donation_notifications():
         """Check for donation notifications from Web UI"""
         try:
-            import json
-            import os
-            notification_file = "/app/config/donation_notification.json"
+            # SERVICE FIRST: Use notification service instead of direct file access
+            from services.donation.notification_service import get_donation_notification_service
+            
+            service = get_donation_notification_service()
+            # This handles file check, reading, JSON parsing, and deletion atomically
+            notification = service.check_and_retrieve_notification()
 
-            logger.debug(f"Checking for donation notification file: {notification_file}")
+            if notification and notification.get('type') == 'donation':
+                donor_name = notification.get('donor', 'Anonymous')
+                amount = notification.get('amount', 0)
 
-            if os.path.exists(notification_file):
-                logger.info(f"Found donation notification file!")
-                with open(notification_file, 'r') as f:
-                    notification = json.load(f)
+                logger.info(f"🔔 Processing donation notification: {donor_name} ${amount}")
 
-                logger.info(f"🔔 Notification data: {notification}")
-
-                if notification.get('type') == 'donation':
-                    donor_name = notification.get('donor', 'Anonymous')
-                    amount = notification.get('amount', 0)
-
-                    logger.info(f"🔔 Processing donation notification: {donor_name} ${amount}")
-
+                try:
+                    # Create broadcast message (same as /donate) using configured Discord bot language
                     try:
-                        # Create broadcast message (same as /donate) using configured Discord bot language
-                        try:
-                            from cogs.translation_manager import get_translation
-                            _ = get_translation()
-                        except:
-                            # Fallback if translation fails
-                            def _(text):
-                                return text
+                        from cogs.translation_manager import get_translation
+                        _ = get_translation()
+                    except:
+                        # Fallback if translation fails
+                        def _(text):
+                            return text
 
-                        if amount:
-                            # Format amount exactly like /donate command: $X.XX
-                            formatted_amount = f"${float(amount):.2f}"
-                            broadcast_text = _("{donor_name} donated {amount} to DDC – thank you so much ❤️").format(
-                                donor_name=f"**{donor_name}**",
-                                amount=f"**{formatted_amount}**"
-                            )
-                        else:
-                            broadcast_text = _("{donor_name} supports DDC – thank you so much ❤️").format(
-                                donor_name=f"**{donor_name}**"
-                            )
-
-                        # Create embed (same style as /donate)
-                        embed = discord.Embed(
-                            title=_("💝 Donation received"),
-                            description=broadcast_text,
-                            color=0x00ff41
+                    if amount:
+                        # Format amount exactly like /donate command: $X.XX
+                        formatted_amount = f"${float(amount):.2f}"
+                        broadcast_text = _("{donor_name} donated {amount} to DDC – thank you so much ❤️").format(
+                            donor_name=f"**{donor_name}**",
+                            amount=f"**{formatted_amount}**"
                         )
-                        embed.set_footer(text="https://ddc.bot")
+                    else:
+                        broadcast_text = _("{donor_name} supports DDC – thank you so much ❤️").format(
+                            donor_name=f"**{donor_name}**"
+                        )
 
-                        logger.info(f"🔔 Created donation embed for {donor_name} ${amount}")
+                    # Create embed (same style as /donate)
+                    embed = discord.Embed(
+                        title=_("💝 Donation received"),
+                        description=broadcast_text,
+                        color=0x00ff41
+                    )
+                    embed.set_footer(text="https://ddc.bot")
 
-                        # Send to configured Status and Control channels from Web UI (like /donate command)
-                        sent_count = 0
-                        config = load_config()
-                        channels_config = config.get('channel_permissions', {})
+                    logger.info(f"🔔 Created donation embed for {donor_name} ${amount}")
 
-                        logger.info(f"🔔 Found {len(channels_config)} configured channels in Web UI")
+                    # Send to configured Status and Control channels from Web UI (like /donate command)
+                    sent_count = 0
+                    config = load_config()
+                    channels_config = config.get('channel_permissions', {})
 
-                        for channel_id_str, channel_info in channels_config.items():
-                            try:
-                                channel = bot.get_channel(int(channel_id_str))
-                                donation_broadcasts = channel_info.get('donation_broadcasts', True)
+                    logger.info(f"🔔 Found {len(channels_config)} configured channels in Web UI")
 
-                                logger.info(f"🔔 Channel {channel_id_str}: found={channel is not None}, broadcasts={donation_broadcasts}")
+                    for channel_id_str, channel_info in channels_config.items():
+                        try:
+                            channel = bot.get_channel(int(channel_id_str))
+                            donation_broadcasts = channel_info.get('donation_broadcasts', True)
 
-                                if channel and donation_broadcasts:
-                                    await channel.send(embed=embed)
-                                    sent_count += 1
-                                    logger.info(f"🔔 Successfully sent to channel {channel.name} ({channel_id_str})")
-                                else:
-                                    if not channel:
-                                        logger.debug(f"🔔 Channel {channel_id_str} not found")
-                                    elif not donation_broadcasts:
-                                        logger.debug(f"🔔 Donation broadcasts disabled for {channel_id_str}")
-                            except (discord.errors.DiscordException, RuntimeError) as channel_error:
-                                logger.error(f"🔔 Error sending to channel {channel_id_str}: {channel_error}", exc_info=True)
+                            logger.info(f"🔔 Channel {channel_id_str}: found={channel is not None}, broadcasts={donation_broadcasts}")
 
-                        logger.info(f"🔔 Processed Web UI donation: {donor_name} ${amount} - sent to {sent_count} channels")
+                            if channel and donation_broadcasts:
+                                await channel.send(embed=embed)
+                                sent_count += 1
+                                logger.info(f"🔔 Successfully sent to channel {channel.name} ({channel_id_str})")
+                            else:
+                                if not channel:
+                                    logger.debug(f"🔔 Channel {channel_id_str} not found")
+                                elif not donation_broadcasts:
+                                    logger.debug(f"🔔 Donation broadcasts disabled for {channel_id_str}")
+                        except (discord.errors.DiscordException, RuntimeError) as channel_error:
+                            logger.error(f"🔔 Error sending to channel {channel_id_str}: {channel_error}", exc_info=True)
 
-                    except (discord.errors.DiscordException, RuntimeError, ValueError) as embed_error:
-                        logger.error(f"🔔 Error creating/sending donation embed: {embed_error}", exc_info=True)
+                    logger.info(f"🔔 Processed Web UI donation: {donor_name} ${amount} - sent to {sent_count} channels")
 
-                # Delete file after processing
-                os.remove(notification_file)
+                except (discord.errors.DiscordException, RuntimeError, ValueError) as embed_error:
+                    logger.error(f"🔔 Error creating/sending donation embed: {embed_error}", exc_info=True)
 
-        except (OSError, ValueError, RuntimeError) as e:
+        except (ImportError, AttributeError, RuntimeError) as e:
             logger.debug(f"Error checking donation notifications: {e}")
 
     # Start the task and add to cog

@@ -1,38 +1,40 @@
-# DockerDiscordControl for macOS v2.0 🍎
+# DockerDiscordControl v2.1 🐳
 
-Control your Docker containers directly from Discord on macOS! This Mac-native version provides a Discord bot and web interface specifically optimized for **macOS systems** with **Docker Desktop integration** and **Apple Silicon + Intel compatibility**.
+[![Version](https://img.shields.io/badge/Version-v2.1.0-brightgreen?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/releases/tag/v2.1.0) [![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org) [![Base Image](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#-ultra-optimized-alpine-image) [![Tests](https://img.shields.io/badge/Tests-Passing-success?style=for-the-badge)](#-testing--quality-assurance) [![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen?style=for-the-badge)](#-testing--quality-assurance) [![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol?style=for-the-badge)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol) [![Unraid](https://img.shields.io/badge/Unraid-Community%20Apps-orange?style=for-the-badge)](./docs/UNRAID.md) [![Wiki](https://img.shields.io/badge/Documentation-Wiki-lightgrey?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/wiki)
+
+A powerful Discord bot and web interface to manage Docker containers remotely. This application bridges the gap between Discord and your Docker environment, allowing container monitoring and control directly through Discord channels.
+
+**Homepage:** [https://ddc.bot](https://ddc.bot) | **[Complete Documentation](../../wiki)**
+
+Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with a focus on stability, security, and performance. The default image is an ultra-optimized Alpine Linux build with the latest security patches and enhanced performance.
+
+## 🆕 Latest Updates
+
+### ✅ **v2.1.0 (2025-11-26) - Auto-Action System & Status Watchdog**
+
+🤖 **Auto-Action System (AAS) - Intelligent Container Automation:**
+- **NEW:** 🎮 **Game Server Auto-Updates** - Your Minecraft/Valheim/Palworld server restarts automatically when update bots announce new versions. No more manual restarts!
+- **NEW:** 🔗 **Universal Webhook Control** - Trigger container actions from ANY external event: CI/CD pipelines, monitoring alerts, GitHub Actions, home automation, or custom scripts
+- **NEW:** 📝 **Flexible Triggers** - Match Discord messages by keywords (with fuzzy search) or regex patterns
+- **NEW:** 🛡️ **Built-in Safety** - Cooldowns prevent spam, protected containers can't be accidentally stopped, atomic locking ensures clean operations
+- **🔒 Zero Attack Surface** - DDC only makes outbound connections to Discord - no open ports, no exposed APIs! External triggers flow through Discord's secure infrastructure. Full automation power without exposing Docker or your network.
+
+🔔 **Status Watchdog (Dead Man's Switch):**
+- **NEW:** Get alerts when DDC goes offline via external monitoring
+- **NEW:** Simple setup - just paste a URL from Healthchecks.io or Uptime Kuma
+- **SECURE:** Only outbound HTTPS pings - no tokens shared, no incoming connections
+- Compatible with 20+ monitoring services
+
+🏗️ **Architecture Improvements:**
+- **IMPROVED:** Single-process architecture (removed supervisord & gunicorn)
+- **IMPROVED:** 65% RAM reduction - from ~200MB to 60-70MB typical usage
+- **IMPROVED:** Unified logging system with consistent formatting
+- **IMPROVED:** Service-first architecture with single point of truth
+- Cleaner codebase with reduced complexity
 
 ---
 
-## 💖 **Support DDC Development**
-
-**Help keep DockerDiscordControl growing and improving across all platforms!**
-
-<div align="center">
-
-[![Buy Me A Coffee](https://img.shields.io/badge/☕_Buy_Me_A_Coffee-Support_DDC-orange?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white)](https://buymeacoffee.com/dockerdiscordcontrol)
-&nbsp;&nbsp;&nbsp;
-[![PayPal Donation](https://img.shields.io/badge/💝_PayPal_Donation-Support_DDC-blue?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/dockerdiscordcontrol)
-
-**Your support helps maintain DDC across Windows, Linux, macOS, and Universal versions!**
-
-</div>
-
----
-
-**Homepage:** [DDC for Mac](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac) | **Main Project:** [DockerDiscordControl](https://github.com/DockerDiscordControl/DockerDiscordControl)
-
-[![Version](https://img.shields.io/badge/version-v2.0.0-brightgreen.svg?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-green.svg?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/blob/main/LICENSE)
-[![macOS Optimized](https://img.shields.io/badge/macOS-Docker_Desktop-blue.svg?style=for-the-badge)](#performance-metrics)
-[![Apple Silicon](https://img.shields.io/badge/Apple_Silicon-M1_M2_M3_M4-orange.svg?style=for-the-badge)](#installation)
-[![Memory Optimized](https://img.shields.io/badge/RAM-<200MB-green.svg?style=for-the-badge)](#performance-metrics)
-[![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org)
-[![Alpine](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#docker-hub-repository)
-
-## 🆕 Latest Updates - v2.0.0 (2025-11-19)
-
-### ✅ **MAJOR UPDATE - Complete Rewrite for macOS**
+### ✅ **v2.0.0 (2025-11-18) - MAJOR UPDATE - Complete Rewrite**
 
 🎮 **EVERYTHING via Discord - Complete Control:**
 - **NEW:** Live Logs Viewer - Monitor container output in real-time directly in Discord
@@ -49,7 +51,7 @@ Control your Docker containers directly from Discord on macOS! This Mac-native v
 
 🤖 **Mech Evolution System:**
 - **NEW:** 11-stage Mech Evolution with animated WebP graphics
-- Continuous power decay system for fair donation tracking
+- Continuous power decay system (minutengenau) for fair donation tracking
 - Premium key system for power users
 - Visual feedback with stage-specific animations and particle effects
 
@@ -59,12 +61,6 @@ Control your Docker containers directly from Discord on macOS! This Mac-native v
 - Smart queue system with fair request processing
 - Operation-specific timeout optimization
 
-🍎 **macOS-Specific Optimizations:**
-- **Native Docker Desktop Integration:** Optimized socket handling for macOS
-- **Universal Binary Support:** Full M1/M2/M3/M4 and Intel Mac compatibility
-- **Resource Efficiency:** <200MB RAM usage, tuned for macOS resource patterns
-- **Alpine Linux 3.22.2:** Ultra-lightweight base with 94% fewer vulnerabilities
-
 🎨 **Modern UI/UX Overhaul:**
 - **IMPROVED:** Beautiful Discord embeds with consistent styling
 - Advanced spam protection with configurable cooldowns
@@ -73,45 +69,63 @@ Control your Docker containers directly from Discord on macOS! This Mac-native v
 
 🔒 **Security & Optimization:**
 - **IMPROVED:** Alpine Linux 3.22.2 base (94% fewer vulnerabilities)
-- Ultra-compact multi-stage Docker build (<200MB RAM usage)
+- Ultra-compact image (<200MB RAM usage)
 - Production-ready security hardening
 - Enhanced token encryption and validation
 
-**🚀 Ready for production on any macOS system with Docker Desktop!**
+🐛 **Critical Fixes:**
+- **FIXED:** Port mapping consistency (9374) for Unraid deployment
+- Interaction timeout issues with defer() pattern
+- Container control reliability improvements
+- Web UI configuration persistence
+
+**🚀 Ready for Unraid Community Applications! Now with Auto-Action System for automatic updates and Status Watchdog for offline alerts!**
+
+## Platform Selection
+
+**DockerDiscordControl is now available with platform-optimized versions!**
+
+| Platform | Repository | Description | Best For |
+|----------|------------|-------------|----------|
+| **Windows** | **[DockerDiscordControl-Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)** | Windows Docker Desktop optimized | Windows 10/11 + Docker Desktop |
+| **Linux** | **[DockerDiscordControl-Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)** | Native Linux optimization | Ubuntu, Debian, CentOS, RHEL |
+| **macOS** | **[DockerDiscordControl-Mac](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)** | Apple Silicon & Intel Mac optimized | macOS + Docker Desktop |
+| **Universal** | **[DockerDiscordControl](https://github.com/DockerDiscordControl/DockerDiscordControl)** *(this repo)* | Multi-platform, Unraid focus | Unraid, NAS, servers |
+
+### Quick Platform Selection:
+
+- **Windows Users** → [**Windows Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows) *(PowerShell scripts, WSL2 optimized)*
+- **Linux Users** → [**Linux Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux) *(Native systemd, package managers)*  
+- **macOS Users** → [**Mac Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac) *(Apple Silicon + Intel, Homebrew)*
+- **Unraid/NAS Users** → **Use this repository** *(Universal, Community Apps support)*
 
 ---
 
-## 🐳 Docker Hub Repository
+## v1.1.2-alpine: Ultra-Optimized & Secure
 
-**Mac-Optimized Image:** `dockerdiscordcontrol/dockerdiscordcontrol-mac`
-
-This repository publishes **only** the Mac-optimized Alpine-based image, specifically tuned for:
-- Apple Silicon (M1/M2/M3/M4) and Intel Mac compatibility
-- macOS Docker Desktop integration
-- Optimal resource usage on macOS systems
-- Native macOS Docker socket handling
-
-**Other Platform Images:**
-- **Universal/Unraid**: `dockerdiscordcontrol/dockerdiscordcontrol`
-- **Windows**: `dockerdiscordcontrol/dockerdiscordcontrol-windows`
-- **Linux**: `dockerdiscordcontrol/dockerdiscordcontrol-linux`
-
----
-
-## 🚀 Revolutionary macOS Performance
-
-**Major Mac-Specific Optimizations Delivered:**
-
-- **Docker Desktop Integration**: Native macOS Docker Desktop support with <200MB typical RAM usage
-- **Universal Binary Support**: Optimized for both Apple Silicon (M1/M2/M3/M4) and Intel Macs
-- **macOS Native Features**: Homebrew integration and native macOS management
-- **Resource Efficiency**: Tuned specifically for macOS resource management patterns
-- **Alpine Optimization**: Ultra-lightweight Alpine Linux 3.22.2 base for maximum efficiency
-- **Multi-Stage Build**: Optimized Docker build process reducing image size by 78%
-
----
+**Release v1.1.2-alpine brings massive performance improvements with an ultra-optimized Alpine Linux image.**
+- **78% Size Reduction**: From 924MB to ~200MB - ultra-optimized Alpine Linux 3.22.2
+- **Latest Security Patches**: Upgraded to Flask 3.1.1 and Werkzeug 3.1.3 to resolve all critical and high-severity CVEs
+- **Enhanced Performance**: Faster startup times and reduced memory footprint
+- **Docker Socket Fixes**: Resolved permissions and volume mount issues
+- **Complete Functionality**: All features preserved while dramatically reducing resource usage
 
 ## Features - EVERYTHING via Discord! 🚀
+
+### 🤖 Auto-Action System (AAS) - Intelligent Container Automation
+- **🎮 Game Server Auto-Updates**: Palworld, Valheim, Minecraft, or any game server - automatically restart when Discord update bots announce new versions. Set it and forget it!
+- **🔗 Universal Webhook Control**: Control containers from ANY external system - CI/CD pipelines (Jenkins, GitLab), monitoring alerts (Grafana, Prometheus), GitHub Actions, Home Assistant, IFTTT, or your own scripts. One webhook URL, endless possibilities!
+- **🔒 Zero Attack Surface**: DDC only makes outbound connections to Discord - no open ports, no exposed APIs, no attack surface! All automation flows through Discord's secure infrastructure. Your Docker socket and network stay completely protected.
+- **📝 Flexible Triggers**: Match Discord messages by keywords ("update available", "new version") with optional fuzzy matching, or use regex for complex patterns
+- **🛡️ Built-in Safety**: Cooldowns prevent trigger spam, mark containers as protected to prevent accidental stops, atomic locking ensures clean operations
+- **🎯 Multi-Container Actions**: Restart your entire game server stack (game + database + proxy) with a single trigger
+
+### 🔔 Status Watchdog
+- **Dead Man's Switch**: Get alerts when DDC goes offline
+- **External Monitoring**: Works with Healthchecks.io, Uptime Kuma, Cronitor, and more
+- **Secure Design**: Only outbound HTTPS pings - no tokens shared, no incoming connections
+- **Simple Setup**: Just paste a monitoring URL from your preferred service
+- **Flexible Intervals**: Configure ping frequency from 1-60 minutes
 
 ### 🎮 Discord Container Control
 - **Start, Stop, Restart** individual containers or **ALL containers at once**
@@ -151,82 +165,170 @@ This repository publishes **only** the Mac-optimized Alpine-based image, specifi
 ### ⚡ Performance & Optimization
 - **16x Faster Docker Cache**: Optimized from 500ms to 31ms response time
 - **7x Faster Processing**: Through async optimization and smart queue system
-- **Alpine Linux 3.22.2**: 94% fewer vulnerabilities, less than 200MB RAM usage
+- **Ultra-Low Memory**: Only 60-70MB RAM usage (65% reduction in v2.1.0)
+- **Alpine Linux 3.22.2**: 94% fewer vulnerabilities, minimal footprint
 - **Production Ready**: Supports 50 containers across 15 Discord channels
 - **Intelligent Caching**: Background refresh for real-time data
 
----
+**New in v1.1.2-alpine:** The default build is now an ultra-optimized ~200MB Alpine Linux image with 78% size reduction while maintaining full functionality and improving security.
 
-## 🛠️ Quick Installation
+**Latest Updates:** Upgraded to Flask 3.1.1 and Werkzeug 3.1.3, resolved all security vulnerabilities, and achieved massive optimization with Alpine Linux 3.22.2 base image.
 
-### **Prerequisites**
+## 🧪 Testing & Quality Assurance
 
-1. **macOS System**: macOS 10.15+ (Catalina or later)
-2. **Docker Desktop**: [Install Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/)
-3. **Discord Bot**: [Create a Discord Bot](https://github.com/DockerDiscordControl/DockerDiscordControl/wiki/Discord‐Bot‐Setup)
+DockerDiscordControl maintains **80% test coverage** with comprehensive automated testing:
 
-### **Method 1: Docker Hub Installation (Recommended)**
+### Test Suites
+- **Unit Tests**: Service-level testing for core business logic
+- **Integration Tests**: End-to-end workflow validation
+- **Performance Tests**: Benchmarking and profiling with Locust
+- **Security Tests**: Static Analysis Security Testing (SAST) with bandit & semgrep
+
+### Continuous Integration
+All code changes are automatically validated through GitHub Actions:
+- ✅ **Automated Testing** - pytest with 80% coverage requirement
+- ✅ **Code Quality** - pylint, flake8, mypy type checking
+- ✅ **Security Scanning** - bandit, semgrep, safety dependency checks
+- ✅ **Performance Benchmarks** - Automated performance regression testing
+
+### Running Tests Locally
 
 ```bash
-# Pull the Mac-optimized image
-docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+# Install test dependencies
+pip install -r requirements-test.txt
+
+# Run all tests
+pytest
+
+# Run with coverage report
+pytest --cov=services --cov=app --cov=utils --cov-report=html
+
+# Open coverage report
+open htmlcov/index.html
+```
+
+### Development Branch
+
+For active development with additional debug tools and utilities, check out the `v2.0` branch:
+
+```bash
+git checkout v2.0
+```
+
+The `v2.0` development branch includes:
+- Additional debug scripts (`debug_*.py`)
+- Fix utilities (`fix_*.sh`)
+- Ad-hoc testing tools
+- Development documentation
+
+The `main` branch contains production-ready code with comprehensive test infrastructure.
+
+## ⚠️ Deployment Security
+
+**Important:** DDC is designed for **private network deployment** (LAN/VPN).
+
+- ✅ **Safe:** Deploy on private networks (192.168.x.x, 10.x.x.x) behind firewall
+- ✅ **Safe:** Access via VPN (Tailscale, WireGuard, OpenVPN)
+- ⚠️ **Not recommended:** Direct internet exposure without additional security
+
+**If you need internet access:**
+- Use a reverse proxy (nginx, Traefik, Caddy) with HTTPS
+- Enable additional authentication (OAuth, SSO)
+- Consider VPN access instead of public exposure
+
+DDC includes HTTP Basic Auth and rate limiting, but these are designed for trusted network environments.
+
+## 🚀 Quick Start
+
+### **Platform-Specific Installation (Recommended)**
+
+**Choose your platform for optimized experience:**
+
+#### **Windows Users**
+Visit: **[DockerDiscordControl-Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)**
+```powershell
+# Clone Windows-optimized version
+git clone https://github.com/DockerDiscordControl/DockerDiscordControl-Windows.git
+cd DockerDiscordControl-Windows
+# Follow Windows-specific setup guide
+```
+
+#### **Linux Users** 
+Visit: **[DockerDiscordControl-Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)**
+```bash
+# Clone Linux-optimized version
+git clone https://github.com/DockerDiscordControl/DockerDiscordControl-Linux.git
+cd DockerDiscordControl-Linux
+# Follow Linux-specific setup guide
+```
+
+#### **macOS Users**
+Visit: **[DockerDiscordControl-Mac](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)**
+```bash
+# Clone Mac-optimized version  
+git clone https://github.com/DockerDiscordControl/DockerDiscordControl-Mac.git
+cd DockerDiscordControl-Mac
+# Follow macOS-specific setup guide
+```
+
+---
+
+### **Universal Installation (Unraid & Servers)**
+
+**For Unraid, NAS systems, and server deployments:**
+
+#### Prerequisites
+
+1. **Create Discord Bot**: [Bot Setup Guide](../../wiki/Discord‐Bot‐Setup)
+2. **Docker**: [Install Docker](https://docs.docker.com/engine/install/) + [Docker Compose](https://docs.docker.com/compose/install/)
+
+#### Installation Methods
+
+**Method 1: Docker Compose (Recommended)**
+
+```bash
+# Clone repository
+git clone https://github.com/DockerDiscordControl/DockerDiscordControl.git
+cd DockerDiscordControl
 
 # Create directories
-mkdir -p config logs
+mkdir config logs
 
 # Create .env file with secure secret key
 echo "FLASK_SECRET_KEY=$(openssl rand -hex 32)" > .env
 
-# Run with docker compose
-docker compose up -d
+# Start container
+docker compose up --build -d
 ```
 
-### **Method 2: Docker Run (Direct)**
+**Method 2: Docker Hub (Direct)**
 
 ```bash
-# Run directly with Docker (macOS requires --group-add 0 for Docker socket access)
+# Pull and run latest Alpine-optimized image
 docker run -d --name ddc \
-  --group-add 0 \
   -p 9374:9374 \
-  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -v ./config:/app/config \
   -v ./logs:/app/logs \
   -e FLASK_SECRET_KEY="$(openssl rand -hex 32)" \
   --restart unless-stopped \
-  dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+  dockerdiscordcontrol/dockerdiscordcontrol:latest
 ```
 
-**⚠️ macOS Important:** The `--group-add 0` flag is **required** on macOS for Docker socket access. Docker Desktop for Mac uses GID 0 (root/wheel) for the socket, not the docker group like on Linux.
+**Method 3: Unraid (Recommended for Unraid users)**
+- Install via **Community Applications**
+- Search for "DockerDiscordControl"
+- **One-click install** with pre-configured paths
+- [📖 Detailed Unraid Setup](docs/UNRAID.md)
 
-### **Method 3: Build from Source**
-
-```bash
-# Clone the repository
-git clone https://github.com/DockerDiscordControl/DockerDiscordControl-Mac.git
-cd DockerDiscordControl-Mac
-
-# Create directories
-mkdir -p config logs
-
-# Create .env file
-echo "FLASK_SECRET_KEY=$(openssl rand -hex 32)" > .env
-
-# Build and start
-docker compose up --build -d
-```
-
----
-
-## 🔧 Configuration
-
-### **First-Time Setup**
+#### First-Time Setup
 
 **🚀 Easy Web Setup (Recommended)**
 
-1. **Access Web UI**: `http://localhost:9374`
+1. **Access Web UI**: `http://<your-server-ip>:9374`
 2. **Setup Options**:
    - **Method 1**: Visit `/setup` for guided web setup
-   - **Method 2**: Use temporary credentials: `admin` / `setup`
+   - **Method 2**: Use temporary credentials: `admin` / `setup` 
    - **Method 3**: Set `DDC_ADMIN_PASSWORD=your_password` before starting
 
 3. **Complete Setup**: Configure bot token, Guild ID, container permissions
@@ -234,90 +336,196 @@ docker compose up --build -d
 
 **Security Note**: Default password is 'setup' for initial access. MUST be changed immediately after first login for security!
 
-### **Environment Variables**
+**Upgrade from v1.1.3D**: Automatic migration! Your existing `config.json` will be automatically split into modular files and backed up. No manual action required.
 
-#### Security & Authentication
+## Environment Variables
+
+### Security & Authentication
+
+**🔐 Password Setup Options:**
 
 ```bash
 # Option 1: Set admin password before first start (Recommended)
 DDC_ADMIN_PASSWORD=your_secure_password_here
 
 # Option 2: Use temporary credentials for web setup
-# Visit http://localhost:9374 and login with: admin / setup
+# Visit http://your-server:9374 and login with: admin / setup
+# Then complete setup through the web interface
 
 # Flask security (auto-generated if not provided)
 FLASK_SECRET_KEY=your-64-character-random-secret-key
 ```
 
-#### Performance Optimization (New in v2.0)
+**Important**: The default password is 'setup' for security setup. You MUST change this immediately after first login. For production deployments, set DDC_ADMIN_PASSWORD before first start.
 
+### Performance Optimization Variables (New in 2025)
+
+DDC now includes advanced performance optimization settings that can be configured via environment variables:
+
+#### Memory Optimization
 ```bash
-# Docker Cache Settings
-DDC_MAX_CACHED_CONTAINERS=100          # Maximum containers in cache
-DDC_DOCKER_CACHE_DURATION=45           # Cache duration in seconds
-DDC_ENABLE_BACKGROUND_REFRESH=true     # Enable background refresh
+# Docker Cache Settings - Optimized for 1-minute Web UI updates
+DDC_MAX_CACHED_CONTAINERS=100          # Maximum containers in cache (default: 100)
+DDC_DOCKER_CACHE_DURATION=45           # Cache duration in seconds (default: 45, supports 1-min updates)
+DDC_DOCKER_MAX_CACHE_AGE=90            # Maximum cache age before forced refresh (default: 90)
+DDC_CACHE_CLEANUP_INTERVAL=300         # Memory cleanup interval in seconds (default: 300)
 
-# Web Server Settings
-GUNICORN_WORKERS=2                     # Number of worker processes
-GUNICORN_TIMEOUT=45                    # Request timeout
+# Background Refresh Settings - CRITICAL for 1-minute Web UI updates
+DDC_ENABLE_BACKGROUND_REFRESH=true     # Enable background Docker cache refresh (default: true)
+DDC_BACKGROUND_REFRESH_INTERVAL=30     # Background refresh interval (default: 30, required for 1-min updates)
 ```
 
-See the [Main Documentation](https://github.com/DockerDiscordControl/DockerDiscordControl#environment-variables) for complete environment variable reference.
+#### CPU Optimization
+```bash
+# Scheduler Service Settings
+DDC_SCHEDULER_CHECK_INTERVAL=120       # Scheduler check interval in seconds (default: 120)
+DDC_MAX_CONCURRENT_TASKS=3             # Maximum concurrent tasks (default: 3)
+DDC_TASK_BATCH_SIZE=5                  # Task batch processing size (default: 5)
+```
 
----
+#### Web Server Optimization
+```bash
+# Gunicorn Settings
+GUNICORN_WORKERS=2                     # Number of worker processes (default: adaptive 1-3)
+GUNICORN_MAX_REQUESTS=300              # Requests per worker before recycling (default: 300)
+GUNICORN_MAX_REQUESTS_JITTER=30        # Random jitter for worker recycling (default: 30)
+GUNICORN_TIMEOUT=45                    # Request timeout in seconds (default: 45)
+GUNICORN_LOG_LEVEL=info                # Logging level (default: info)
+```
 
-## 🍎 macOS-Specific Features
+#### Cache Control
+```bash
+# Configuration Cache
+DDC_CONFIG_CACHE_AGE_MINUTES=15        # Config cache age in minutes (default: 15)
 
-### **Apple Silicon Optimization**
-- Full native support for M1, M2, M3, and M4 chips
-- Optimized ARM64 binary compilation
-- No Rosetta 2 translation required
+# Docker Query Settings
+DDC_DOCKER_QUERY_COOLDOWN=1.0          # Minimum time between Docker API requests (default: 1.0)
+```
 
-### **Intel Mac Compatibility**
-- Full x86_64 support for Intel-based Macs
-- Same feature set as Apple Silicon
+### Performance Monitoring
 
-### **Docker Desktop Integration**
-- Native macOS Docker socket handling at `/var/run/docker.sock`
-- Optimized for Docker Desktop's macOS-specific architecture
-- Seamless integration with Docker Desktop GUI
+Access real-time performance statistics via the Web UI at `/performance_stats` (requires authentication). This endpoint provides:
 
-### **Resource Management**
-- Tuned for macOS memory management patterns
-- Minimal CPU usage optimized for battery life
-- <200MB RAM footprint for efficient operation
+- **Memory Usage**: RAM consumption of all components
+- **Cache Statistics**: Hit/miss ratios and cleanup times
+- **System Resources**: CPU, memory, and thread monitoring
+- **Scheduler Stats**: Task execution and batching metrics
 
----
+### Recommended Settings by Deployment Size
 
-## 📊 Performance Metrics
+#### Small Deployment (1-2 CPU cores, <2GB RAM)
+```bash
+GUNICORN_WORKERS=1
+DDC_MAX_CACHED_CONTAINERS=50
+DDC_SCHEDULER_CHECK_INTERVAL=180
+DDC_MAX_CONCURRENT_TASKS=2
+```
 
-**macOS Docker Desktop Performance (v2.0):**
+#### Medium Deployment (2-4 CPU cores, 2-4GB RAM)
+```bash
+GUNICORN_WORKERS=2
+DDC_MAX_CACHED_CONTAINERS=100
+DDC_SCHEDULER_CHECK_INTERVAL=120
+DDC_MAX_CONCURRENT_TASKS=3
+```
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| **RAM Usage** | <200MB | Typical production usage |
-| **Startup Time** | <5s | Cold start to ready |
-| **Docker Cache** | 31ms | 16x faster than v1.x |
-| **Container Processing** | 7x faster | Async optimization |
-| **Image Size** | 176MB | Multi-stage Alpine build |
-| **Vulnerabilities** | 0 Critical/High | Alpine 3.22.2 + latest deps |
+#### Large Deployment (4+ CPU cores, 4GB+ RAM)
+```bash
+GUNICORN_WORKERS=3
+DDC_MAX_CACHED_CONTAINERS=200
+DDC_SCHEDULER_CHECK_INTERVAL=90
+DDC_MAX_CONCURRENT_TASKS=5
+```
 
----
+### Ultra-Optimized Alpine Image
 
-## 🔒 Security Notice
+The default build for this repository is now the stable, optimized Alpine image. To build it locally, simply use the standard rebuild script:
+
+```bash
+# This script now uses the optimized Dockerfile by default
+./scripts/rebuild.sh
+```
+
+**Optimization Features:**
+- **~50% smaller image size** compared to older Debian-based builds.
+- **Stable and reliable** single-stage Docker build process.
+- **Minimal runtime dependencies** - only essential packages included.
+- **Production-only requirements** - testing dependencies excluded.
+- **Latest security patches** for all dependencies.
+
+**Important Cache Timing**: The Docker cache is updated every 30 seconds with a 45-second cache duration to ensure fresh data for users who set 1-minute update intervals in the Web UI. This timing is critical for maintaining data freshness at the minimum supported interval.
+
+**Note**: All Web UI configuration options remain fully functional regardless of these performance optimizations. The interval frequency settings and all other configuration capabilities are preserved and unaffected.
+
+## 🐳 Docker Images
+
+**Ultra-optimized Alpine Linux image:**
+- **Size:** 176MB with multi-stage build optimization
+- **Base:** Alpine Linux 3.22.2 (latest secure version)  
+- **Architecture:** Service-oriented modular design (v2.0)
+- **Security:** Latest dependencies with all CVEs fixed
+- **Performance:** Optimized for minimal resource usage and fast startup
+
+```bash
+docker pull dockerdiscordcontrol/dockerdiscordcontrol:latest
+```
+
+## System Requirements
+
+### **Minimum Requirements**
+- **CPU**: 1 core (1.5 cores recommended)
+- **RAM**: 60-70MB typical usage (65% reduction in v2.1.0)
+- **Storage**: 100MB for application + config/logs space
+- **Docker**: Docker Engine 20.10+ and Docker Compose 2.0+
+
+### **Production Limits**
+- **Maximum Containers**: 50 Docker containers
+- **Maximum Channels**: 15 Discord channels  
+- **Concurrent Operations**: 10 pending Docker actions
+- **Cache Size**: 50 status entries with intelligent cleanup
+
+### **Platform Support**
+
+#### **🔧 This Universal Repository**
+- **Unraid**: Native Community Applications support ⭐
+- **Linux Servers**: x86_64, ARM64 (Raspberry Pi)
+- **Docker**: Swarm, Compose, Standalone
+- **NAS**: Synology, QNAP, TrueNAS
+
+#### **🎯 Platform-Optimized Repositories**
+- **🪟 [Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)**: Docker Desktop, WSL2, PowerShell integration
+- **🐧 [Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)**: Native systemd, package managers, distributions
+- **🍎 [macOS](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)**: Apple Silicon, Intel, Homebrew, Docker Desktop
+
+## Documentation
+
+| Topic | Description |
+|-------|-------------|
+| [Installation Guide](../../wiki/Installation‐Guide) | Detailed setup for all platforms |
+| [Configuration](../../wiki/Configuration) | Web UI, permissions, channels |
+| [Auto-Action System](../../wiki/Auto‐Action‐System) | Automatic triggers, keywords, regex, webhooks |
+| [Status Watchdog](../../wiki/Status‐Watchdog) | Dead Man's Switch monitoring setup |
+| [Task System](../../wiki/Task‐System) | Automated scheduling system |
+| [Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
+| [Alpine Migration](../../wiki/Alpine‐Linux‐Migration) | Benefits, security, optimization |
+| [Memory Optimization](../../wiki/Memory‐Optimization) | Resource management, limits |
+| [Unraid Setup](docs/UNRAID.md) | Community Applications guide |
+| [Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
+| [Development](../../wiki/Development) | Contributing & development setup |
+| [Security](../../wiki/Security) | Best practices & considerations |
+
+## ⚠️ Security Notice
 
 **Docker Socket Access Required**: This application requires access to `/var/run/docker.sock` to control containers. Only run in trusted environments and ensure proper host security.
 
 **First-Time Setup Required**: DDC v2.0+ uses temporary default password 'setup' for initial access. Use one of these secure setup methods:
-- **Web Setup**: Visit `/setup` and create your password
+- **Web Setup**: Visit `/setup` and create your password  
 - **Temporary Access**: Login with `admin` / `setup`, then set real password
 - **Environment Variable**: Set `DDC_ADMIN_PASSWORD` before starting container
 
 **Password Security**: All passwords are hashed with PBKDF2-SHA256 (600,000 iterations) for maximum security.
 
----
-
-## 🆘 Quick Help
+## Quick Help
 
 **First-Time Setup Issues:**
 - **Can't Login**: Visit `/setup` or use `admin` / `setup` credentials
@@ -329,80 +537,38 @@ See the [Main Documentation](https://github.com/DockerDiscordControl/DockerDisco
 - **Configuration Not Saving**: Check file permissions in logs
 - **Bot Not Responding**: Verify token and Guild ID in Web UI
 
-**macOS-Specific Issues:**
-- **Docker Socket Not Found**: Ensure Docker Desktop is running
-- **Permission Denied on Socket**: Check Docker Desktop settings → Advanced → Allow default Docker socket
-- **Port Already in Use**: Change host port in docker-compose.yml (first 9374 in `9374:9374`)
+**Need Help?** Check our [Troubleshooting Guide](../../wiki/Troubleshooting) or create an issue.
 
-**Need Help?** Check our [Troubleshooting Guide](../../wiki/Troubleshooting) or [Mac-Specific Docs](TROUBLESHOOTING.md).
+## Contributing
 
----
-
-## 📚 Documentation
-
-| Topic | Description |
-|-------|-------------|
-| [Installation Guide](INSTALL_MAC.md) | Detailed macOS setup |
-| [Mac Features](MAC_FEATURES.md) | macOS-specific features |
-| [Configuration](../../wiki/Configuration) | Web UI, permissions, channels |
-| [Task System](../../wiki/Task‐System) | Automated scheduling |
-| [Performance](../../wiki/Performance‐and‐Architecture) | Optimizations & monitoring |
-| [Troubleshooting](TROUBLESHOOTING.md) | Mac-specific issues |
-| [Main Documentation](../../wiki) | Complete wiki |
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! See our [Contributing Guidelines](CONTRIBUTING.md) for setup instructions and coding standards.
+We welcome contributions! See our [Development Guide](../../wiki/Development) for setup instructions and coding standards.
 
 **Contributing to Platform-Specific Versions:**
 - **Windows**: [Contribute to Windows version](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)
 - **Linux**: [Contribute to Linux version](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)
-- **macOS**: This repository!
+- **macOS**: [Contribute to Mac version](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)
 
----
-
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🌟 **Show Your Support**
-
-If DockerDiscordControl helps you manage your Mac containers, please consider supporting the project:
-
-<div align="center">
-
-### **💖 Support DDC Development**
-
-[![⭐ Star on GitHub](https://img.shields.io/badge/⭐_Star_on_GitHub-Show_Support-brightgreen?style=for-the-badge&logo=github)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)
-
-[![☕ Buy Me A Coffee](https://img.shields.io/badge/☕_Buy_Me_A_Coffee-orange?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white)](https://buymeacoffee.com/dockerdiscordcontrol)
-&nbsp;&nbsp;
-[![💝 PayPal Donation](https://img.shields.io/badge/💝_PayPal_Donation-blue?style=for-the-badge&logo=paypal&logoColor=white)](https://paypal.me/dockerdiscordcontrol)
-
-**Your support helps maintain DDC across all platforms and develop new features!**
-
-</div>
-
----
-
-**🍎 Built with ❤️ for macOS Docker Desktop users**
-
-**🚀 Perfect for Mac desktops, home labs, and development environments!**
-
-**⭐ Star this repo if DockerDiscordControl helps you manage your Mac containers!**
-
 **Like DDC? Star the repository!** | **Found a bug?** [Report it](../../issues) | **Feature idea?** [Suggest it](../../discussions)
 
-**Don't forget to star the other platform repos too!**
+**Don't forget to star the platform-specific repos too!** 
 - **[Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)**
-- **[Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)**
-- **[Universal/Unraid](https://github.com/DockerDiscordControl/DockerDiscordControl)**
+- **[Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)**  
+- **[macOS](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)**
 
----
+## Support DDC Development
+
+Help keep DockerDiscordControl growing and improving across all platforms:
+
+- **[Buy Me A Coffee](https://buymeacoffee.com/dockerdiscordcontrol)** - Quick one-time support
+- **[PayPal Donation](https://www.paypal.com/donate/?hosted_button_id=XKVC6SFXU2GW4)** - Direct contribution  
+
+Your support helps maintain DDC across **Windows, Linux, macOS, and Universal** versions, develop new features, and keep it zero-vulnerability secure! 
 
 ## Credits & Contributors
 
@@ -411,4 +577,6 @@ If DockerDiscordControl helps you manage your Mac containers, please consider su
 - **Contributors**: Community contributions welcome via [Pull Requests](../../pulls)
 - **Special Thanks**: All users who report bugs, suggest features, and support the project
 
-**Built for macOS - optimized for your Mac environment!**
+Want to contribute? Check out our [Contributing Guidelines](docs/CONTRIBUTING.md)!
+
+**Built for every platform - optimized for your environment!**
