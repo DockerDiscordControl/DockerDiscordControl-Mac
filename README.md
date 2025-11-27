@@ -1,23 +1,12 @@
-# DockerDiscordControl - Mac Edition v2.1 🐳🍎
+# DockerDiscordControl v2.1 🐳
 
-[![Version](https://img.shields.io/badge/Version-v2.1.0-brightgreen?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/releases/tag/v2.1.0) [![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org) [![Base Image](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#-ultra-optimized-alpine-image) [![Tests](https://img.shields.io/badge/Tests-Passing-success?style=for-the-badge)](#-testing--quality-assurance) [![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen?style=for-the-badge)](#-testing--quality-assurance) [![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol-mac?style=for-the-badge)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol-mac) [![macOS](https://img.shields.io/badge/macOS-Optimized-blue?style=for-the-badge)](#-mac-optimized-features) [![Wiki](https://img.shields.io/badge/Documentation-Wiki-lightgrey?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac/wiki)
+[![Version](https://img.shields.io/badge/Version-v2.1.0-brightgreen?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/releases/tag/v2.1.0) [![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org) [![Base Image](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#-ultra-optimized-alpine-image) [![Tests](https://img.shields.io/badge/Tests-Passing-success?style=for-the-badge)](#-testing--quality-assurance) [![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen?style=for-the-badge)](#-testing--quality-assurance) [![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol?style=for-the-badge)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol) [![Unraid](https://img.shields.io/badge/Unraid-Community%20Apps-orange?style=for-the-badge)](./docs/UNRAID.md) [![Wiki](https://img.shields.io/badge/Documentation-Wiki-lightgrey?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/wiki)
 
 A powerful Discord bot and web interface to manage Docker containers remotely. This application bridges the gap between Discord and your Docker environment, allowing container monitoring and control directly through Discord channels.
 
 **Homepage:** [https://ddc.bot](https://ddc.bot) | **[Complete Documentation](../../wiki)**
 
-Control your Docker containers directly from Discord! This **Mac-optimized version** provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with a focus on stability, security, and performance. The default image is an ultra-optimized Alpine Linux build with the latest security patches and enhanced performance.
-
-## 🍎 Mac-Optimized Features
-
-This is the **official macOS-optimized version** of DockerDiscordControl, specifically designed for:
-
-- **🚀 Native Apple Silicon Support** - Optimized for M1, M2, M3, and M4 chips with ARM64 native performance
-- **💻 Intel Mac Support** - Full compatibility with Intel-based Macs
-- **🐳 Docker Desktop for Mac** - Seamless integration with Docker Desktop on macOS
-- **⚡ ARM64 Native Performance** - No emulation overhead on Apple Silicon
-- **✅ Tested on macOS** - Verified on Sonoma (14.x), Ventura (13.x), and Monterey (12.x)
-- **🎯 Mac-Specific Optimizations** - File system handling, socket permissions, and performance tuning for macOS
+Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with a focus on stability, security, and performance. The default image is an ultra-optimized Alpine Linux build with the latest security patches and enhanced performance.
 
 ## 🆕 Latest Updates
 
@@ -315,7 +304,7 @@ docker compose up --build -d
 **Method 2: Docker Hub (Direct)**
 
 ```bash
-# Pull and run latest Mac-optimized Alpine image
+# Pull and run latest Alpine-optimized image
 docker run -d --name ddc \
   -p 9374:9374 \
   -v /var/run/docker.sock:/var/run/docker.sock \
@@ -323,14 +312,14 @@ docker run -d --name ddc \
   -v ./logs:/app/logs \
   -e FLASK_SECRET_KEY="$(openssl rand -hex 32)" \
   --restart unless-stopped \
-  dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+  dockerdiscordcontrol/dockerdiscordcontrol:latest
 ```
 
-**Method 3: Homebrew (Coming Soon)**
-```bash
-# Homebrew installation (planned)
-brew install dockerdiscordcontrol
-```
+**Method 3: Unraid (Recommended for Unraid users)**
+- Install via **Community Applications**
+- Search for "DockerDiscordControl"
+- **One-click install** with pre-configured paths
+- [📖 Detailed Unraid Setup](docs/UNRAID.md)
 
 #### First-Time Setup
 
@@ -470,16 +459,15 @@ The default build for this repository is now the stable, optimized Alpine image.
 
 ## 🐳 Docker Images
 
-**Mac-optimized Alpine Linux image:**
+**Ultra-optimized Alpine Linux image:**
 - **Size:** 176MB with multi-stage build optimization
-- **Base:** Alpine Linux 3.22.2 (latest secure version)
+- **Base:** Alpine Linux 3.22.2 (latest secure version)  
 - **Architecture:** Service-oriented modular design (v2.0)
-- **Platforms:** ARM64 (Apple Silicon) and AMD64 (Intel)
 - **Security:** Latest dependencies with all CVEs fixed
-- **Performance:** Optimized for minimal resource usage and fast startup on macOS
+- **Performance:** Optimized for minimal resource usage and fast startup
 
 ```bash
-docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
+docker pull dockerdiscordcontrol/dockerdiscordcontrol:latest
 ```
 
 ## System Requirements
@@ -498,18 +486,16 @@ docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
 
 ### **Platform Support**
 
-#### **🍎 This Mac-Optimized Repository**
-- **macOS Sonoma** (14.x) - Fully tested ⭐
-- **macOS Ventura** (13.x) - Fully tested
-- **macOS Monterey** (12.x) - Fully tested
-- **Apple Silicon** (M1/M2/M3/M4) - Native ARM64 support
-- **Intel Macs** - Full AMD64 support
-- **Docker Desktop for Mac** - Required
+#### **🔧 This Universal Repository**
+- **Unraid**: Native Community Applications support ⭐
+- **Linux Servers**: x86_64, ARM64 (Raspberry Pi)
+- **Docker**: Swarm, Compose, Standalone
+- **NAS**: Synology, QNAP, TrueNAS
 
-#### **🎯 Other Platform-Optimized Repositories**
+#### **🎯 Platform-Optimized Repositories**
 - **🪟 [Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)**: Docker Desktop, WSL2, PowerShell integration
 - **🐧 [Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)**: Native systemd, package managers, distributions
-- **🌐 [Universal](https://github.com/DockerDiscordControl/DockerDiscordControl)**: Unraid, NAS, multi-platform servers
+- **🍎 [macOS](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)**: Apple Silicon, Intel, Homebrew, Docker Desktop
 
 ## Documentation
 
@@ -523,7 +509,7 @@ docker pull dockerdiscordcontrol/dockerdiscordcontrol-mac:latest
 | [Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
 | [Alpine Migration](../../wiki/Alpine‐Linux‐Migration) | Benefits, security, optimization |
 | [Memory Optimization](../../wiki/Memory‐Optimization) | Resource management, limits |
-| [macOS Setup](docs/MACOS.md) | Mac-specific installation & troubleshooting |
+| [Unraid Setup](docs/UNRAID.md) | Community Applications guide |
 | [Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
 | [Development](../../wiki/Development) | Contributing & development setup |
 | [Security](../../wiki/Security) | Best practices & considerations |

@@ -39,7 +39,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: dockerdiscordcontrol/dockerdiscordcontrol-mac
+          images: dockerdiscordcontrol/dockerdiscordcontrol
           tags: |
             type=schedule
             type=ref,event=branch
