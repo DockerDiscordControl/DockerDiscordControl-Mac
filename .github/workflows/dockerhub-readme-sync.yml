@@ -38,16 +38,16 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-          repository: dockerdiscordcontrol/dockerdiscordcontrol
-          short-description: 'Control Docker containers via Discord bot + Web UI. 80% test coverage, Alpine Linux, 200MB RAM. Perfect for Unraid!'
+          repository: dockerdiscordcontrol/dockerdiscordcontrol-mac
+          short-description: 'Control Docker containers via Discord bot + Web UI - Mac Edition. Native Apple Silicon M1/M2/M3/M4 support.'
           readme-filepath: ./README.md
 
       - name: Summary
         run: |
           echo "## ✅ Docker Hub README Sync Complete!" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Repository**: dockerdiscordcontrol/dockerdiscordcontrol" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository**: dockerdiscordcontrol/dockerdiscordcontrol-mac" >> $GITHUB_STEP_SUMMARY
           echo "**Source**: README.md" >> $GITHUB_STEP_SUMMARY
           echo "**Timestamp**: $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 View on Docker Hub: https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 View on Docker Hub: https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol-mac" >> $GITHUB_STEP_SUMMARY
