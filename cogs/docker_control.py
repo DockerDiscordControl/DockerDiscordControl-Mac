@@ -75,7 +75,8 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
 
         # Basic initialization
         self.bot = bot
-        self.config = config
+        self._initial_config = config  # Only for startup, use self.config property for live access
+        self._config_service = None  # Lazy-loaded ConfigService reference
 
         # Check if donations are disabled and remove donation commands
         try:
@@ -269,6 +270,24 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
 
         # Track if background loops have been started (to avoid double-start on reconnect)
         self._background_loops_started = False
+
+    @property
+    def config(self) -> dict:
+        """
+        Live configuration property - always returns fresh config from ConfigService.
+
+        This enables hot-reload of configuration without container restart.
+        Changes to channel_permissions, servers, admin_users etc. take effect immediately.
+        """
+        try:
+            if self._config_service is None:
+                from services.config.config_service import get_config_service
+                self._config_service = get_config_service()
+            return self._config_service.get_config()
+        except Exception as e:
+            # Fallback to initial config if ConfigService fails
+            logger.warning(f"ConfigService unavailable, using initial config: {e}")
+            return self._initial_config
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -1392,12 +1411,15 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
             # Import translation function locally to ensure it's accessible
             from .translation_manager import _ as translate
 
-            # Check if the channel has serverstatus permission
+            # Check if the channel has serverstatus permission AND is NOT a control channel
+            # Status commands (/ss, /serverstatus) should ONLY work in status channels
             channel_has_status_perm = _channel_has_permission(ctx.channel.id, 'serverstatus', self.config)
-            if not channel_has_status_perm:
+            channel_is_control = _channel_has_permission(ctx.channel.id, 'control', self.config)
+
+            if not channel_has_status_perm or channel_is_control:
                 embed = discord.Embed(
                     title=translate("⚠️ Permission Denied"),
-                    description=translate("You cannot use this command in this channel."),
+                    description=translate("The /serverstatus command is only allowed in status channels, not in control channels."),
                     color=discord.Color.red()
                 )
                 await ctx.followup.send(embed=embed, ephemeral=True)
@@ -1548,6 +1570,19 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
 
             # Defer the response to prevent timeout
             await ctx.defer(ephemeral=False)  # Not ephemeral, like /ss
+
+            # Check if the channel has control permission
+            # Control commands work in channels with control=True (regardless of serverstatus setting)
+            channel_has_control_perm = _channel_has_permission(ctx.channel.id, 'control', self.config)
+
+            if not channel_has_control_perm:
+                embed = discord.Embed(
+                    title=_("⚠️ Permission Denied"),
+                    description=_("The /control command is only allowed in control channels, not in status channels."),
+                    color=discord.Color.red()
+                )
+                await ctx.followup.send(embed=embed, ephemeral=True)
+                return
 
             # Load configuration
             config = load_config()
@@ -3395,7 +3430,23 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
                             continue
 
                         # Check if the last message is from our bot
-                        if history[0].author.id == self.bot.user.id:
+                        # Safety check: ensure bot.user is available
+                        if self.bot.user is None:
+                            logger.warning(f"Bot user is None, cannot check message author. Skipping channel {channel_id}")
+                            continue
+
+                        last_msg = history[0]
+                        bot_user_id = self.bot.user.id
+
+                        # Log detailed info for debugging recreation issues
+                        logger.debug(f"Channel {channel.name}: Last message author={last_msg.author.id} ({last_msg.author.name}), bot_id={bot_user_id}")
+
+                        # Check if last message is from our bot (by user ID or application ID)
+                        bot_app_id = getattr(self.bot, 'application_id', None)
+                        is_from_bot = (last_msg.author.id == bot_user_id or
+                                      (hasattr(last_msg, 'application_id') and bot_app_id and last_msg.application_id == bot_app_id))
+
+                        if is_from_bot:
                             # If the last message is from our bot, we should not regenerate
                             # Reset the timer instead, since the bot was the last to post
                             self.last_channel_activity[channel_id] = now_utc
@@ -3403,7 +3454,7 @@ class DockerControlCog(commands.Cog, StatusHandlersMixin):
                             continue
 
                         # The last message is not from our bot, regenerate
-                        logger.info(f"Last message in channel {channel.name} is NOT from our bot. Will regenerate")
+                        logger.info(f"Last message in channel {channel.name} is NOT from our bot (author_id={last_msg.author.id}, bot_id={bot_user_id}). Will regenerate")
 
                         # Determine the mode: control or status
                         has_control_permission = _channel_has_permission(channel_id, 'control', config)
