@@ -197,3 +197,4 @@ app/static/mech_sprites/
 FUEL_SYSTEM_MEMO.md
 FUEL_SYSTEM_FORMULAS.md
 config.backup_*/
+docker-compose.override.yml
