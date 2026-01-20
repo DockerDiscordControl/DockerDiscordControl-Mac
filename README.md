@@ -1,6 +1,6 @@
-# DockerDiscordControl v2.1.3 🐳
+# DockerDiscordControl v2.1.4 🐳
 
-[![Version](https://img.shields.io/badge/Version-v2.1.3-brightgreen?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/releases/tag/v2.1.3) [![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org) [![Base Image](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#-ultra-optimized-alpine-image) [![Tests](https://img.shields.io/badge/Tests-Passing-success?style=for-the-badge)](#-testing--quality-assurance) [![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen?style=for-the-badge)](#-testing--quality-assurance) [![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol-mac?style=for-the-badge)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol-mac) [![Wiki](https://img.shields.io/badge/Documentation-Wiki-lightgrey?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/wiki)
+[![Version](https://img.shields.io/badge/Version-v2.1.4-brightgreen?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/releases/tag/v2.1.4) [![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge)](https://python.org) [![Base Image](https://img.shields.io/badge/Base-Alpine%203.22.2-blueviolet?style=for-the-badge)](#-ultra-optimized-alpine-image) [![Tests](https://img.shields.io/badge/Tests-Passing-success?style=for-the-badge)](#-testing--quality-assurance) [![Coverage](https://img.shields.io/badge/Coverage-80%25-brightgreen?style=for-the-badge)](#-testing--quality-assurance) [![Docker Pulls](https://img.shields.io/docker/pulls/dockerdiscordcontrol/dockerdiscordcontrol?style=for-the-badge)](https://hub.docker.com/r/dockerdiscordcontrol/dockerdiscordcontrol) [![Unraid](https://img.shields.io/badge/Unraid-Community%20Apps-orange?style=for-the-badge)](./docs/UNRAID.md) [![Wiki](https://img.shields.io/badge/Documentation-Wiki-lightgrey?style=for-the-badge)](https://github.com/DockerDiscordControl/DockerDiscordControl/wiki)
 
 A powerful Discord bot and web interface to manage Docker containers remotely. This application bridges the gap between Discord and your Docker environment, allowing container monitoring and control directly through Discord channels.
 
@@ -9,6 +9,17 @@ A powerful Discord bot and web interface to manage Docker containers remotely. T
 Control your Docker containers directly from Discord! This application provides a Discord bot and a web interface to manage Docker containers (start, stop, restart, view status) with a focus on stability, security, and performance. The default image is an ultra-optimized Alpine Linux build with the latest security patches and enhanced performance.
 
 ## 🆕 Latest Updates
+
+### ✅ **v2.1.4 (2025-01-20) - Security & Mech Evolution**
+
+🔒 **Security Fixes:**
+- **Werkzeug**: Upgrade to 3.1.5 - Fix for GHSA-hgf8-39gv-g3f2 (safe_join Windows special device names)
+
+✨ **New Features:**
+- **Mech Evolution 10**: New rest animation frames for level 10
+- **Cache-Only Mode**: Improved handling when PNG sources are not available
+
+---
 
 ### ✅ **v2.1.3 (2025-12-06) - Security Updates**
 
@@ -23,19 +34,19 @@ Control your Docker containers directly from Discord! This application provides 
 
 ---
 
-### ✅ **v2.1.2 (2025-11-28) - Permission Management & Security**
+### ✅ **v2.1.2 (2025-11-28) - Unraid/NAS Permission Fix**
 
-🔧 **macOS Permission Management:**
-- **FIXED:** Container failed to start due to volume permission issues
+🔧 **Unraid & NAS Compatibility:**
+- **FIXED:** Container failed to start on Unraid due to volume permission issues
 - **NEW:** PUID/PGID environment variables for custom user/group mapping
 - **NEW:** Automatic permission fixing at container startup
-- **IMPROVED:** Clear error messages with helpful guidance
+- **IMPROVED:** Clear error messages with Unraid-specific guidance
 
-📦 **For Mac Users:**
+📦 **For Unraid Users:**
 ```yaml
 environment:
-  - PUID=501  # Your macOS user ID (run: id -u)
-  - PGID=20   # Your macOS group ID (run: id -g)
+  - PUID=99
+  - PGID=100
 ```
 
 🎮 **New Discord Command:**
@@ -137,7 +148,7 @@ environment:
 - Container control reliability improvements
 - Web UI configuration persistence
 
-**🚀 Optimized for macOS! Now with Auto-Action System for automatic updates and Status Watchdog for offline alerts!**
+**🚀 Ready for Unraid Community Applications! Now with Auto-Action System for automatic updates and Status Watchdog for offline alerts!**
 
 ## Platform Selection
 
@@ -145,17 +156,17 @@ environment:
 
 | Platform | Repository | Description | Best For |
 |----------|------------|-------------|----------|
-| **macOS** | **[DockerDiscordControl-Mac](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)** *(this repo)* | Apple Silicon & Intel Mac optimized | macOS + Docker Desktop / Colima |
 | **Windows** | **[DockerDiscordControl-Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)** | Windows Docker Desktop optimized | Windows 10/11 + Docker Desktop |
 | **Linux** | **[DockerDiscordControl-Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)** | Native Linux optimization | Ubuntu, Debian, CentOS, RHEL |
-| **Universal** | **[DockerDiscordControl](https://github.com/DockerDiscordControl/DockerDiscordControl)** | Multi-platform support | Unraid, NAS, servers |
+| **macOS** | **[DockerDiscordControl-Mac](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)** | Apple Silicon & Intel Mac optimized | macOS + Docker Desktop |
+| **Universal** | **[DockerDiscordControl](https://github.com/DockerDiscordControl/DockerDiscordControl)** *(this repo)* | Multi-platform, Unraid focus | Unraid, NAS, servers |
 
 ### Quick Platform Selection:
 
-- **macOS Users** → **Use this repository** *(Apple Silicon M1/M2/M3/M4 + Intel Macs, Docker Desktop / Colima)*
 - **Windows Users** → [**Windows Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows) *(PowerShell scripts, WSL2 optimized)*
-- **Linux Users** → [**Linux Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux) *(Native systemd, package managers)*
-- **Unraid/NAS Users** → [**Universal Version**](https://github.com/DockerDiscordControl/DockerDiscordControl) *(Community Apps support)*
+- **Linux Users** → [**Linux Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux) *(Native systemd, package managers)*  
+- **macOS Users** → [**Mac Version**](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac) *(Apple Silicon + Intel, Homebrew)*
+- **Unraid/NAS Users** → **Use this repository** *(Universal, Community Apps support)*
 
 ---
 
@@ -331,9 +342,9 @@ cd DockerDiscordControl-Mac
 
 ---
 
-### **Mac Installation (Docker Desktop / Colima)**
+### **Universal Installation (Unraid & Servers)**
 
-**For macOS with Docker Desktop or Colima:**
+**For Unraid, NAS systems, and server deployments:**
 
 #### Prerequisites
 
@@ -373,16 +384,11 @@ docker run -d --name ddc \
   dockerdiscordcontrol/dockerdiscordcontrol:latest
 ```
 
-**Method 3: Colima (Alternative to Docker Desktop)**
-```bash
-# Install Colima via Homebrew
-brew install colima docker docker-compose
-
-# Start Colima with appropriate resources
-colima start --cpu 2 --memory 4
-
-# Then use docker-compose as shown in Method 1
-```
+**Method 3: Unraid (Recommended for Unraid users)**
+- Install via **Community Applications**
+- Search for "DockerDiscordControl"
+- **One-click install** with pre-configured paths
+- [📖 Detailed Unraid Setup](docs/UNRAID.md)
 
 #### First-Time Setup
 
@@ -446,14 +452,12 @@ DDC_MAX_CONCURRENT_TASKS=3             # Maximum concurrent tasks (default: 3)
 DDC_TASK_BATCH_SIZE=5                  # Task batch processing size (default: 5)
 ```
 
-#### Web Server Optimization
+#### Permission Settings (NAS/Unraid)
 ```bash
-# Gunicorn Settings
-GUNICORN_WORKERS=2                     # Number of worker processes (default: adaptive 1-3)
-GUNICORN_MAX_REQUESTS=300              # Requests per worker before recycling (default: 300)
-GUNICORN_MAX_REQUESTS_JITTER=30        # Random jitter for worker recycling (default: 30)
-GUNICORN_TIMEOUT=45                    # Request timeout in seconds (default: 45)
-GUNICORN_LOG_LEVEL=info                # Logging level (default: info)
+# User/Group mapping for NAS systems
+PUID=99                                # User ID (Unraid: 99, Synology: 1026)
+PGID=100                               # Group ID (Unraid: 100, Synology: 100)
+DDC_ADMIN_PASSWORD=your_password       # Required: Admin password for Web UI
 ```
 
 #### Cache Control
@@ -478,7 +482,6 @@ Access real-time performance statistics via the Web UI at `/performance_stats` (
 
 #### Small Deployment (1-2 CPU cores, <2GB RAM)
 ```bash
-GUNICORN_WORKERS=1
 DDC_MAX_CACHED_CONTAINERS=50
 DDC_SCHEDULER_CHECK_INTERVAL=180
 DDC_MAX_CONCURRENT_TASKS=2
@@ -486,7 +489,6 @@ DDC_MAX_CONCURRENT_TASKS=2
 
 #### Medium Deployment (2-4 CPU cores, 2-4GB RAM)
 ```bash
-GUNICORN_WORKERS=2
 DDC_MAX_CACHED_CONTAINERS=100
 DDC_SCHEDULER_CHECK_INTERVAL=120
 DDC_MAX_CONCURRENT_TASKS=3
@@ -494,7 +496,6 @@ DDC_MAX_CONCURRENT_TASKS=3
 
 #### Large Deployment (4+ CPU cores, 4GB+ RAM)
 ```bash
-GUNICORN_WORKERS=3
 DDC_MAX_CACHED_CONTAINERS=200
 DDC_SCHEDULER_CHECK_INTERVAL=90
 DDC_MAX_CONCURRENT_TASKS=5
@@ -549,16 +550,16 @@ docker pull dockerdiscordcontrol/dockerdiscordcontrol:latest
 
 ### **Platform Support**
 
-#### **🍎 This Mac Repository**
-- **Apple Silicon**: Native support for M1/M2/M3/M4 chips ⭐
-- **Intel Macs**: Full x86_64 compatibility
-- **Docker Desktop**: Official Docker for Mac
-- **Colima**: Lightweight Docker alternative for macOS
+#### **🔧 This Universal Repository**
+- **Unraid**: Native Community Applications support ⭐
+- **Linux Servers**: x86_64, ARM64 (Raspberry Pi)
+- **Docker**: Swarm, Compose, Standalone
+- **NAS**: Synology, QNAP, TrueNAS
 
-#### **🎯 Other Platform-Optimized Repositories**
+#### **🎯 Platform-Optimized Repositories**
 - **🪟 [Windows](https://github.com/DockerDiscordControl/DockerDiscordControl-Windows)**: Docker Desktop, WSL2, PowerShell integration
 - **🐧 [Linux](https://github.com/DockerDiscordControl/DockerDiscordControl-Linux)**: Native systemd, package managers, distributions
-- **🌐 [Universal](https://github.com/DockerDiscordControl/DockerDiscordControl)**: Unraid, NAS systems, multi-platform servers
+- **🍎 [macOS](https://github.com/DockerDiscordControl/DockerDiscordControl-Mac)**: Apple Silicon, Intel, Homebrew, Docker Desktop
 
 ## Documentation
 
@@ -572,6 +573,7 @@ docker pull dockerdiscordcontrol/dockerdiscordcontrol:latest
 | [Performance](../../wiki/Performance‐and‐Architecture) | V3.0 optimizations & monitoring |
 | [Alpine Migration](../../wiki/Alpine‐Linux‐Migration) | Benefits, security, optimization |
 | [Memory Optimization](../../wiki/Memory‐Optimization) | Resource management, limits |
+| [Unraid Setup](docs/UNRAID.md) | Community Applications guide |
 | [Troubleshooting](../../wiki/Troubleshooting) | Common issues & solutions |
 | [Development](../../wiki/Development) | Contributing & development setup |
 | [Security](../../wiki/Security) | Best practices & considerations |
