@@ -34,6 +34,16 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       # Uncomment and set this to change the default admin password (admin)
       # DDC_ADMIN_PASSWORD: ${DDC_ADMIN_PASSWORD}
+    security_opt:
+      - no-new-privileges:true
+    # Note: cap_drop/cap_add removed — entrypoint needs root to fix
+    # volume permissions (chown) before dropping to the ddc user via su-exec.
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9374/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     logging: # Equivalent to --log-driver and --log-opt
       driver: json-file
       options:
