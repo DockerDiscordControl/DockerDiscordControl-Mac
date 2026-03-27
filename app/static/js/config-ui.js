@@ -305,7 +305,7 @@ function saveContainerInfo() {
     }
     
     // Show success message
-    showToast('Container info updated successfully!', 'success');
+    showToast(t('config.container_info_updated'), 'success');
 }
 
 // Toast notification function
@@ -448,7 +448,7 @@ function openAdminModal() {
         })
         .catch(error => {
             console.error('Error loading admin users:', error);
-            alert('Failed to load admin users');
+            alert(t('admin.failed_load_users'));
         });
 }
 
@@ -457,7 +457,7 @@ function renderAdminUsers() {
     listContainer.innerHTML = '';
 
     if (adminUsers.length === 0) {
-        listContainer.innerHTML = '<div class="text-muted">No admin users configured</div>';
+        listContainer.innerHTML = `<div class="text-muted">${t('admin.no_users_configured')}</div>`;
         return;
     }
 
@@ -470,7 +470,7 @@ function renderAdminUsers() {
                 <strong>${escapeHtmlConfigUI(userId)}</strong>
                 ${note ? `<span class="text-muted ms-2">(${escapeHtmlConfigUI(note)})</span>` : ''}
             </div>
-            <button class="btn btn-sm btn-danger" onclick="removeAdminUser(${index})">Remove</button>
+            <button class="btn btn-sm btn-danger" onclick="removeAdminUser(${index})">${t('admin.remove_btn')}</button>
         `;
         listContainer.appendChild(item);
     });
@@ -483,17 +483,17 @@ function addAdminUser() {
     const note = noteInput.value.trim();
 
     if (!userId) {
-        alert('Please enter a Discord User ID');
+        alert(t('admin.enter_user_id'));
         return;
     }
 
     if (!/^\d+$/.test(userId)) {
-        alert('Discord User ID must contain only numbers');
+        alert(t('admin.user_id_numbers_only'));
         return;
     }
 
     if (adminUsers.includes(userId)) {
-        alert('This user is already an admin');
+        alert(t('admin.user_already_admin'));
         return;
     }
 
@@ -538,28 +538,38 @@ function saveAdminUsers() {
         if (result.success) {
             const modal = bootstrap.Modal.getInstance(document.getElementById('adminModal'));
             modal.hide();
-            alert('Admin users saved successfully');
+            alert(t('admin.saved_successfully'));
         } else {
-            alert('Failed to save admin users: ' + (result.error || 'Unknown error'));
+            alert(t('admin.failed_save') + ': ' + (result.error || t('common.unknown_error')));
         }
     })
     .catch(error => {
         console.error('Error saving admin users:', error);
-        alert('Failed to save admin users');
+        alert(t('admin.failed_save'));
     });
 }
 
 // Channel Row Management Functions
+function getNextRowIndex(tbody, prefix) {
+    // Find the highest existing index to avoid duplicate field names after row deletion
+    let maxIndex = 0;
+    tbody.querySelectorAll(`input[name^="${prefix}"]`).forEach(input => {
+        const match = input.name.match(/_(\d+)$/);
+        if (match) maxIndex = Math.max(maxIndex, parseInt(match[1]));
+    });
+    return maxIndex + 1;
+}
+
 function addStatusChannelRow() {
     const tbody = document.querySelector('#status-channels-table tbody');
-    const rowCount = tbody.querySelectorAll('tr').length + 1;
+    const rowCount = getNextRowIndex(tbody, 'status_channel_id_');
 
     const newRow = document.createElement('tr');
     newRow.id = 'status-channel-row-' + rowCount;
     newRow.innerHTML = `
-        <td><input type="text" class="form-control form-control-sm" name="status_channel_name_${rowCount}" placeholder="Channel Name"></td>
+        <td><input type="text" class="form-control form-control-sm" name="status_channel_name_${rowCount}" placeholder="${t('channel.name_placeholder')}"></td>
         <td>
-            <input type="text" class="form-control form-control-sm" name="status_channel_id_${rowCount}" placeholder="Channel ID">
+            <input type="text" class="form-control form-control-sm" name="status_channel_id_${rowCount}" placeholder="${t('channel.id_placeholder')}">
             <input type="hidden" name="old_status_channel_id_${rowCount}" value="">
         </td>
         <td class="text-center">
@@ -597,14 +607,14 @@ function addStatusChannelRow() {
 
 function addControlChannelRow() {
     const tbody = document.querySelector('#control-channels-table tbody');
-    const rowCount = tbody.querySelectorAll('tr').length + 1;
+    const rowCount = getNextRowIndex(tbody, 'control_channel_id_');
 
     const newRow = document.createElement('tr');
     newRow.id = 'control-channel-row-' + rowCount;
     newRow.innerHTML = `
-        <td><input type="text" class="form-control form-control-sm" name="control_channel_name_${rowCount}" placeholder="Channel Name"></td>
+        <td><input type="text" class="form-control form-control-sm" name="control_channel_name_${rowCount}" placeholder="${t('channel.name_placeholder')}"></td>
         <td>
-            <input type="text" class="form-control form-control-sm" name="control_channel_id_${rowCount}" placeholder="Channel ID">
+            <input type="text" class="form-control form-control-sm" name="control_channel_id_${rowCount}" placeholder="${t('channel.id_placeholder')}">
             <input type="hidden" name="old_control_channel_id_${rowCount}" value="">
         </td>
         <td class="text-center">
