@@ -7,8 +7,8 @@
 # ============================================================================ #
 
 # Core Testing Framework
-pytest>=7.4.0,<9.0.0
-pytest-asyncio>=0.21.0,<0.24.0
+pytest>=9.0.3  # Security fix for CVE-2025-71176
+pytest-asyncio>=1.3.0
 pytest-mock>=3.11.0,<4.0.0
 pytest-cov>=4.1.0,<6.0.0
 pytest-xdist>=3.3.0,<4.0.0  # Parallel test execution
@@ -76,4 +76,3 @@ graphviz>=0.20.0,<1.0.0      # Dependency graph visualization
 # Heavy packages (selenium, locust, testcontainers, safety, semgrep) have been
 # removed from requirements-test.txt to avoid dependency resolution issues.
 # Install separately if needed for specific test scenarios.
-
